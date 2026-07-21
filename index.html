@@ -31,6 +31,34 @@
         <div class="deck-name">Deck Builder</div>
         <div class="deck-flavor">Build and save custom decks. 50 AP budget, copy limits enforced.</div>
       </div>
+      <div class="deck-option" id="btn-ai">
+        <div class="deck-name">vs AI</div>
+        <div class="deck-flavor">Play solo against the bot. You control P1; the bot plays P2 automatically.</div>
+      </div>
+    </div>
+
+    <div id="name-panel" style="margin-top:24px; display:flex; align-items:center; gap:10px; justify-content:center;">
+      <span style="font-size:11px; color:#777; letter-spacing:1px; font-family:'Arial Narrow',Arial,sans-serif;">YOUR NAME</span>
+      <input id="display-name-input" type="text" maxlength="16" placeholder="Player"
+        style="background:#0e0c09; border:1px solid #3a3020; color:#d4c8a8; padding:6px 10px; border-radius:3px; font-family:'Arial Narrow',Arial,sans-serif;">
+    </div>
+
+    <div id="open-lobby-section" style="margin-top:24px; width:100%; max-width:520px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+        <span class="picker-label" style="margin:0;">OPEN LOBBIES</span>
+        <button class="btn btn-secondary" id="btn-host-open">HOST OPEN GAME</button>
+      </div>
+      <div id="open-lobby-map-picker" style="display:none; margin-bottom:14px;">
+        <div class="picker-label">CHOOSE MAP FOR YOUR LOBBY</div>
+        <div class="deck-grid" id="open-lobby-map-grid">
+          <div class="deck-option" data-map="normandy"><div class="deck-name">Normandy</div></div>
+          <div class="deck-option" data-map="stalingrad"><div class="deck-name">Stalingrad</div></div>
+          <div class="deck-option" data-map="el_alamein"><div class="deck-name">El Alamein</div></div>
+          <div class="deck-option" data-map="ardennes"><div class="deck-name">Ardennes</div></div>
+          <div class="deck-option" data-map="kursk"><div class="deck-name">Kursk</div></div>
+        </div>
+      </div>
+      <div id="open-lobby-list"></div>
     </div>
 
     <div id="join-form" style="display:none; flex-direction:column; align-items:center; gap:16px; margin-top:32px;">
@@ -49,56 +77,7 @@
     </div>
   </div>
 
-  <script type="module">
-    import { generateGameCode } from './js/firebase.js';
-
-    document.getElementById('btn-local').addEventListener('click', () => {
-      window.location.href = 'game.html';
-    });
-
-    document.getElementById('btn-deckbuilder').addEventListener('click', () => {
-      window.location.href = 'deckbuilder.html';
-    });
-
-    document.getElementById('btn-create').addEventListener('click', () => {
-      const code = generateGameCode();
-      document.getElementById('game-code-display').textContent = code;
-      document.getElementById('create-panel').style.display = 'flex';
-      document.getElementById('main-buttons').style.display = 'none';
-      document.getElementById('btn-enter-game').addEventListener('click', () => {
-        window.location.href = `game.html?game=${code}&role=p1`;
-      });
-    });
-
-    document.getElementById('btn-join-option').addEventListener('click', () => {
-      document.getElementById('join-form').style.display = 'flex';
-      document.getElementById('main-buttons').style.display = 'none';
-    });
-
-    document.getElementById('btn-join').addEventListener('click', () => {
-      const code = document.getElementById('code-input').value.trim().toUpperCase();
-      if (code.length < 4) return;
-      window.location.href = `game.html?game=${code}&role=p2`;
-    });
-
-    document.getElementById('code-input').addEventListener('keydown', e => {
-      if (e.key === 'Enter') document.getElementById('btn-join').click();
-    });
-
-    // Theme toggle — same 'signal-theme' localStorage key as game.html, so the choice carries over.
-    (function initTheme() {
-      const saved = localStorage.getItem('signal-theme');
-      if (saved === 'light') document.body.dataset.theme = 'light';
-      const btn = document.getElementById('theme-toggle');
-      btn.textContent = document.body.dataset.theme === 'light' ? '☀ DARK' : '☾ LIGHT';
-      btn.addEventListener('click', () => {
-        const next = document.body.dataset.theme === 'light' ? 'dark' : 'light';
-        document.body.dataset.theme = next;
-        localStorage.setItem('signal-theme', next);
-        btn.textContent = next === 'light' ? '☀ DARK' : '☾ LIGHT';
-      });
-    })();
-  </script>
+  <script type="module" src="./js/lobby-browser.js?v=1784654458"></script>
 
 </body>
 </html>

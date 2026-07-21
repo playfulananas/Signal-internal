@@ -1228,3 +1228,11 @@ body[data-theme="light"] .hc-cost-discounted { color: #007a2e; }
 /* Lobby: invalid custom deck tile */
 .deck-option.deck-invalid { opacity: 0.4; cursor: default; }
 .deck-option.deck-invalid:hover { border-color: var(--border); box-shadow: none; }
+
+/* ── Open Lobby Browser ───────────────────────────────────────────────────── */
+.lobby-row { display: flex; align-items: center; gap: 10px; background: var(--bg-alt); border: 1px solid var(--border); border-radius: 3px; padding: 8px 12px; margin-bottom: 6px; cursor: pointer; font-size: 12px; }
+.lobby-row:hover { border-color: var(--gold-dim); }
+.lobby-row .host { flex: 1; color: var(--text); font-weight: bold; }
+.lobby-row .map { color: var(--text-b); }
+.lobby-row .waiting { color: var(--text-c); font-size: 11px; }
+.lobby-empty { color: var(--text-d); font-size: 11px; text-align: center; padding: 16px 0; }
