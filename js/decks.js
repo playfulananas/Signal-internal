@@ -1,7 +1,7 @@
 // Deck rules, starter decks, validation, and custom-deck persistence.
 // Validation functions are pure (node-testable). localStorage helpers are
 // browser-only — never called at module top level.
-import { CARDS, CARD_BY_ID } from './cards.js?v=1784634962';
+import { CARDS, CARD_BY_ID } from './cards.js?v=1784635080';
 
 export const DECK_RULES = {
   apBudget: 50,

@@ -1,4 +1,4 @@
-import { CARD_BY_ID, CARDS } from './cards.js?v=1784634962';
+import { CARD_BY_ID, CARDS } from './cards.js?v=1784635080';
 import {
   createInitialState,
   startOfTurn,
@@ -13,13 +13,13 @@ import {
   getSideValue,
   attackBeats,
   oppositeDir,
-} from './state.js?v=1784634962';
-import { getAttackableTargets, resolveSingleAttack, tileKey } from './combat.js?v=1784634962';
-import { renderBoard, renderHand, renderHQ, appendLog } from './ui.js?v=1784634962';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1784634962';
-import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1784634962';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn } from './debug.js?v=1784634962';
-import { STARTER_DECKS, loadCustomDecks, validateDeck, computeDeckAP } from './decks.js?v=1784634962';
+} from './state.js?v=1784635080';
+import { getAttackableTargets, resolveSingleAttack, tileKey } from './combat.js?v=1784635080';
+import { renderBoard, renderHand, renderHQ, appendLog } from './ui.js?v=1784635080';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1784635080';
+import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1784635080';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn } from './debug.js?v=1784635080';
+import { STARTER_DECKS, loadCustomDecks, validateDeck, computeDeckAP } from './decks.js?v=1784635080';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
