@@ -1,14 +1,17 @@
 // Deck builder page. Pool on the left, working deck on the right.
 // Copy-limit adds are blocked outright; AP overruns are allowed while editing
 // (meter turns red) but block saving.
-import { CARD_BY_ID } from './cards.js?v=1784652722';
+import { CARD_BY_ID } from './cards.js?v=1784653929';
 import {
   getDeckPool, validateDeck, computeDeckAP, countCopies, copyCap,
   DECK_RULES, STARTER_DECKS, loadCustomDecks, saveCustomDeck, deleteCustomDeck,
-} from './decks.js?v=1784652722';
+  mergeRemoteDecks, replaceAllCustomDecks,
+} from './decks.js?v=1784653929';
+import { initAuth, pushUserDecks, fetchUserDecks } from './firebase.js?v=1784653929';
 
 let deckIds = [];
 let filter = 'all';
+let currentUid = null; // set once anonymous auth resolves; enables server-side deck sync
 
 const TYPE_ORDER = { unit: 0, command: 1, mission: 2 };
 
@@ -116,6 +119,11 @@ function redraw() {
   renderStatus();
 }
 
+function syncDecksToServer() {
+  if (!currentUid) return; // auth hasn't resolved yet — the deck stays local-only until it does
+  pushUserDecks(currentUid, loadCustomDecks()).catch(err => console.error('Deck sync failed', err));
+}
+
 // ── Events ────────────────────────────────────────────────────────────────────
 document.getElementById('db-filters').addEventListener('click', e => {
   const btn = e.target.closest('.db-filter');
@@ -147,6 +155,7 @@ document.getElementById('db-save').addEventListener('click', () => {
   const name = document.getElementById('db-deck-name').value.trim();
   if (!name || !validateDeck(deckIds).valid) return;
   saveCustomDeck(name, [...deckIds]);
+  syncDecksToServer();
   renderSaved();
   const btn = document.getElementById('db-save');
   btn.textContent = 'Saved ✓';
@@ -170,6 +179,7 @@ document.getElementById('db-saved').addEventListener('click', e => {
     redraw();
   } else if (delName) {
     deleteCustomDeck(delName);
+    syncDecksToServer();
     renderSaved();
   }
 });
@@ -203,3 +213,14 @@ document.getElementById('db-back').addEventListener('click', () => {
 
 redraw();
 renderSaved();
+
+// Pull any decks saved from another session under this browser's anonymous
+// identity and merge them in without clobbering an in-progress local deck.
+initAuth(uid => {
+  currentUid = uid;
+  fetchUserDecks(uid).then(remoteDecks => {
+    const merged = mergeRemoteDecks(loadCustomDecks(), remoteDecks);
+    replaceAllCustomDecks(merged);
+    renderSaved();
+  }).catch(err => console.error('Deck fetch failed', err));
+});

@@ -1,7 +1,7 @@
 // Deck rules, starter decks, validation, and custom-deck persistence.
 // Validation functions are pure (node-testable). localStorage helpers are
 // browser-only — never called at module top level.
-import { CARDS, CARD_BY_ID } from './cards.js?v=1784652722';
+import { CARDS, CARD_BY_ID } from './cards.js?v=1784653929';
 
 export const DECK_RULES = {
   apBudget: 50,
@@ -109,4 +109,18 @@ export function saveCustomDeck(name, ids) {
 export function deleteCustomDeck(name) {
   const decks = loadCustomDecks().filter(d => d.name !== name);
   localStorage.setItem(STORAGE_KEY, JSON.stringify(decks));
+}
+
+// Overwrites the full local deck list — used when merging in server-synced decks.
+export function replaceAllCustomDecks(decks) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(decks));
+}
+
+// Adds remote decks the local list doesn't already have (matched by name).
+// Never overwrites a local deck on a name clash — an in-progress local edit
+// always wins over whatever's on the server.
+export function mergeRemoteDecks(localDecks, remoteDecks) {
+  const localNames = new Set(localDecks.map(d => d.name));
+  const additions = remoteDecks.filter(d => !localNames.has(d.name));
+  return [...localDecks, ...additions];
 }

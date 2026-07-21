@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   DECK_RULES, STARTER_DECKS, getDeckPool,
-  computeDeckAP, countCopies, validateDeck,
+  computeDeckAP, countCopies, validateDeck, mergeRemoteDecks,
 } from '../js/decks.js';
 
 test('computeDeckAP sums ap of card ids', () => {
@@ -76,4 +76,13 @@ test('unknown card id is rejected', () => {
   const v = validateDeck(ids);
   assert.ok(!v.valid);
   assert.ok(v.errors.some(e => e.includes('999')));
+});
+
+test('mergeRemoteDecks adds remote decks not present locally, without overwriting name clashes', () => {
+  const local = [{ name: 'Mine', ids: [1, 1] }];
+  const remote = [{ name: 'Mine', ids: [2, 2] }, { name: 'FromOtherSession', ids: [5, 5] }];
+  const merged = mergeRemoteDecks(local, remote);
+  assert.equal(merged.length, 2);
+  assert.deepEqual(merged.find(d => d.name === 'Mine').ids, [1, 1]); // local wins on a name clash
+  assert.ok(merged.find(d => d.name === 'FromOtherSession'));
 });
