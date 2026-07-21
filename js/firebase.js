@@ -1,5 +1,5 @@
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
-import { getDatabase, ref, set, get, onValue, update } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js';
+import { getDatabase, ref, set, get, onValue, update, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
 
 // Paste your Firebase project config here (from Firebase Console → Project Settings)
@@ -84,4 +84,38 @@ export function getDisplayName() {
 export function setDisplayName(name) {
   if (!name) return;
   localStorage.setItem(NAME_KEY, name);
+}
+
+// ── Open lobby list ──────────────────────────────────────────────────────────
+// createdAt uses serverTimestamp() so every client agrees on lobby age
+// regardless of local clock skew — it resolves to a plain number once Firebase
+// commits it, which is what subscribeOpenLobbies' listeners will see.
+export async function createOpenLobby(lobbyId, hostUid, hostName, mapId) {
+  await set(ref(db, `openLobbies/${lobbyId}`), { hostUid, hostName, mapId, createdAt: serverTimestamp() });
+}
+
+export async function removeOpenLobby(lobbyId) {
+  await set(ref(db, `openLobbies/${lobbyId}`), null);
+}
+
+// Returns the unsubscribe function. Callback receives an array of
+// { id, hostUid, hostName, mapId, createdAt }.
+export function subscribeOpenLobbies(callback) {
+  return onValue(ref(db, 'openLobbies'), snap => {
+    const val = snap.val() ?? {};
+    callback(Object.entries(val).map(([id, data]) => ({ id, ...data })));
+  });
+}
+
+// ── Per-user saved decks (backup of the localStorage custom decks) ─────────────
+export async function pushUserDecks(uid, decks) {
+  await set(ref(db, `users/${uid}/decks`), decks);
+}
+
+export async function fetchUserDecks(uid) {
+  const snap = await get(ref(db, `users/${uid}/decks`));
+  if (!snap.exists()) return [];
+  const val = snap.val();
+  // Firebase can return a sparse array as an object keyed by index — normalize.
+  return Array.isArray(val) ? val : Object.values(val);
 }
