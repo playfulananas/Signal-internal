@@ -1,4 +1,4 @@
-import { CARD_BY_ID, CARDS } from './cards.js?v=1784652722';
+import { CARD_BY_ID, CARDS } from './cards.js?v=1784654155';
 import {
   createInitialState,
   startOfTurn,
@@ -13,13 +13,13 @@ import {
   getSideValue,
   attackBeats,
   oppositeDir,
-} from './state.js?v=1784652722';
-import { getAttackableTargets, resolveSingleAttack, tileKey } from './combat.js?v=1784652722';
-import { renderBoard, renderHand, renderHQ, appendLog } from './ui.js?v=1784652722';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1784652722';
-import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1784652722';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn } from './debug.js?v=1784652722';
-import { STARTER_DECKS, loadCustomDecks, validateDeck, computeDeckAP } from './decks.js?v=1784652722';
+} from './state.js?v=1784654155';
+import { getAttackableTargets, resolveSingleAttack, tileKey } from './combat.js?v=1784654155';
+import { renderBoard, renderHand, renderHQ, appendLog } from './ui.js?v=1784654155';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1784654155';
+import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1784654155';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn } from './debug.js?v=1784654155';
+import { STARTER_DECKS, loadCustomDecks, validateDeck, computeDeckAP } from './decks.js?v=1784654155';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
@@ -123,15 +123,23 @@ document.getElementById('deck-grid').addEventListener('click', e => {
   if (isOnline && myRole === 'p1') {
     p1DeckIds = [...ids];
     document.getElementById('deck-picker').style.display = 'none';
+    if (urlMapId) { beginHostWait(urlMapId); return; }
     document.getElementById('map-picker').style.display = '';
     return;
   }
 
-  // Local play: P1 deck → P2 deck → map
+  // Local play: P1 deck → P2 deck → map. In AI mode, P2's deck is auto-assigned — no second picker step.
   if (pickerStep === 1) {
     p1DeckIds = [...ids];
-    pickerStep = 2;
-    document.getElementById('picker-label').textContent = 'PLAYER 2 — CHOOSE YOUR DECK';
+    if (isAiMode) {
+      p2DeckIds = [...STARTER_DECKS[Math.floor(Math.random() * STARTER_DECKS.length)].ids];
+      pickerStep = 3;
+      document.getElementById('deck-picker').style.display = 'none';
+      document.getElementById('map-picker').style.display = '';
+    } else {
+      pickerStep = 2;
+      document.getElementById('picker-label').textContent = 'PLAYER 2 — CHOOSE YOUR DECK';
+    }
   } else {
     p2DeckIds = [...ids];
     pickerStep = 3;
@@ -140,27 +148,30 @@ document.getElementById('deck-grid').addEventListener('click', e => {
   }
 });
 
+// Pushes P1's lobby state (deck + map) and waits for P2 to finish picking
+// their deck. Used both by the map-picker (legacy code-share flow, where the
+// host picks the map here) and directly from the deck-grid handler when the
+// map was already fixed by the open-lobby browser (urlMapId is set).
+function beginHostWait(mapId) {
+  pushState(gameId, { _phase: 'lobby', p1Deck: p1DeckIds, mapId });
+  document.getElementById('lobby').style.display = 'none';
+  document.getElementById('waiting-screen').style.display = 'flex';
+  document.getElementById('waiting-msg').textContent = 'Waiting for Player 2 to choose their deck...';
+  subscribeState(gameId, data => {
+    if (state) return; // already started
+    if (data._phase !== 'ready' || !data.p2Deck) return;
+    const toArr = v => Array.isArray(v) ? v : Object.values(v ?? {});
+    startGame(toArr(data.p1Deck), toArr(data.p2Deck), data.mapId);
+  });
+}
+
 document.getElementById('map-grid').addEventListener('click', e => {
   const option = e.target.closest('.deck-option');
   if (!option || !option.dataset.map) return;
-  const mapId = option.dataset.map;
 
-  if (isOnline && myRole === 'p1') {
-    // Push lobby state to games/${gameId} and wait for P2's ready response
-    pushState(gameId, { _phase: 'lobby', p1Deck: p1DeckIds, mapId });
-    document.getElementById('lobby').style.display = 'none';
-    document.getElementById('waiting-screen').style.display = 'flex';
-    document.getElementById('waiting-msg').textContent = 'Waiting for Player 2 to choose their deck...';
-    subscribeState(gameId, data => {
-      if (state) return; // already started
-      if (data._phase !== 'ready' || !data.p2Deck) return;
-      const toArr = v => Array.isArray(v) ? v : Object.values(v ?? {});
-      startGame(toArr(data.p1Deck), toArr(data.p2Deck), data.mapId);
-    });
-    return;
-  }
+  if (isOnline && myRole === 'p1') { beginHostWait(option.dataset.map); return; }
 
-  startGame(p1DeckIds, p2DeckIds, mapId);
+  startGame(p1DeckIds, p2DeckIds, option.dataset.map);
 });
 
 // ── Online mode ───────────────────────────────────────────────────────────────
@@ -168,6 +179,8 @@ const params  = new URLSearchParams(window.location.search);
 const isOnline = !!params.get('game');
 const gameId   = params.get('game') ?? null;
 const myRole   = params.get('role') ?? null; // 'p1' | 'p2' | null for local play
+const isAiMode = params.get('ai') === '1';
+const urlMapId = params.get('mapId') ?? null; // set when this game came from the open-lobby browser — the map was already chosen there, so skip the map-picker
 let myLastPushId = null;
 
 // ── Game state ────────────────────────────────────────────────────────────────
@@ -298,11 +311,17 @@ function startGame(p1Ids, p2Ids, mapId) {
     showMulligan('P1 — OPENING HAND', s.p1.hand, indices1 => {
       s = applyMulligan(s, 'p1', indices1);
       s = { ...s, p1: drawCards(s.p1, 1) };
-      showMulligan('P2 — OPENING HAND', s.p2.hand, indices2 => {
-        s = applyMulligan(s, 'p2', indices2);
+      if (isAiMode) {
+        // Bot keeps its opening hand — no UI shown for P2 in AI mode.
         s = { ...s, p2: drawCards(s.p2, 1) };
         finishStartGame(s, mapId);
-      });
+      } else {
+        showMulligan('P2 — OPENING HAND', s.p2.hand, indices2 => {
+          s = applyMulligan(s, 'p2', indices2);
+          s = { ...s, p2: drawCards(s.p2, 1) };
+          finishStartGame(s, mapId);
+        });
+      }
     });
     return;
   }
