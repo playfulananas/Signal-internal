@@ -1,4 +1,4 @@
-import { CARD_BY_ID, CARDS } from './cards.js?v=1784634216';
+import { CARD_BY_ID, CARDS } from './cards.js?v=1784634349';
 import {
   createInitialState,
   startOfTurn,
@@ -13,12 +13,12 @@ import {
   getSideValue,
   attackBeats,
   oppositeDir,
-} from './state.js?v=1784634216';
-import { getAttackableTargets, resolveSingleAttack, tileKey } from './combat.js?v=1784634216';
-import { renderBoard, renderHand, renderHQ, appendLog } from './ui.js?v=1784634216';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1784634216';
-import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1784634216';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn } from './debug.js?v=1784634216';
+} from './state.js?v=1784634349';
+import { getAttackableTargets, resolveSingleAttack, tileKey } from './combat.js?v=1784634349';
+import { renderBoard, renderHand, renderHQ, appendLog } from './ui.js?v=1784634349';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1784634349';
+import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1784634349';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn } from './debug.js?v=1784634349';
 
 // ── Starter decks ─────────────────────────────────────────────────────────────
 const DECKS = {

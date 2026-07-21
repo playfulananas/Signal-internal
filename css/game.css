@@ -1176,3 +1176,55 @@ body[data-theme="light"] .hc-cost-discounted { color: #007a2e; }
   border-radius: 3px; cursor: pointer; margin-top: 2px;
 }
 .debug-card-result:hover { color: var(--gold); }
+
+/* ── Deck Builder ─────────────────────────────────────────────────────────── */
+.db-page { max-width: 1150px; margin: 0 auto; padding: 24px 16px 48px; display: flex; flex-direction: column; gap: 18px; }
+.db-header { display: flex; justify-content: space-between; align-items: center; }
+.db-columns { display: flex; gap: 16px; align-items: flex-start; }
+.db-pool-panel { flex: 1.5; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.db-deck-panel { flex: 1; display: flex; flex-direction: column; gap: 10px; background: var(--bg-alt); border: 1px solid var(--border); border-radius: 4px; padding: 14px; position: sticky; top: 16px; }
+
+.db-filters { display: flex; gap: 6px; }
+.db-filter { background: var(--bg-alt); border: 1px solid var(--border); color: var(--text-b); font-size: 11px; letter-spacing: 1px; padding: 6px 14px; cursor: pointer; border-radius: 3px; font-family: 'Arial Narrow', Arial, sans-serif; }
+.db-filter.active { border-color: var(--gold); color: var(--gold); }
+
+.db-pool { display: flex; flex-direction: column; gap: 4px; max-height: 74vh; overflow-y: auto; padding-right: 4px; }
+.db-card-row { display: flex; align-items: center; gap: 10px; background: var(--bg-alt); border: 1px solid var(--border); border-radius: 3px; padding: 6px 10px; cursor: pointer; font-size: 12px; }
+.db-card-row:hover { border-color: var(--gold-dim); }
+.db-card-row.maxed { opacity: 0.35; cursor: default; }
+.db-card-row.maxed:hover { border-color: var(--border); }
+.db-card-row .n { flex: 1; color: var(--text); font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.db-card-row .n .have { color: var(--gold); font-weight: normal; }
+.db-card-row .meta { color: var(--text-c); font-size: 11px; white-space: nowrap; }
+.db-card-row .sides { color: var(--text-b); font-family: monospace; font-size: 11px; min-width: 60px; text-align: right; }
+.db-card-row .ap-tag { color: var(--gold); font-weight: bold; min-width: 40px; text-align: right; }
+
+.db-name-input { background: var(--bg-deep); border: 1px solid var(--border); color: var(--text); font-size: 14px; padding: 8px 10px; border-radius: 3px; font-family: 'Arial Narrow', Arial, sans-serif; letter-spacing: 1px; }
+.db-stats { display: flex; justify-content: space-between; font-size: 13px; font-weight: bold; font-family: 'Arial Narrow', Arial, sans-serif; letter-spacing: 1px; }
+.db-ap-meter { color: var(--gold); }
+.db-ap-meter.over { color: var(--red); }
+.db-count { color: var(--text-b); }
+
+.db-errors { background: rgba(221,51,68,0.08); border: 1px solid var(--red); color: var(--red); font-size: 11px; padding: 8px 10px; border-radius: 3px; line-height: 1.6; }
+
+.db-deck-list { display: flex; flex-direction: column; gap: 3px; max-height: 38vh; overflow-y: auto; }
+.db-empty { color: var(--text-d); font-size: 11px; padding: 12px 0; text-align: center; }
+.db-deck-row { display: flex; align-items: center; gap: 8px; background: var(--bg-deep); border: 1px solid var(--border); border-radius: 3px; padding: 5px 10px; cursor: pointer; font-size: 12px; }
+.db-deck-row:hover { border-color: var(--red); }
+.db-deck-row .n { flex: 1; color: var(--text); }
+.db-deck-row .copies { color: var(--gold); font-weight: bold; }
+.db-deck-row .ap-tag { color: var(--text-c); min-width: 40px; text-align: right; }
+
+.db-actions { display: flex; gap: 8px; }
+.db-saved-title { font-size: 11px; letter-spacing: 2px; color: var(--text-c); font-family: 'Arial Narrow', Arial, sans-serif; margin-top: 6px; }
+.db-saved { display: flex; flex-direction: column; gap: 4px; }
+.db-saved-row { display: flex; align-items: center; gap: 8px; background: var(--bg-deep); border: 1px solid var(--border); border-radius: 3px; padding: 6px 10px; font-size: 12px; }
+.db-saved-row .n { flex: 1; color: var(--text); font-weight: bold; }
+.db-saved-row .meta { color: var(--text-c); font-size: 11px; }
+.db-saved-row button { background: none; border: 1px solid var(--border); color: var(--text-b); font-size: 10px; letter-spacing: 1px; padding: 3px 8px; cursor: pointer; border-radius: 2px; }
+.db-saved-row button:hover { border-color: var(--gold); color: var(--gold); }
+.db-saved-row button.del:hover { border-color: var(--red); color: var(--red); }
+
+/* Lobby: invalid custom deck tile */
+.deck-option.deck-invalid { opacity: 0.4; cursor: default; }
+.deck-option.deck-invalid:hover { border-color: var(--border); box-shadow: none; }

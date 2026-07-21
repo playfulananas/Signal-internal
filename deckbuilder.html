@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>SIGNAL — Deck Builder</title>
+  <link rel="stylesheet" href="css/game.css?v=1783511053">
+</head>
+<body>
+
+  <button id="theme-toggle" class="theme-toggle">☾ LIGHT</button>
+
+  <div class="db-page">
+    <div class="db-header">
+      <div>
+        <div class="lobby-title" style="font-size:30px;">DECK BUILDER</div>
+        <div class="lobby-subtitle">50 AP BUDGET · COMMON ×2 · RARE ×1</div>
+      </div>
+      <button class="btn btn-secondary" id="db-back">Main Menu</button>
+    </div>
+
+    <div class="db-columns">
+
+      <!-- LEFT: card pool -->
+      <div class="db-pool-panel">
+        <div class="db-filters" id="db-filters">
+          <button class="db-filter active" data-filter="all">ALL</button>
+          <button class="db-filter" data-filter="unit">UNITS</button>
+          <button class="db-filter" data-filter="command">COMMANDS</button>
+          <button class="db-filter" data-filter="mission">MISSIONS</button>
+        </div>
+        <div class="db-pool" id="db-pool"></div>
+      </div>
+
+      <!-- RIGHT: working deck -->
+      <div class="db-deck-panel">
+        <input class="db-name-input" id="db-deck-name" placeholder="Deck name…" maxlength="24">
+        <div class="db-stats">
+          <span class="db-ap-meter" id="db-ap">0 / 50 AP</span>
+          <span class="db-count" id="db-count">0 cards</span>
+        </div>
+        <div class="db-errors" id="db-errors" style="display:none"></div>
+        <div class="db-deck-list" id="db-deck-list">
+          <div class="db-empty" id="db-empty">Click cards on the left to add them.</div>
+        </div>
+        <div class="db-actions">
+          <button class="btn btn-primary" id="db-save" disabled>Save Deck</button>
+          <button class="btn btn-secondary" id="db-clear">Clear</button>
+        </div>
+
+        <div class="db-saved-title">SAVED DECKS</div>
+        <div class="db-saved" id="db-saved"></div>
+
+        <div class="db-saved-title">LOAD A STARTER AS BASE</div>
+        <div class="db-saved" id="db-starters"></div>
+      </div>
+
+    </div>
+  </div>
+
+  <script type="module" src="./js/deckbuilder.js?v=1783511053"></script>
+
+</body>
+</html>
