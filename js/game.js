@@ -1,4 +1,4 @@
-import { CARD_BY_ID, CARDS } from './cards.js?v=1784634607';
+import { CARD_BY_ID, CARDS } from './cards.js?v=1784634962';
 import {
   createInitialState,
   startOfTurn,
@@ -13,24 +13,64 @@ import {
   getSideValue,
   attackBeats,
   oppositeDir,
-} from './state.js?v=1784634607';
-import { getAttackableTargets, resolveSingleAttack, tileKey } from './combat.js?v=1784634607';
-import { renderBoard, renderHand, renderHQ, appendLog } from './ui.js?v=1784634607';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1784634607';
-import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1784634607';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn } from './debug.js?v=1784634607';
+} from './state.js?v=1784634962';
+import { getAttackableTargets, resolveSingleAttack, tileKey } from './combat.js?v=1784634962';
+import { renderBoard, renderHand, renderHQ, appendLog } from './ui.js?v=1784634962';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1784634962';
+import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1784634962';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn } from './debug.js?v=1784634962';
+import { STARTER_DECKS, loadCustomDecks, validateDeck, computeDeckAP } from './decks.js?v=1784634962';
 
-// ── Starter decks ─────────────────────────────────────────────────────────────
-const DECKS = {
-  // Bombard + Double Attack: 8 Bombard units, 8 DA units, draw engine, Total Onslaught — 48 AP
-  aggro:   { ids: [5,5, 42,42, 40,40, 19,19, 22,22, 10,10, 59,59, 81,81, 4,4, 13,13, 61,61, 52,52, 8,8] },
-  // Armor Fortress counter: Heavy Armor/Armor/Guard wall, commands to buff, Fortify mission — 50 AP
-  control: { ids: [65,65, 6,6, 36,36, 11,11, 39,39, 63,63, 2,2, 75,75, 74,74, 49,49, 54,54, 16,16, 57,57] },
-  // Counter-aggro: Guard wall neutralizes DA, Armor soaks Bombard, full draw engine, Overrun finisher — 40 AP
-  counter: { ids: [2,2, 11,11, 36,36, 43,43, 6,6, 69,69, 5,5, 1,1, 34,34, 22,22, 19,19, 73,73, 51,51, 25,25, 81,81] },
-  // Steel Column: Armor/Heavy Armor tank wall, Fuel ramp into King Tiger/Heavy Tank, Hold the Line stabilizes — 50 AP
-  power:   { ids: [63,63, 66,66, 65,65, 39,39, 6,6, 9,9, 5,5, 55,55, 25,25, 23,23, 76,76, 18,18] },
-};
+// ── Deck selection ────────────────────────────────────────────────────────────
+// Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
+// re-validated here because card data may have changed since they were saved.
+// Starters keep data-deck="aggro" etc. — the selfplay harness clicks by that.
+let deckChoices = []; // parallel to data-choice indices on the tiles
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+}
+
+function renderDeckGrid() {
+  const grid = document.getElementById('deck-grid');
+  grid.innerHTML = '';
+  deckChoices = [];
+
+  for (const d of STARTER_DECKS) {
+    deckChoices.push(d.ids);
+    grid.insertAdjacentHTML('beforeend',
+      `<div class="deck-option" data-deck="${d.key}" data-choice="${deckChoices.length - 1}">
+        <div class="deck-name">${escapeHtml(d.name)}</div>
+        <div class="deck-flavor">${escapeHtml(d.flavor)}</div>
+        <div class="deck-ap">${computeDeckAP(d.ids)} AP</div>
+      </div>`);
+  }
+
+  for (const d of loadCustomDecks()) {
+    const v = validateDeck(d.ids);
+    if (v.valid) {
+      deckChoices.push(d.ids);
+      grid.insertAdjacentHTML('beforeend',
+        `<div class="deck-option" data-choice="${deckChoices.length - 1}">
+          <div class="deck-name">${escapeHtml(d.name)}</div>
+          <div class="deck-flavor">Custom deck · ${d.ids.length} cards</div>
+          <div class="deck-ap">${v.ap} AP</div>
+        </div>`);
+    } else {
+      grid.insertAdjacentHTML('beforeend',
+        `<div class="deck-option deck-invalid" title="${escapeHtml(v.errors.join(' '))}">
+          <div class="deck-name">${escapeHtml(d.name)}</div>
+          <div class="deck-flavor">INVALID — ${escapeHtml(v.errors[0])} Fix it in the Deck Builder.</div>
+          <div class="deck-ap">${v.ap} AP</div>
+        </div>`);
+    }
+  }
+}
+
+renderDeckGrid();
+document.getElementById('btn-open-builder').addEventListener('click', () => {
+  window.location.href = 'deckbuilder.html';
+});
 
 // Bridge (29), Radar Station (30), Fortification (33) excluded — effects not automated yet.
 const WORKING_OBJECTIVE_IDS = [26, 27, 28, 31, 32];
@@ -67,12 +107,12 @@ function tryPushP2Ready() {
 
 document.getElementById('deck-grid').addEventListener('click', e => {
   const option = e.target.closest('.deck-option');
-  if (!option) return;
-  const deck = DECKS[option.dataset.deck];
-  if (!deck) return;
+  if (!option || option.dataset.choice === undefined) return;
+  const ids = deckChoices[Number(option.dataset.choice)];
+  if (!ids) return;
 
   if (isOnline && myRole === 'p2') {
-    p2DeckIds = [...deck.ids];
+    p2DeckIds = [...ids];
     document.getElementById('lobby').style.display = 'none';
     document.getElementById('waiting-screen').style.display = 'flex';
     document.getElementById('waiting-msg').textContent = 'Connecting...';
@@ -81,7 +121,7 @@ document.getElementById('deck-grid').addEventListener('click', e => {
   }
 
   if (isOnline && myRole === 'p1') {
-    p1DeckIds = [...deck.ids];
+    p1DeckIds = [...ids];
     document.getElementById('deck-picker').style.display = 'none';
     document.getElementById('map-picker').style.display = '';
     return;
@@ -89,11 +129,11 @@ document.getElementById('deck-grid').addEventListener('click', e => {
 
   // Local play: P1 deck → P2 deck → map
   if (pickerStep === 1) {
-    p1DeckIds = [...deck.ids];
+    p1DeckIds = [...ids];
     pickerStep = 2;
     document.getElementById('picker-label').textContent = 'PLAYER 2 — CHOOSE YOUR DECK';
   } else {
-    p2DeckIds = [...deck.ids];
+    p2DeckIds = [...ids];
     pickerStep = 3;
     document.getElementById('deck-picker').style.display = 'none';
     document.getElementById('map-picker').style.display = '';

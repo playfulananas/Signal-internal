@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <title>SIGNAL — Digital Prototype</title>
-  <link rel="stylesheet" href="css/game.css?v=1784634607">
+  <link rel="stylesheet" href="css/game.css?v=1784634962">
 </head>
 <body>
 
@@ -15,30 +15,12 @@
     <div class="lobby-title">SIGNAL</div>
     <div class="lobby-subtitle">WWII TACTICAL CARD GAME — PROTOTYPE</div>
 
-    <!-- Step 1 & 2: Deck selection -->
+    <!-- Step 1 & 2: Deck selection (tiles rendered by game.js from decks.js + localStorage) -->
     <div id="deck-picker">
       <div class="picker-label" id="picker-label">PLAYER 1 — CHOOSE YOUR DECK</div>
-      <div class="deck-grid" id="deck-grid">
-        <div class="deck-option" data-deck="aggro">
-          <div class="deck-name">Hammer Strike</div>
-          <div class="deck-flavor">Bombard units deal hits on placement. Double Attack finishers close the game. Draw fast, destroy everything.</div>
-          <div class="deck-ap">48 AP</div>
-        </div>
-        <div class="deck-option" data-deck="control">
-          <div class="deck-name">Iron Fortress</div>
-          <div class="deck-flavor">Armor and Guard wall. Bombard can't suppress Heavy Armor. Guard nullifies Double Attack. Hold objectives, outlast.</div>
-          <div class="deck-ap">50 AP</div>
-        </div>
-        <div class="deck-option" data-deck="counter">
-          <div class="deck-name">Blitz Breaker</div>
-          <div class="deck-flavor">Four Guard unit types wall off Double Attack. Armor absorbs Bombard. Cheap flood, full draw engine, Overrun punishes every kill.</div>
-          <div class="deck-ap">40 AP</div>
-        </div>
-        <div class="deck-option" data-deck="power">
-          <div class="deck-name">Steel Column</div>
-          <div class="deck-flavor">Six Armor / Heavy Armor vehicles grind through hits. Supply Runner and Industrial Surge ramp Fuel, Armored Spearhead discounts Tanks, Hold the Line and Field Medic stabilize.</div>
-          <div class="deck-ap">50 AP</div>
-        </div>
+      <div class="deck-grid" id="deck-grid"></div>
+      <div style="text-align:center; margin-top:16px;">
+        <button class="btn btn-secondary" id="btn-open-builder">OPEN DECK BUILDER</button>
       </div>
     </div>
 
@@ -294,7 +276,7 @@
 
   </div>
 
-  <script type="module" src="./js/game.js?v=1784634607"></script>
+  <script type="module" src="./js/game.js?v=1784634962"></script>
 
 </body>
 </html>
