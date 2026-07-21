@@ -1,7 +1,7 @@
 // Deck rules, starter decks, validation, and custom-deck persistence.
 // Validation functions are pure (node-testable). localStorage helpers are
 // browser-only — never called at module top level.
-import { CARDS, CARD_BY_ID } from './cards.js?v=1784633047';
+import { CARDS, CARD_BY_ID } from './cards.js?v=1784634216';
 
 export const DECK_RULES = {
   apBudget: 50,
@@ -14,7 +14,10 @@ export const STARTER_DECKS = [
   {
     key: 'aggro', name: 'Hammer Strike',
     flavor: 'Bombard units deal hits on placement. Double Attack finishers close the game. Draw fast, destroy everything.',
-    ids: [5,5, 42,42, 40,40, 19,19, 22,22, 10,10, 59,59, 81,81, 4,4, 13,13, 61,61, 52,52, 8,8],
+    // Trimmed from 2x to 1x Storm Squad (2026-07-21) — card AP retuning since this
+    // list was built pushed it to 52 AP; Storm Squad was the most redundant Double
+    // Attack piece alongside Tank Hunter/Dive Bomber. Now 50 AP exactly.
+    ids: [5,5, 42,42, 40,40, 19,19, 22,22, 10,10, 59, 81,81, 4,4, 13,13, 61,61, 52,52, 8,8],
   },
   {
     key: 'control', name: 'Iron Fortress',

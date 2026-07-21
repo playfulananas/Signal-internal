@@ -22,24 +22,14 @@ test('getDeckPool excludes objectives', () => {
   assert.ok(pool.every(c => c.type !== 'objective'));
 });
 
-test('three of the four starter decks are valid; Hammer Strike is currently over budget', () => {
-  // NOTE: the plan's comment claimed Hammer Strike (aggro) was 48 AP, matching the
-  // stale "48 AP" label in game.html. Actual sum against current cards.js is 52 AP
-  // (card AP values have been retuned since this starter deck was assembled — see
-  // CLAUDE.md AP retuning history). That's real card-data drift, not a test bug, so
-  // this test documents current reality rather than asserting the plan's stale claim.
-  // Flagged to Filip; not fixed here — Task 1 is decks.js + tests only.
+test('all four starter decks are valid', () => {
+  // Hammer Strike (aggro) was trimmed from 2x to 1x Storm Squad on 2026-07-21 —
+  // card AP retuning since this deck was assembled had pushed it to 52 AP.
   assert.equal(STARTER_DECKS.length, 4);
   for (const d of STARTER_DECKS) {
     const v = validateDeck(d.ids);
-    if (d.key === 'aggro') {
-      assert.ok(!v.valid, 'Hammer Strike (aggro) is expected to be over the 50 AP budget at 52 AP');
-      assert.equal(v.ap, 52);
-      assert.ok(v.errors.some(e => e.includes('AP')));
-    } else {
-      assert.deepEqual(v.errors, [], `${d.name}: ${v.errors.join(' | ')}`);
-      assert.ok(v.valid);
-    }
+    assert.deepEqual(v.errors, [], `${d.name}: ${v.errors.join(' | ')}`);
+    assert.ok(v.valid);
   }
 });
 
