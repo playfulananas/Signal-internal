@@ -1,5 +1,6 @@
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
 import { getDatabase, ref, set, get, onValue, update } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js';
+import { getAuth, signInAnonymously, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
 
 // Paste your Firebase project config here (from Firebase Console → Project Settings)
 const FIREBASE_CONFIG = {
@@ -14,6 +15,7 @@ const FIREBASE_CONFIG = {
 
 const app = initializeApp(FIREBASE_CONFIG);
 const db  = getDatabase(app);
+const auth = getAuth(app);
 
 export function generateGameCode() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -51,4 +53,35 @@ export function subscribeLobby(gameId, callback) {
   return onValue(ref(db, `lobbies/${gameId}`), snap => {
     if (snap.exists()) callback(snap.val());
   });
+}
+
+// ── Identity (anonymous auth + local display name) ─────────────────────────────
+// Signs in anonymously (idempotent — Firebase persists the session across
+// reloads via its own storage, separate from localStorage) and fires
+// callback(uid) once resolved. The uid is stable across reloads on the same
+// browser profile, NOT across devices or after clearing site data — this is
+// intentionally lightweight, not a full account system.
+export function initAuth(callback) {
+  onAuthStateChanged(auth, user => {
+    if (user) callback(user.uid);
+  });
+  signInAnonymously(auth).catch(err => console.error('Anonymous sign-in failed', err));
+}
+
+const NAME_KEY = 'signal-display-name';
+
+// Returns the saved display name, generating and persisting a default
+// ("Player1234") the first time it's called so repeated calls are stable.
+export function getDisplayName() {
+  let name = localStorage.getItem(NAME_KEY);
+  if (!name) {
+    name = `Player${Math.floor(1000 + Math.random() * 9000)}`;
+    localStorage.setItem(NAME_KEY, name);
+  }
+  return name;
+}
+
+export function setDisplayName(name) {
+  if (!name) return;
+  localStorage.setItem(NAME_KEY, name);
 }

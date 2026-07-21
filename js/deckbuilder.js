@@ -1,11 +1,11 @@
 // Deck builder page. Pool on the left, working deck on the right.
 // Copy-limit adds are blocked outright; AP overruns are allowed while editing
 // (meter turns red) but block saving.
-import { CARD_BY_ID } from './cards.js?v=1784635194';
+import { CARD_BY_ID } from './cards.js?v=1784652722';
 import {
   getDeckPool, validateDeck, computeDeckAP, countCopies, copyCap,
   DECK_RULES, STARTER_DECKS, loadCustomDecks, saveCustomDeck, deleteCustomDeck,
-} from './decks.js?v=1784635194';
+} from './decks.js?v=1784652722';
 
 let deckIds = [];
 let filter = 'all';
