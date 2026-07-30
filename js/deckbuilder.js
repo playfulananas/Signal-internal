@@ -1,13 +1,13 @@
 // Deck builder page. Pool on the left, working deck on the right.
 // Copy-limit adds are blocked outright; AP overruns are allowed while editing
 // (meter turns red) but block saving.
-import { CARD_BY_ID } from './cards.js?v=1784653929';
+import { CARD_BY_ID } from './cards.js?v=1785404543';
 import {
   getDeckPool, validateDeck, computeDeckAP, countCopies, copyCap,
   DECK_RULES, STARTER_DECKS, loadCustomDecks, saveCustomDeck, deleteCustomDeck,
   mergeRemoteDecks, replaceAllCustomDecks,
-} from './decks.js?v=1784653929';
-import { initAuth, pushUserDecks, fetchUserDecks } from './firebase.js?v=1784653929';
+} from './decks.js?v=1785404543';
+import { initAuth, pushUserDecks, fetchUserDecks } from './firebase.js?v=1785404543';
 
 let deckIds = [];
 let filter = 'all';
@@ -57,6 +57,7 @@ function renderDeck() {
   const counts = countCopies(deckIds);
   const listEl = document.getElementById('db-deck-list');
   const entries = Object.entries(counts)
+    .filter(([id]) => CARD_BY_ID[id]) // skip ids no longer in the card list — validateDeck's error box explains why
     .map(([id, n]) => ({ card: CARD_BY_ID[id], n }))
     .sort((a, b) =>
       (TYPE_ORDER[a.card.type] - TYPE_ORDER[b.card.type]) ||

@@ -1,4 +1,4 @@
-import { CARD_BY_ID, CARDS } from './cards.js?v=1784654155';
+import { CARD_BY_ID, CARDS } from './cards.js?v=1785404543';
 import {
   createInitialState,
   startOfTurn,
@@ -13,13 +13,14 @@ import {
   getSideValue,
   attackBeats,
   oppositeDir,
-} from './state.js?v=1784654155';
-import { getAttackableTargets, resolveSingleAttack, tileKey } from './combat.js?v=1784654155';
-import { renderBoard, renderHand, renderHQ, appendLog } from './ui.js?v=1784654155';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1784654155';
-import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1784654155';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn } from './debug.js?v=1784654155';
-import { STARTER_DECKS, loadCustomDecks, validateDeck, computeDeckAP } from './decks.js?v=1784654155';
+} from './state.js?v=1785404543';
+import { getAttackableTargets, resolveSingleAttack, tileKey } from './combat.js?v=1785404543';
+import { renderBoard, renderHand, renderHQ, appendLog } from './ui.js?v=1785404543';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1785404543';
+import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1785404543';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn } from './debug.js?v=1785404543';
+import { STARTER_DECKS, loadCustomDecks, validateDeck, computeDeckAP } from './decks.js?v=1785404543';
+import { runBotTurn } from './bot_player.js?v=1785404543';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
@@ -161,7 +162,21 @@ function beginHostWait(mapId) {
     if (state) return; // already started
     if (data._phase !== 'ready' || !data.p2Deck) return;
     const toArr = v => Array.isArray(v) ? v : Object.values(v ?? {});
-    startGame(toArr(data.p1Deck), toArr(data.p2Deck), data.mapId);
+    const p1Deck = toArr(data.p1Deck);
+    const p2Deck = toArr(data.p2Deck);
+    // games/{gameId} is world-writable, so both decks are re-validated here even
+    // though the deck-picker UI only ever offers valid decks — this is the one
+    // place an untrusted client (or tampered Firebase data) could otherwise slip
+    // an invalid deck into a match.
+    const p1Check = validateDeck(p1Deck);
+    const p2Check = validateDeck(p2Deck);
+    if (!p1Check.valid || !p2Check.valid) {
+      const who = !p1Check.valid ? 'Your own' : "Player 2's";
+      const reason = !p1Check.valid ? p1Check.errors[0] : p2Check.errors[0];
+      document.getElementById('waiting-msg').textContent = `${who} deck failed validation (${reason}) — refusing to start.`;
+      return; // stay on the waiting screen rather than start a broken match
+    }
+    startGame(p1Deck, p2Deck, data.mapId);
   });
 }
 
@@ -1452,6 +1467,10 @@ document.getElementById('btn-end-turn').addEventListener('click', () => {
   const turnLog = [...endMissionLog, `--- Round ${newRound} — ${newState.initiative.toUpperCase()} ---`, ...supplyLog, ...effectLog];
   commitState(newState, turnLog);
   checkWin();
+
+  if (isAiMode && !gameOver && newState.initiative === 'p2') {
+    runBotTurn();
+  }
 });
 
 // ── Cancel ────────────────────────────────────────────────────────────────────
