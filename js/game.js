@@ -1,4 +1,4 @@
-import { CARD_BY_ID, CARDS } from './cards.js?v=1786495151';
+import { CARD_BY_ID, CARDS } from './cards.js?v=1786538986';
 import {
   createInitialState,
   startOfTurn,
@@ -18,14 +18,14 @@ import {
   discountFor,
   consumeDiscounts,
   addDiscount,
-} from './state.js?v=1786495151';
-import { getAttackableTargets, resolveSingleAttack, tileKey, unitsInColumn, checkHeroPassivesOnPlace, removeSuppression, checkUnitOnPlayAbility } from './combat.js?v=1786495151';
-import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1786495151';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1786495151';
-import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1786495151';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn } from './debug.js?v=1786495151';
-import { STARTER_DECKS, loadCustomDecks, validateDeck } from './decks.js?v=1786495151';
-import { runBotTurn } from './bot_player.js?v=1786495151';
+} from './state.js?v=1786538986';
+import { getAttackableTargets, resolveSingleAttack, tileKey, unitsInColumn, checkHeroPassivesOnPlace, removeSuppression, checkUnitOnPlayAbility } from './combat.js?v=1786538986';
+import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1786538986';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1786538986';
+import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1786538986';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn } from './debug.js?v=1786538986';
+import { STARTER_DECKS, loadCustomDecks, validateDeck } from './decks.js?v=1786538986';
+import { runBotTurn } from './bot_player.js?v=1786538986';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
@@ -2348,22 +2348,16 @@ if (isOnline && myRole === 'p2') {
         showMulligan('YOUR OPENING HAND', normalized.p2.hand, indices => {
           state = applyMulligan(normalized, 'p2', indices);
           state = { ...state, p2: drawCards(state.p2, 1) };
-          // P1 auto-deployed a placeholder hero for us on their side so the game could
-          // start; replace it with P2's own pick, then always push so P1 sees the choice.
-          const enterGame = () => {
-            document.getElementById('game-area').style.display = 'flex';
-            appendLog(state.log ?? []);
-            redraw();
-            pushStateIfOnline(state);
-          };
-          const roster = state.p2.heroRoster ?? [];
-          if (!roster.length) { enterGame(); return; }
-          state = { ...state, p2: { ...state.p2, heroZones: [null, null, null, null] } };
-          showHeroDeploy('YOUR STARTING HERO', 'Pick a Hero, then choose the column it commands.',
-            roster, state.p2.heroZones, (heroId, col) => {
-              state = { ...state, p2: deployHero(state.p2, heroId, col) };
-              enterGame();
-            });
+          // No pre-game Hero pick anymore — P2's first Hero arrives at round 2 via
+          // runHeroPhase, same as P1 and local hotseat (removed 2026-08-11). This used to
+          // deploy a Hero here immediately after mulligan; that stale copy of the old flow
+          // was the actual cause of "P2 gets a Hero immediately" in online play — the
+          // pre-game step was removed from startGame() but this separate P2-online path
+          // still had its own independent copy of it.
+          document.getElementById('game-area').style.display = 'flex';
+          appendLog(state.log ?? []);
+          redraw();
+          pushStateIfOnline(state);
         });
         return;
       }
