@@ -49,7 +49,7 @@
 //                                 Persists until explicitly rotated again; never auto-clears.
 // }
 
-import { CARD_BY_ID } from './cards.js?v=1786495151';
+import { CARD_BY_ID } from './cards.js?v=1786539470';
 
 // ── State factory ────────────────────────────────────────────────────────────
 
@@ -101,9 +101,6 @@ function createPlayerState(deckCardIds, heroIds = []) {
     // the objective escalation schedule exactly, L1-L4 = all 4 roster Heroes).
     lastObjLevel: 0,
     lastUnitClass: null,        // for Combined Arms General (109)
-    // Columns reinforced this cycle — that Hero's Activated Power is locked out until this
-    // player's next startOfTurn (Doc 02 §6 prototype rule). Not set for the Starting Hero.
-    heroArrivalLock: [],
     // { [heroId]: true } — gates "first X each turn" passives (94, 104, 109, 110) so each
     // fires at most once per owner turn. Cleared at startOfTurn alongside heroActivated.
     heroTriggeredThisTurn: {},
@@ -147,7 +144,6 @@ export function startOfTurn(state) {
   // player only and survives remote sync, matching the killsThisTurn convention.
   ps.heroActivated = false;
   ps.heroRepositioned = false;
-  ps.heroArrivalLock = [];
   ps.heroTriggeredThisTurn = {};
   ps.heroActivatedId = null;
   ps.heroTaxedColumns = {};

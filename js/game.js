@@ -1,4 +1,4 @@
-import { CARD_BY_ID, CARDS } from './cards.js?v=1786538986';
+import { CARD_BY_ID, CARDS } from './cards.js?v=1786539470';
 import {
   createInitialState,
   startOfTurn,
@@ -18,14 +18,14 @@ import {
   discountFor,
   consumeDiscounts,
   addDiscount,
-} from './state.js?v=1786538986';
-import { getAttackableTargets, resolveSingleAttack, tileKey, unitsInColumn, checkHeroPassivesOnPlace, removeSuppression, checkUnitOnPlayAbility } from './combat.js?v=1786538986';
-import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1786538986';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1786538986';
-import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1786538986';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn } from './debug.js?v=1786538986';
-import { STARTER_DECKS, loadCustomDecks, validateDeck } from './decks.js?v=1786538986';
-import { runBotTurn } from './bot_player.js?v=1786538986';
+} from './state.js?v=1786539470';
+import { getAttackableTargets, resolveSingleAttack, tileKey, unitsInColumn, checkHeroPassivesOnPlace, removeSuppression, checkUnitOnPlayAbility } from './combat.js?v=1786539470';
+import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1786539470';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1786539470';
+import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1786539470';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn } from './debug.js?v=1786539470';
+import { STARTER_DECKS, loadCustomDecks, validateDeck } from './decks.js?v=1786539470';
+import { runBotTurn } from './bot_player.js?v=1786539470';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
@@ -410,14 +410,11 @@ function runHeroPhase(role) {
   const finish = (heroId, col) => {
     let s = noteLevel(state);
     // A reinforcement consumes this turn's Hero Phase action — no reposition on top.
-    // Doc 02 §6: a Hero reinforced this turn can't use its Activated Power until this
-    // player's next turn — heroArrivalLock is cleared in startOfTurn.
+    // Doc 02 §6's arrival-lock recommendation (Power unusable until controller's next
+    // turn) was explicitly a recommendation, not a locked rule — dropped 2026-08-12 so a
+    // Hero's Power is available the same turn it's deployed.
     const deployed = deployHero(s[role], heroId, col);
-    s = { ...s, [role]: {
-      ...deployed,
-      heroRepositioned: true,
-      heroArrivalLock: [...(deployed.heroArrivalLock ?? []), col],
-    } };
+    s = { ...s, [role]: { ...deployed, heroRepositioned: true } };
     const verb = isFirstHero ? 'deploys' : 'reinforces';
     commitState(s, [`${role.toUpperCase()} ${verb}: ${CARD_BY_ID[heroId]?.name} → column ${col + 1}`]);
   };
@@ -735,7 +732,6 @@ function normalizeFirebaseState(raw) {
     missions: toArray(p.missions),
     heroRoster: toArray(p.heroRoster),
     heroZones:  fixZones(p.heroZones),
-    heroArrivalLock: toArray(p.heroArrivalLock),
     heroesActivatedEver: toArray(p.heroesActivatedEver),
     pendingDiscounts: toArray(p.pendingDiscounts),
   } : p;
@@ -888,10 +884,6 @@ function tryActivateHero(role, col) {
   // lock, but only for a different Hero than whichever already activated this turn.
   const usingExtra = ps.heroActivated && ps.extraHeroActivation && heroId !== ps.heroActivatedId;
   if (ps.heroActivated && !usingExtra) { appendLog(['Hero Power already used this turn']); return true; }
-  if ((ps.heroArrivalLock ?? []).includes(col)) {
-    appendLog([`${hero.name}: just reinforced — no Hero Power until your next turn`]);
-    return true;
-  }
 
   // Priority Orders (121) discounts, Radio Interference (123) taxes — both apply once,
   // to this one activation, then clear. min 0 per Priority Orders' own wording.
