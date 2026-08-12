@@ -5,9 +5,11 @@ import { chromium } from 'playwright';
 
 const BASE_URL = 'http://localhost:3000';
 const DECK_NAME = 'Smoke Test Deck';
-// 8 cheap Commons ×2 = 16 cards, well under 50 AP, no copy-limit issues
+// 15 cheap Commons ×2 = exactly 30 cards (the v0.4 fixed deck size), no copy-limit issues
 const CARD_NAMES = ['Rifle Squad', 'Riflemen', 'Scouts', 'Supply Runner',
-  'Shock Troopers', 'Trench Runners', 'Light Skirmishers', 'Quartermaster'];
+  'Shock Troopers', 'Trench Runners', 'Light Skirmishers', 'Quartermaster',
+  'Mountain Troops', 'Panzer II', 'Reserve Infantry', 'Field Medic',
+  'Smoke Screen', 'Tactical Withdrawal', 'Recon Jeep'];
 
 function fail(msg) { console.error(`FAIL: ${msg}`); process.exitCode = 1; }
 
@@ -26,12 +28,12 @@ try {
     await row.click();
   }
 
-  const count = await page.locator('#db-count').textContent();
-  if (count !== '16 cards') fail(`expected 16 cards, got "${count}"`);
+  const count = await page.locator('#db-ap').textContent();
+  if (count !== '30 / 30 cards') fail(`expected "30 / 30 cards", got "${count}"`);
 
   await page.fill('#db-deck-name', DECK_NAME);
   const saveBtn = page.locator('#db-save');
-  if (await saveBtn.isDisabled()) fail('Save disabled for a legal 16-card deck');
+  if (await saveBtn.isDisabled()) fail('Save disabled for a legal 30-card deck');
   await saveBtn.click();
   await page.waitForTimeout(100);
 

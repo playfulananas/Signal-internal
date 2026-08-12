@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SIGNAL — Hero Card &amp; Zone Styles (locked)</title>
+  <!-- All hero styling now lives in css/game.css (.hero-card / .hero-placed).
+       This page only adds its own page chrome — it renders the real classes. -->
+  <link rel="stylesheet" href="css/game.css">
+  <style>
+    /* game.css locks body to a fixed, centred, non-scrolling game viewport
+       (height:100dvh; overflow:hidden; display:flex; align-items:center).
+       This is a long scrolling document, so undo all three. */
+    body {
+      font-family: Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text-b);
+      padding: 0 0 60px;
+      display: block;
+      height: auto;
+      min-height: 100vh;
+      overflow: visible;
+      overflow-y: auto;
+    }
+    .pg-head {
+      background: var(--bg-deep);
+      border-bottom: 2px solid var(--border);
+      padding: 14px 24px 12px;
+      position: sticky; top: 0; z-index: 50;
+    }
+    .pg-title { font-size: 15px; font-weight: bold; letter-spacing: 3px; color: var(--gold); margin-bottom: 4px; }
+    .pg-sub { font-size: 11px; color: var(--text-c); line-height: 1.55; max-width: 900px; }
+    section { padding: 26px 24px 4px; }
+    h2 {
+      font-size: 13px; letter-spacing: 2px; color: var(--gold);
+      margin-bottom: 5px; font-family: 'Arial Narrow', Arial, sans-serif;
+    }
+    .desc { font-size: 11px; color: var(--text-c); line-height: 1.6; max-width: 840px; margin-bottom: 14px; }
+    .desc b { color: var(--text-b); }
+    .desc code { color: var(--gold); font-size: 10px; }
+    .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; }
+    .row.tight { gap: 8px; }
+    .vlabel {
+      font-size: 10px; letter-spacing: 1.5px; color: var(--text-d);
+      text-transform: uppercase; margin: 14px 0 7px;
+      font-family: 'Arial Narrow', Arial, sans-serif;
+    }
+    hr.div { border: 0; border-top: 1px solid var(--border); margin: 26px 24px 0; }
+    .dims { font-size: 9px; color: var(--text-d); letter-spacing: 0.5px; }
+
+    /* Demo-only wrapper: mimics one Hero Zone cell outside the real 4-col grid. */
+    .demo-slot { width: 120px; height: 58px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .demo-slot.empty {
+      border: 1px dashed var(--hint-border); border-radius: 3px;
+      font-size: 8px; letter-spacing: 1px; color: var(--text-d);
+      font-family: 'Arial Narrow', Arial, sans-serif;
+    }
+
+    /* In-context mini board */
+    .ctx { display: inline-flex; flex-direction: column; gap: 6px; padding: 10px;
+           background: var(--bg-alt); border: 1px solid var(--border); border-radius: 5px; }
+    .ctx-board {
+      display: grid; grid-template-columns: repeat(4, 120px); grid-template-rows: repeat(2, 62px);
+      gap: 3px; background: var(--bg-board); padding: 8px;
+      border-radius: 4px; border: 3px solid var(--border-board);
+    }
+    .ctx-tile { background: var(--bg-tile); border: 1px solid var(--border); border-radius: 2px;
+                display: flex; align-items: center; justify-content: center; font-size: 8px; color: var(--text-d); }
+    .ctx-cap { font-size: 9px; color: var(--text-d); letter-spacing: 1px; text-align: center; }
+  </style>
+</head>
+<body>
+
+<button id="theme-toggle" class="theme-toggle">☾ LIGHT</button>
+
+<div class="pg-head">
+  <div class="pg-title">SIGNAL — HERO CARD &amp; ZONE STYLES <span class="dims">· LOCKED</span></div>
+  <div class="pg-sub">
+    Chosen styles, now living in <code>css/game.css</code> as <code>.hero-card</code> and
+    <code>.hero-placed</code> — this page renders those real classes, so it can't drift from the game.
+    Heroes have two states like units do: a <b>card</b> at 92×126 (same footprint as <code>.hand-card</code>)
+    and a <b>placed</b> form at 112×50 inside the 120×58 Hero Zone slot.
+  </div>
+</div>
+
+<section>
+  <h2>1 · CARD <span class="dims">— 92 × 126 · .hero-card</span></h2>
+  <div class="desc">
+    Gold rank band marks heroes at a glance. Appears in the deck builder, hero picker and detail
+    preview — note heroes are <b>never in hand</b> during play, since they're a separate roster and
+    aren't shuffled into the 30-card deck.
+    Powers too long for the card clamp with an ellipsis; the full text belongs in the left preview
+    panel on hover, the same way units surface ability text.
+  </div>
+  <div class="row" id="cards"></div>
+</section>
+
+<hr class="div">
+
+<section>
+  <h2>2 · PLACED <span class="dims">— 112 × 50 in the 120 × 58 zone · .hero-placed</span></h2>
+  <div class="desc">
+    112px wide so a placed hero lines up exactly with the board tiles in its column.
+    Full power text sits behind the <b>ⓘ hover pip</b> (same pattern as unit abilities).
+    Gold glow = activation still available this turn; dimmed = already spent.
+  </div>
+  <div class="row tight" id="placed"></div>
+
+  <div class="vlabel">States — ready · spent · empty slot · P2 colouring</div>
+  <div class="row tight" id="states"></div>
+</section>
+
+<hr class="div">
+
+<section>
+  <h2>3 · IN CONTEXT</h2>
+  <div class="desc">
+    Rendered with the real <code>.hero-zone-strip</code> / <code>.hero-zone-slot</code> classes from
+    the game — P2's strip above the board, P1's below, each slot aligned to its column.
+    Hover a pip: P2's tooltips open downward so they don't run off the top of the screen.
+  </div>
+  <div class="row" id="context"></div>
+</section>
+
+<script type="module">
+import { CARDS } from './js/cards.js';
+
+const SHOW_IDS = [87, 89, 92, 91, 94, 97];
+const byId = Object.fromEntries(CARDS.map(c => [c.id, c]));
+const heroes = SHOW_IDS.map(id => byId[id]);
+
+const esc = s => String(s ?? '').replace(/[&<>"]/g, ch =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+
+// Scope comes from the authoritative `scope` field on the card (added 2026-08-01) —
+// never inferred from ability wording.
+const scopeLabel = c => (c.scope ?? 'board').toUpperCase();
+
+/* ── Card (92×126) ── */
+function heroCard(card) {
+  const cost = card.powerType === 'active'
+    ? `<span class="hx-cost">${card.activeCost}⛽</span>`
+    : `<span class="hx-passive">PASSIVE</span>`;
+  return `<div class="hero-card">
+    <div class="hx-head"><span class="hx-rank">&#9650;</span>${esc(card.name)}</div>
+    <div class="hx-costrow">${cost}<span class="hx-scope">${scopeLabel(card)}</span></div>
+    <div class="hx-type">Hero · ${card.rarity}</div>
+    <div class="hx-effect">${esc(card.ability)}</div>
+  </div>`;
+}
+
+/* ── Placed (112×50) ── */
+function heroPlaced(card, owner = 'p1', state = 'ready') {
+  const cost = card.powerType === 'active'
+    ? `<span class="hp-cost">${card.activeCost}⛽</span>`
+    : `<span class="hp-passive">PASSIVE</span>`;
+  return `<div class="hero-placed ${owner} ${state}">
+    <div class="hp-name">${esc(card.name)}</div>
+    <div class="hp-body">${cost}
+      <span class="hp-pip">&#9432;<span class="hp-tip">${esc(card.ability)}</span></span>
+    </div>
+  </div>`;
+}
+
+const demo = inner => `<div class="demo-slot">${inner}</div>`;
+const demoEmpty = () => `<div class="demo-slot empty">HERO</div>`;
+
+document.getElementById('cards').innerHTML = heroes.map(heroCard).join('');
+document.getElementById('placed').innerHTML = heroes.map(c => demo(heroPlaced(c))).join('');
+
+document.getElementById('states').innerHTML = [
+  demo(heroPlaced(byId[92], 'p1', 'ready')),
+  demo(heroPlaced(byId[92], 'p1', 'spent')),
+  demoEmpty(),
+  demo(heroPlaced(byId[94], 'p2', 'ready')),
+  demo(heroPlaced(byId[94], 'p2', 'spent')),
+].join('');
+
+/* ── In context: real .hero-zone-strip / .hero-zone-slot markup ── */
+const zone = (inner, filled) =>
+  `<div class="hero-zone-slot${filled ? ' filled' : ''}">${filled ? inner : 'HERO'}</div>`;
+
+const p2Strip = zone(heroPlaced(byId[94], 'p2', ''), true)
+              + zone(heroPlaced(byId[89], 'p2', ''), true)
+              + zone('', false) + zone('', false);
+const p1Strip = zone(heroPlaced(byId[92], 'p1', 'ready'), true)
+              + zone('', false)
+              + zone(heroPlaced(byId[91], 'p1', 'spent'), true)
+              + zone('', false);
+const tiles = Array.from({ length: 8 }, () => `<div class="ctx-tile">·</div>`).join('');
+
+document.getElementById('context').innerHTML = `<div class="ctx">
+  <div class="ctx-cap">P2 HERO ZONES</div>
+  <div class="hero-zone-strip hero-zone-p2">${p2Strip}</div>
+  <div class="ctx-board">${tiles}</div>
+  <div class="hero-zone-strip hero-zone-p1">${p1Strip}</div>
+  <div class="ctx-cap">P1 HERO ZONES</div>
+</div>`;
+
+/* Theme toggle — same 'signal-theme' key as the other pages */
+(function initTheme() {
+  if (localStorage.getItem('signal-theme') === 'light') document.body.dataset.theme = 'light';
+  const btn = document.getElementById('theme-toggle');
+  btn.textContent = document.body.dataset.theme === 'light' ? '☀ DARK' : '☾ LIGHT';
+  btn.addEventListener('click', () => {
+    const next = document.body.dataset.theme === 'light' ? 'dark' : 'light';
+    document.body.dataset.theme = next;
+    localStorage.setItem('signal-theme', next);
+    btn.textContent = next === 'light' ? '☀ DARK' : '☾ LIGHT';
+  });
+})();
+</script>
+
+</body>
+</html>

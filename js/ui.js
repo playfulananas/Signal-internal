@@ -1,6 +1,6 @@
-import { CARD_BY_ID } from './cards.js?v=1784652722';
-import { getKeywords, maxArmorHits } from './state.js?v=1784652722';
-import { getTerrain } from './maps.js?v=1784652722';
+import { CARD_BY_ID } from './cards.js?v=1786495151';
+import { getKeywords, maxArmorHits, discountFor, fuelCapOf, rotatedDir } from './state.js?v=1786495151';
+import { getTerrain } from './maps.js?v=1786495151';
 
 const TERRAIN_SHORT = { plains: 'P', forest: 'F', water: 'W', desert: 'D', city: 'C' };
 
@@ -9,12 +9,16 @@ const TERRAIN_SHORT = { plains: 'P', forest: 'F', water: 'W', desert: 'D', city:
 // Render the 4x4 board from state into the #board element.
 // selectedTileKey: tile currently selected/highlighted (string or null)
 // validDropKeys: Set of tile keys where the selected hand card can be placed (or null)
-export function renderBoard(state, selectedTileKey, validDropKeys, changedKeys = null, flip = false) {
+// Board orientation is fixed for both players (row 0 = P2 side / top, row 3 = P1
+// side / bottom — see maps.js and state.js's P2_FLIP) — no more per-player/per-turn
+// visual flip, reverted 2026-07-30 to match the GDD's one-time pre-match map
+// orientation rule rather than a continuously recomputed per-viewer rotation.
+export function renderBoard(state, selectedTileKey, validDropKeys, changedKeys = null) {
   const board = document.getElementById('board');
   board.innerHTML = '';
 
-  const rows = flip ? [3,2,1,0] : [0,1,2,3];
-  const cols = flip ? [3,2,1,0] : [0,1,2,3];
+  const rows = [0,1,2,3];
+  const cols = [0,1,2,3];
 
   for (const r of rows) {
     for (const c of cols) {
@@ -91,8 +95,7 @@ export function renderBoard(state, selectedTileKey, validDropKeys, changedKeys =
       if (unit) {
         // Destroyed units are still shown (greyed out) so board state is clear
         tile.classList.add('has-unit');
-        const viewer = flip ? 'p2' : 'p1';
-        tile.appendChild(buildBoardCard(unit, viewer));
+        tile.appendChild(buildBoardCard(unit));
       } else if (validDropKeys?.has(key)) {
         tile.classList.add('valid-drop');
       }
@@ -116,7 +119,7 @@ function buildBoardCard(unit, viewer = 'p1') {
   const kwList = getKeywords(unit);
   const kwHtml = kwList.map(k => `<span class="bc-kw-tag">${k}</span>`).join('');
   const abilityHtml = card.ability
-    ? `<span class="bc-ability-pip">⚡<span class="bc-ability-tip">${card.ability}</span></span>`
+    ? `<span class="bc-ability-pip" data-tip="${esc(card.ability)}">⚡</span>`
     : '';
   const bonus = (unit.tempSideBonus || 0) + (unit.grantedSideBonus || 0) + (unit.objSideBonus || 0) + (unit.debugSideBonus || 0);
   const objBonus = unit.objSideBonus || 0;
@@ -130,10 +133,15 @@ function buildBoardCard(unit, viewer = 'p1') {
 
   const CLS_ABBR = { Infantry:'INF', Tank:'TNK', Artillery:'ART', Aircraft:'AIR', Commander:'CMD', Naval:'NAV' };
   const dc = objBonus > 0 ? ' class="bc-dir-buffed"' : '';
-  const dn = (opponent ? card.s : card.n) + bonus;
-  const ds = (opponent ? card.n : card.s) + bonus;
-  const de = (opponent ? card.w : card.e) + bonus;
-  const dw = (opponent ? card.e : card.w) + bonus;
+  // rotatedDir first (Change Formation 124 / Field Engineer 91), then the existing
+  // opponent-viewer swap on the rotated attribute — same n<->s/e<->w pattern getSideValue
+  // uses for owner-based P2_FLIP, just keyed by viewer here instead of owner.
+  const rn = rotatedDir('n', unit.rotation), re = rotatedDir('e', unit.rotation);
+  const rs = rotatedDir('s', unit.rotation), rw = rotatedDir('w', unit.rotation);
+  const dn = card[opponent ? rs : rn] + bonus;
+  const ds = card[opponent ? rn : rs] + bonus;
+  const de = card[opponent ? rw : re] + bonus;
+  const dw = card[opponent ? re : rw] + bonus;
   if (card && card.type === 'unit') {
     el.innerHTML = `
       <div class="bc-name">${card.name}</div>
@@ -150,6 +158,7 @@ function buildBoardCard(unit, viewer = 'p1') {
       </div>
       ${(kwHtml || abilityHtml) ? `<div class="bc-keyword-row">${kwHtml}${abilityHtml}</div>` : ''}
       ${armorPips ? `<div class="bc-armor">${armorPips}</div>` : ''}
+      ${unit.rotation ? `<div class="bc-rotation" title="Rotated ${unit.rotation}°">⟳${unit.rotation}°</div>` : ''}
       ${unit.state === 'suppressed' ? '<div class="bc-state">SUP</div>' : ''}
       ${unit.state === 'destroyed' ? '<div class="bc-state">DEAD</div>' : ''}
     `;
@@ -179,12 +188,13 @@ export function renderHand(handCardIds, containerId, selectedCardId, extras = {}
     div.dataset.cardId = cardId;
 
     if (card.type === 'unit') {
-      const tankDiscount = card.cls === 'Tank' ? Math.min(card.cost, extras.tankDiscount || 0) : 0;
-      const displayCost = card.cost - tankDiscount;
-      const costHtml = tankDiscount > 0
+      // col=null — no tile chosen yet, so a column-restricted discount shows optimistically.
+      const discount = extras.playerState ? discountFor(extras.playerState, card, null) : 0;
+      const displayCost = card.cost - discount;
+      const costHtml = discount > 0
         ? `<span class="hc-cost-discounted">${displayCost} ⛽</span>`
         : `${displayCost} ⛽`;
-      if (tankDiscount > 0) div.classList.add('hc-tank-discounted');
+      if (discount > 0) div.classList.add('hc-tank-discounted');
       div.innerHTML = `
         <div class="hc-header">${card.name}</div>
         <div class="hc-cost">${costHtml}</div>
@@ -197,7 +207,7 @@ export function renderHand(handCardIds, containerId, selectedCardId, extras = {}
         ${(() => {
         const kws = card.keyword ? (Array.isArray(card.keyword) ? card.keyword : [card.keyword]) : [];
         const kwTags = kws.map(k => `<span class="bc-kw-tag">${k}</span>`).join('');
-        const abilityTag = card.ability ? `<span class="bc-ability-pip">⚡<span class="bc-ability-tip">${card.ability}</span></span>` : '';
+        const abilityTag = card.ability ? `<span class="bc-ability-pip" data-tip="${esc(card.ability)}">⚡</span>` : '';
         return (kwTags || abilityTag) ? `<div class="bc-keyword-row">${kwTags}${abilityTag}</div>` : '';
       })()}
       `;
@@ -233,14 +243,74 @@ export function renderHand(handCardIds, containerId, selectedCardId, extras = {}
   });
 }
 
+// ── Hero rendering ────────────────────────────────────────────────────────────
+// Two states, mirroring how a unit has a hand card and a board tile:
+//   heroCardHtml   — 92x126, used in the deploy modal / pickers
+//   heroPlacedHtml — 112x50, used inside a Hero Zone slot on the board
+// Both consume the .hero-card / .hero-placed classes in css/game.css.
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"]/g, ch =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+}
+
+export function heroCardHtml(card) {
+  const cost = card.powerType === 'active'
+    ? `<span class="hx-cost">${card.activeCost}⛽</span>`
+    : `<span class="hx-passive">PASSIVE</span>`;
+  return `<div class="hero-card" data-hero-id="${card.id}">
+    <div class="hx-head"><span class="hx-rank">&#9650;</span>${esc(card.name)}</div>
+    <div class="hx-costrow">${cost}<span class="hx-scope">${(card.scope ?? 'board').toUpperCase()}</span></div>
+    <div class="hx-type">Hero · ${card.rarity}</div>
+    <div class="hx-effect">${esc(card.ability)}</div>
+  </div>`;
+}
+
+export function heroPlacedHtml(card, owner, { ready = false, spent = false, picked = false } = {}) {
+  const cost = card.powerType === 'active'
+    ? `<span class="hp-cost">${card.activeCost}⛽</span>`
+    : `<span class="hp-passive">PASSIVE</span>`;
+  const cls = `${owner}${ready ? ' ready' : ''}${spent ? ' spent' : ''}${picked ? ' picked' : ''}`;
+  return `<div class="hero-placed ${cls}" data-hero-id="${card.id}">
+    <div class="hp-name">${esc(card.name)}</div>
+    <div class="hp-body">${cost}
+      <span class="hp-pip" data-tip="${esc(card.ability)}">&#9432;</span>
+    </div>
+  </div>`;
+}
+
+// Fills both Hero Zone strips from state. A zone holding a hero drops its dashed
+// placeholder chrome (.filled); empty zones keep it.
+export function renderHeroZones(state, selectedZone = null) {
+  for (const role of ['p1', 'p2']) {
+    const strip = document.getElementById(`hero-zone-${role}`);
+    if (!strip) continue;
+    const zones = state[role]?.heroZones ?? [null, null, null, null];
+    const isTheirTurn = state.initiative === role;
+    strip.innerHTML = zones.map((heroId, col) => {
+      const card = heroId != null ? CARD_BY_ID[heroId] : null;
+      // While a Hero is picked up for repositioning, empty zones read as drop targets.
+      const isDropTarget = isTheirTurn && selectedZone != null && selectedZone !== col;
+      if (!card) {
+        return `<div class="hero-zone-slot${isDropTarget ? ' drop-target' : ''}" data-hero-zone="${role}-${col}">HERO</div>`;
+      }
+      // Gold glow marks an activated power still available — only meaningful on your turn.
+      const ready = isTheirTurn && card.powerType === 'active' && !state[role].heroActivated;
+      const spent = isTheirTurn && card.powerType === 'active' && state[role].heroActivated;
+      const picked = isTheirTurn && selectedZone === col;
+      return `<div class="hero-zone-slot filled${isDropTarget ? ' drop-target' : ''}" data-hero-zone="${role}-${col}">${heroPlacedHtml(card, role, { ready, spent, picked })}</div>`;
+    }).join('');
+  }
+}
+
 // ── HQ / fuel / turn display ──────────────────────────────────────────────────
 
 // Update #p1-hq, #p2-hq, #p1-fuel, #p2-fuel, #turn-display.
 export function renderHQ(state) {
   document.getElementById('p1-hq').textContent = state.p1.hq;
   document.getElementById('p2-hq').textContent = state.p2.hq;
-  document.getElementById('p1-fuel').textContent = `${state.p1.fuel} / 6 Fuel`;
-  document.getElementById('p2-fuel').textContent = `${state.p2.fuel} / 6 Fuel`;
+  document.getElementById('p1-fuel').textContent = `${state.p1.fuel} / ${fuelCapOf(state.p1)} Fuel`;
+  document.getElementById('p2-fuel').textContent = `${state.p2.fuel} / ${fuelCapOf(state.p2)} Fuel`;
   const p1CardEl = document.getElementById('p1-cards');
   const p2CardEl = document.getElementById('p2-cards');
   if (p1CardEl) p1CardEl.textContent = `${state.p1.hand.length} in hand · ${state.p1.deck.length} in deck`;

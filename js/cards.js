@@ -1,8 +1,20 @@
-// All 83 cards. Each card has a stable numeric id.
+// All cards. Each card has a stable numeric id.
 // Units: { id, name, cls, rarity, type:"unit", cost, ap, keyword, n, e, s, w, ability }
 // Commands: { id, name, rarity, type:"command", cost, ap, effect }
 // Missions: { id, name, rarity, type:"mission", cost, ap, req, reward } — no turn limit
 // Objectives: { id, name, type:"objective", category, l1, l2, l3, l4 }
+// Heroes: { id, name, rarity, type:"hero", scope:"column"|"board", implemented, powerType:"active"|"passive", activeCost, ability, direction }
+//   `scope` is authoritative — do NOT infer it from ability wording. 17 heroes are column-scoped,
+//   7 are board-wide. `implemented` marks the Tier 1 pool whose powers actually have behaviour;
+//   the rest are parked (not cut) pending mechanics that don't exist yet — see each card's note.
+//   — added 2026-07-30 (v0.4 Hero command layer, from Denis's Doc 02 handoff). Heroes are
+//   never shuffled into the 30-card deck (see getDeckPool in decks.js) — they belong to a
+//   separate 4-Hero roster per deck. No Hero Phase/activation/reinforcement logic is wired
+//   yet (data only, UI skeleton only — see the hero-zone-* elements in game.html/game.css).
+//   Ability text that references Hero Powers/Hero Zones/rotation is inert until that logic
+//   exists — flagged inline below on the specific cards affected.
+// Optional `retired: true` on any card excludes it from the deck pool/validator
+// (getDeckPool/validateDeck in decks.js) without deleting its data or logic.
 
 export const CARDS = [
   // ── UNITS ──────────────────────────────────────────────────────────────
@@ -52,6 +64,19 @@ export const CARDS = [
   { id:72, name:"Reserve Infantry",    cls:"Infantry",  rarity:"Common", type:"unit", cost:2, ap:2,  keyword:null,           n:1, e:6, s:5, w:6, ability:null },
   { id:86, name:"Grenadiers",          cls:"Infantry",  rarity:"Common", type:"unit", cost:3, ap:3,  keyword:null,           n:6, e:6, s:6, w:6, ability:null },
 
+  // ── UNITS — v0.4 launch filler (2026-07-30, from Denis's Doc 03 handoff) ──
+  // Abilities referencing "friendly Hero" are inert until Hero Phase logic exists (see cards.js header).
+  { id:111, name:"Radio Operator",       cls:"Infantry",  rarity:"Common", type:"unit", cost:1, ap:1, keyword:null,         n:4, e:3, s:3, w:2, ability:"On Play: If a friendly Hero is in this column, look at the top 2 cards of your deck. Put one on top and one on the bottom." },
+  { id:112, name:"Combat Engineers",     cls:"Infantry",  rarity:"Common", type:"unit", cost:2, ap:2, keyword:null,         n:5, e:4, s:4, w:2, ability:"On Play: If a friendly Hero is in this column, remove Suppression from another friendly Unit in this column." },
+  { id:113, name:"Recon Jeep",           cls:"Tank",      rarity:"Common", type:"unit", cost:1, ap:1, keyword:null,         n:6, e:4, s:2, w:1, ability:null },
+  { id:114, name:"Mobile Command Halftrack", cls:"Tank",  rarity:"Common", type:"unit", cost:3, ap:3, keyword:"Armor",      n:6, e:4, s:4, w:2, ability:"On Play: You may move a Hero into this column if its Hero Zone is empty." },
+  { id:115, name:"Liaison Aircraft",     cls:"Aircraft",  rarity:"Common", type:"unit", cost:1, ap:1, keyword:"Airborne",   n:4, e:3, s:2, w:2, ability:null },
+  { id:116, name:"Fighter-Bomber",       cls:"Aircraft",  rarity:"Common", type:"unit", cost:4, ap:4, keyword:"Airborne",   n:7, e:6, s:5, w:3, ability:null },
+  { id:117, name:"Heavy Artillery Battery", cls:"Artillery", rarity:"Common", type:"unit", cost:4, ap:4, keyword:"Bombard", n:8, e:3, s:7, w:3, ability:null },
+  { id:118, name:"Heavy Cruiser",        cls:"Naval",     rarity:"Common", type:"unit", cost:5, ap:5, keyword:"Heavy Armor", n:7, e:6, s:6, w:2, ability:null },
+  { id:119, name:"Veteran Signal Corps", cls:"Infantry",  rarity:"Rare",   type:"unit", cost:3, ap:3, keyword:null,         n:6, e:5, s:5, w:4, ability:"On Play: If you have activated Hero Powers from at least 2 different Heroes this match, draw 1 card." },
+  { id:120, name:"Strategic Bomber",     cls:"Aircraft",  rarity:"Rare",   type:"unit", cost:5, ap:5, keyword:"Bombard",    n:8, e:6, s:5, w:4, ability:"The first time this Unit destroys an enemy, draw 1 card." },
+
   // ── COMMANDS ───────────────────────────────────────────────────────────
   { id:16, name:"Artillery Barrage",   rarity:"Common", type:"command", cost:2, ap:1, effect:"Remove Armor from 1 enemy unit and Suppress it." },
   { id:17, name:"Blitzkrieg Order",    rarity:"Common", type:"command", cost:2, ap:2, effect:"Choose 1 friendly Tank. It may attack 1 adjacent enemy immediately, as if just deployed." },
@@ -74,16 +99,34 @@ export const CARDS = [
   { id:79, name:"Suppressing Fire",    rarity:"Common", type:"command", cost:4, ap:4, effect:"Deal 1 hit to a single enemy unit for each friendly Infantry you control." },
   { id:80, name:"Entrench",            rarity:"Common", type:"command", cost:2, ap:2, effect:"Friendly Infantry you control gain +2 to all sides until your next turn." },
 
-  // ── MISSIONS ───────────────────────────────────────────────────────────
-  { id:23, name:"Hold the Line",       rarity:"Common", type:"mission", cost:0, ap:0, req:"Control all objectives at end of your turn.",                                          reward:"Heal 5 HQ HP." },
-  { id:24, name:"Deep Strike",         rarity:"Common", type:"mission", cost:1, ap:2, req:"Have a friendly unit adjacent to 2+ enemy units simultaneously.",                      reward:"Deal 2 HQ damage." },
-  { id:25, name:"Blitz Assault",       rarity:"Common", type:"mission", cost:0, ap:0, req:"Destroy 2 enemy units in a single turn.",                                              reward:"Draw 2 cards and gain 1 Fuel." },
-  { id:55, name:"Armored Spearhead",   rarity:"Common", type:"mission", cost:1, ap:2, req:"Have 2 or more friendly Tanks on the board at the same time.",                        reward:"Your next Tank costs 2 less Fuel." },
-  { id:56, name:"Total Air Superiority",rarity:"Common", type:"mission", cost:1, ap:2, req:"Destroy an enemy unit with a friendly Aircraft.",                                    reward:"Deal 2 HQ damage." },
-  { id:57, name:"Fortify the Line",    rarity:"Common", type:"mission", cost:1, ap:1, req:"Control 2+ objectives at end of your turn.",                                           reward:"Remove Suppression from 1 friendly unit and give it Armor." },
-  { id:58, name:"Encirclement",        rarity:"Common", type:"mission", cost:1, ap:1, req:"A friendly unit is adjacent to 1 enemy unit on 2+ sides simultaneously.",              reward:"Deal 1 hit to that enemy unit." },
-  { id:81, name:"Total Onslaught",     rarity:"Common", type:"mission", cost:1, ap:2, req:"Destroy 3 enemy units since this mission was played.",                                  reward:"Deal 2 HQ damage." },
-  { id:84, name:"Overwhelming Force",  rarity:"Common", type:"mission", cost:1, ap:2, req:"Destroy an enemy unit with a friendly Heavy Armor unit.",                              reward:"Deal 2 HQ damage." },
+  // ── COMMANDS — v0.4 launch filler (2026-07-30, from Denis's Doc 03 handoff) ──
+  // Priority Orders/Command Shuffle/Radio Interference/Coordinated Orders reference Hero Powers,
+  // inert until Hero Phase logic exists. Change Formation references a rotation mechanic not yet
+  // implemented in the digital prototype (see cards.js header).
+  { id:121, name:"Priority Orders",    rarity:"Common", type:"command", cost:1, ap:1, effect:"Your next Hero Power this turn costs 2F less, minimum 0." },
+  { id:122, name:"Command Shuffle",    rarity:"Common", type:"command", cost:1, ap:1, effect:"Move 1 Hero or swap 2 Heroes. This does not count as your normal Hero reposition this turn." },
+  { id:123, name:"Radio Interference", rarity:"Common", type:"command", cost:2, ap:2, effect:"Choose an enemy Hero. Its Activated Hero Power costs +1F during its controller's next turn." },
+  { id:124, name:"Change Formation",   rarity:"Common", type:"command", cost:1, ap:1, effect:"Rotate one unsuppressed friendly Unit 90 degrees." },
+  { id:125, name:"Field Reserves",     rarity:"Common", type:"command", cost:2, ap:2, effect:"Look at the top 4 cards of your deck. You may reveal a Unit and put it into your hand. Put the rest on the bottom." },
+  { id:126, name:"Coordinated Orders", rarity:"Rare",   type:"command", cost:3, ap:3, effect:"You may activate one additional Hero Power this turn using a different Hero. Pay that Hero Power's normal Fuel cost." },
+
+  // ── MISSIONS (retired 2026-07-30 — parked, not deleted; see cards.js header) ──
+  { id:23, name:"Hold the Line",       rarity:"Common", type:"mission", cost:0, ap:0, req:"Control all objectives at end of your turn.",                                          reward:"Heal 5 HQ HP.", retired:true },
+  { id:24, name:"Deep Strike",         rarity:"Common", type:"mission", cost:1, ap:2, req:"Have a friendly unit adjacent to 2+ enemy units simultaneously.",                      reward:"Deal 2 HQ damage.", retired:true },
+  { id:25, name:"Blitz Assault",       rarity:"Common", type:"mission", cost:0, ap:0, req:"Destroy 2 enemy units in a single turn.",                                              reward:"Draw 2 cards and gain 1 Fuel.", retired:true },
+  { id:55, name:"Armored Spearhead",   rarity:"Common", type:"mission", cost:1, ap:2, req:"Have 2 or more friendly Tanks on the board at the same time.",                        reward:"Your next Tank costs 2 less Fuel.", retired:true },
+  { id:56, name:"Total Air Superiority",rarity:"Common", type:"mission", cost:1, ap:2, req:"Destroy an enemy unit with a friendly Aircraft.",                                    reward:"Deal 2 HQ damage.", retired:true },
+  { id:57, name:"Fortify the Line",    rarity:"Common", type:"mission", cost:1, ap:1, req:"Control 2+ objectives at end of your turn.",                                           reward:"Remove Suppression from 1 friendly unit and give it Armor.", retired:true },
+  { id:58, name:"Encirclement",        rarity:"Common", type:"mission", cost:1, ap:1, req:"A friendly unit is adjacent to 1 enemy unit on 2+ sides simultaneously.",              reward:"Deal 1 hit to that enemy unit.", retired:true },
+  { id:81, name:"Total Onslaught",     rarity:"Common", type:"mission", cost:1, ap:2, req:"Destroy 3 enemy units since this mission was played.",                                  reward:"Deal 2 HQ damage.", retired:true },
+  { id:84, name:"Overwhelming Force",  rarity:"Common", type:"mission", cost:1, ap:2, req:"Destroy an enemy unit with a friendly Heavy Armor unit.",                              reward:"Deal 2 HQ damage.", retired:true },
+
+  // ── MISSIONS — v0.4 launch filler (2026-07-30, from Denis's Doc 03 handoff) ──
+  // Added retired:true immediately, consistent with Missions being parked for v0.4 (Batch 1).
+  { id:127, name:"Command Network",    rarity:"Common", type:"mission", cost:1, ap:1, req:"Activate Hero Powers from 2 different Heroes after playing this Mission.", reward:"Draw 2 cards.", retired:true },
+  { id:128, name:"Joint Operations",   rarity:"Common", type:"mission", cost:1, ap:1, req:"Play Units from 3 different Classes after playing this Mission.",          reward:"Gain 2 Fuel and draw 1 card.", retired:true },
+  { id:129, name:"Hold Every Sector",  rarity:"Common", type:"mission", cost:0, ap:0, req:"At end of your turn, have at least one unsuppressed friendly Unit in all 4 columns.", reward:"Draw 2 cards.", retired:true },
+  { id:130, name:"Counteroffensive",   rarity:"Common", type:"mission", cost:1, ap:1, req:"Remove Suppression from a friendly Unit, then Destroy an enemy Unit during the same turn.", reward:"Give one friendly Unit +1 all sides until your next turn and draw 1 card.", retired:true },
 
   // ── OBJECTIVES ─────────────────────────────────────────────────────────
   { id:26, name:"Factory",             type:"objective", category:"Economy/Vehicle",  l1:"Gain 1 Fuel.",                                         l2:"Gain 1 Fuel. Next Tank costs 1 less.",              l3:"Gain 2 Fuel. Tanks +1 all sides.",                    l4:"Gain 2 Fuel. Tanks +2 all sides. Deal 2 HQ damage." },
@@ -94,6 +137,34 @@ export const CARDS = [
   { id:31, name:"City",                type:"objective", category:"Infantry/Defense",  l1:"Adjacent Infantry gain Guard this turn.",               l2:"Adjacent Infantry +1 all sides this turn.",        l3:"Adjacent Infantry gain Guard, +1 all sides.",         l4:"Adjacent Infantry gain Guard, +2 all sides. Deal 2 HQ damage." },
   { id:32, name:"Artillery Position",  type:"objective", category:"Damage",            l1:"Deal 1 HQ damage.",                                    l2:"Deal 1 hit to 1 enemy unit.",                      l3:"Deal 2 HQ damage.",                                   l4:"Deal 3 HQ damage. Deal 1 hit to 1 enemy unit." },
   { id:33, name:"Fortification",       type:"objective", category:"Defense",           l1:"Adjacent units gain Fortified this turn.",              l2:"Adjacent units gain Fortified until next turn.",   l3:"Adjacent units gain Fortified, +1 all sides.",        l4:"Adjacent units gain Fortified, +2 all sides. Deal 2 HQ damage." },
+
+  // ── HEROES (v0.4, added 2026-07-30 — from Denis's Doc 02 handoff, 24-Hero launch pool) ──
+  // Excluded from getDeckPool() in decks.js — never shuffled into the 30-card deck.
+  // No Hero Phase/activation/reinforcement logic wired yet; see cards.js header.
+  { id:87,  name:"Quartermaster General",        rarity:"Common", type:"hero", scope:"board",  implemented:true,  powerType:"active",  activeCost:2, ability:"Draw 1 card.", direction:"Universal value; starter-readable." },
+  { id:88,  name:"Operations Planner",           rarity:"Rare",   type:"hero", scope:"board",  implemented:false, powerType:"passive", activeCost:null, ability:"The first card you draw each turn may be put on the bottom of your deck. If you do, draw the next card.", direction:"Consistency without raw card advantage." },
+  { id:89,  name:"Logistics Chief",              rarity:"Rare",   type:"hero", scope:"board",  implemented:true,  powerType:"passive", activeCost:null, ability:"Your maximum stored Fuel is 8 instead of 6.", direction:"Expensive/ramp decks." },
+  { id:90,  name:"Intelligence Officer",         rarity:"Rare",   type:"hero", scope:"board",  implemented:false, powerType:"active",  activeCost:1, ability:"Look at the opponent's hand.", direction:"Information/control. Needs an opponent hand-reveal UI (also blocks Radar Station)." },
+  { id:91,  name:"Field Engineer",               rarity:"Rare",   type:"hero", scope:"column", implemented:false, powerType:"active",  activeCost:1, ability:"Rotate one unsuppressed friendly Unit in this Hero's column 90 degrees.", direction:"Signature SIGNAL positioning. Needs a unit rotation mechanic, which does not exist." },
+  { id:92,  name:"Tactical Commander",           rarity:"Common", type:"hero", scope:"column", implemented:true,  powerType:"active",  activeCost:1, ability:"A friendly Unit in this Hero's column gets +1 all sides this turn.", direction:"Simple positional starter Hero." },
+  { id:93,  name:"Mobile Warfare Commander",     rarity:"Rare",   type:"hero", scope:"column", implemented:false, powerType:"passive", activeCost:null, ability:"After this Hero changes zones due to your Hero Phase reposition, the first Unit you play in this Hero's column this turn costs 1F less.", direction:"Rewards command movement. Wording normalised 2026-08-01 from 'its new column' — it was column-scoped in substance but read as board-scoped." },
+  { id:94,  name:"Objective Marshal",            rarity:"Rare",   type:"hero", scope:"column", implemented:true,  powerType:"passive", activeCost:null, ability:"The first friendly Unit you play each turn in this Hero's column on or adjacent to an Objective gets +1 all sides until your next turn.", direction:"Objective control." },
+  { id:95,  name:"Blitz Commander",              rarity:"Rare",   type:"hero", scope:"column", implemented:false, powerType:"passive", activeCost:null, ability:"The first time each turn you Suppress an enemy through combat in this Hero's column, gain 1 temporary Fuel.", direction:"Attack -> momentum -> deployment. Needs a temporary/overflow Fuel concept." },
+  { id:96,  name:"Overrun Commander",            rarity:"Rare",   type:"hero", scope:"column", implemented:false, powerType:"passive", activeCost:null, ability:"The first enemy Unit you Destroy in this Hero's column each turn deals +1 additional HQ damage.", direction:"Aggro/finisher. Needs a destroy hook at 4-5 separate inline sites." },
+  { id:97,  name:"Assault Coordinator",          rarity:"Rare",   type:"hero", scope:"column", implemented:false, powerType:"active",  activeCost:2, ability:"Your next Unit played in this Hero's column this turn may make one additional placement attack. A unit already making two placement attacks gains no third attack.", direction:"Tempo/placement. Needs an extra-placement-attack mechanic." },
+  { id:98,  name:"Encirclement Officer",         rarity:"Rare",   type:"hero", scope:"column", implemented:false, powerType:"passive", activeCost:null, ability:"The first time each turn you attack an enemy in this Hero's column that is adjacent to at least 2 friendly Units, the attacker gets +1 all sides this turn.", direction:"Surrounding/position." },
+  { id:99,  name:"Garrison Commander",           rarity:"Common", type:"hero", scope:"column", implemented:true,  powerType:"active",  activeCost:1, ability:"A friendly Unit on or adjacent to an Objective in this Hero's column gains Guard until your next turn.", direction:"Defensive starter Hero." },
+  { id:100, name:"Recovery Officer",             rarity:"Rare",   type:"hero", scope:"column", implemented:true,  powerType:"active",  activeCost:2, ability:"Remove Suppression from one friendly Unit in this Hero's column.", direction:"Recovery/control." },
+  { id:101, name:"Counteroffensive General",     rarity:"Rare",   type:"hero", scope:"column", implemented:true,  powerType:"passive", activeCost:null, ability:"The first friendly Unit in this Hero's column to have Suppression removed each turn gets +1 all sides until end of turn.", direction:"Turns recovery into tempo." },
+  { id:102, name:"Reserve Commander",            rarity:"Rare",   type:"hero", scope:"column", implemented:false, powerType:"passive", activeCost:null, ability:"The first time a friendly Unit in this Hero's column is Destroyed each round, your next Unit played in that column costs 1F less.", direction:"Soft rebuild/comeback. Needs the same destroy hook as 96." },
+  { id:103, name:"Armored Commander",            rarity:"Rare",   type:"hero", scope:"column", implemented:true,  powerType:"active",  activeCost:1, ability:"Your next Tank played in this Hero's column this turn costs 2F less, minimum 1.", direction:"Net economy gain is normally 1F." },
+  { id:104, name:"Infantry Commander",           rarity:"Rare",   type:"hero", scope:"column", implemented:true,  powerType:"passive", activeCost:null, ability:"The first Infantry played in this Hero's column each turn gets +1 all sides until your next turn.", direction:"Infantry/go-wide." },
+  { id:105, name:"Air Marshal",                  rarity:"Rare",   type:"hero", scope:"column", implemented:false, powerType:"active",  activeCost:2, ability:"Your next Aircraft played in this Hero's column this turn may make one additional placement attack; no third attack.", direction:"Air tempo. Needs the same extra-placement-attack mechanic as 97." },
+  { id:106, name:"Artillery Commander",          rarity:"Rare",   type:"hero", scope:"column", implemented:false, powerType:"active",  activeCost:2, ability:"Choose a friendly Bombard Unit in this Hero's column. It may make one additional attack this turn.", direction:"Ranged attrition. Needs an extra-attack mechanic." },
+  { id:107, name:"Command Specialist",           rarity:"Rare",   type:"hero", scope:"board",  implemented:true,  powerType:"active",  activeCost:1, ability:"Your next Command this turn costs 2F less, minimum 1.", direction:"Command-heavy decks." },
+  { id:108, name:"Mission Commander",            rarity:"Rare",   type:"hero", scope:"board",  implemented:false, retired:true, powerType:"passive", activeCost:null, ability:"The first Mission you complete each turn gives you 1 Fuel.", direction:"Mission engine. Retired 2026-08-01 — dead card while Missions are retired; unpark if Missions return." },
+  { id:109, name:"Combined Arms General",        rarity:"Rare",   type:"hero", scope:"board",  implemented:true,  powerType:"passive", activeCost:null, ability:"The first Unit you play each turn whose Class is different from the previous Unit you played gets +1 all sides until your next turn.", direction:"Mixed-class army." },
+  { id:110, name:"Conventional Warfare Commander", rarity:"Rare", type:"hero", scope:"column", implemented:true,  powerType:"passive", activeCost:null, ability:"The first Vanilla Unit you play in this Hero's column each turn gets +1 all sides until your next turn.", direction:"Makes no-keyword units a strategy." },
 ];
 
 export const CARD_BY_ID = Object.fromEntries(CARDS.map(c => [c.id, c]));

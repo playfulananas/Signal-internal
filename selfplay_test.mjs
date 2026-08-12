@@ -6,6 +6,7 @@
 import { chromium } from "playwright";
 import { CARD_BY_ID } from "./js/cards.js";
 import { bestPlacement, bestExistingAttack, findLethal, bestAttackForUnit, bestDamageCommandTarget, maxAttacksFor } from "./js/bot_ai.js";
+import { discountFor } from "./js/state.js";
 
 const NUM_GAMES = Number(process.argv[2] || 3);
 const MAX_HALF_TURNS = 60; // safety valve — 30 rounds each (real games finish in ~7-11)
@@ -41,6 +42,18 @@ async function handleForwardObserver(page) {
     await page.waitForTimeout(20);
   }
   await page.locator("#fo-confirm").click();
+  await page.waitForTimeout(30);
+}
+
+// Resolves the Hero deploy modal (starting pick and later reinforcements): take the first
+// hero offered and the first free column. An unhandled modal doesn't throw — it silently
+// swallows clicks and the game reports STALLED, so this guard is what keeps runs green.
+async function handleHeroDeploy(page) {
+  const modal = page.locator("#hero-deploy-modal");
+  if (!(await modal.isVisible().catch(() => false))) return;
+  await page.locator("#hero-deploy-cards .hero-card").first().click();
+  await page.waitForTimeout(20);
+  await page.locator("#hero-deploy-zones .hero-zone-pick:not([disabled])").first().click();
   await page.waitForTimeout(30);
 }
 
@@ -124,8 +137,7 @@ async function playTurnSmart(page) {
     const handUnitIds = ps.hand.filter(id => {
       const c = CARD_BY_ID[id];
       if (!c || c.type !== "unit") return false;
-      const discount = c.cls === "Tank" ? Math.min(c.cost, ps.tempFuelDiscount ?? 0) : 0;
-      return ps.fuel >= (c.cost - discount);
+      return ps.fuel >= (c.cost - discountFor(ps, c, null));
     });
     const emptyTiles = Object.keys(state.board).filter(k => !state.board[k] && !state.objectives[k]);
     const placement = handUnitIds.length && emptyTiles.length ? bestPlacement(state, active, handUnitIds, emptyTiles) : null;
@@ -184,12 +196,15 @@ async function playOneGame(page) {
   await page.locator(`#map-grid .deck-option[data-map="${map}"]`).click();
   await page.waitForTimeout(50);
 
-  for (let i = 0; i < 2; i++) {
+  // Mulligan and starting-Hero pick interleave (P1 mulligan -> P2 mulligan -> P1 hero -> P2 hero),
+  // so poll both rather than assuming a fixed order.
+  for (let i = 0; i < 4; i++) {
     const keepBtn = page.locator("#btn-mulligan-keep");
     if (await keepBtn.isVisible().catch(() => false)) {
       await keepBtn.click();
       await page.waitForTimeout(50);
     }
+    await handleHeroDeploy(page);
   }
 
   await page.locator("#game-area").waitFor({ state: "visible", timeout: 5000 });
@@ -201,6 +216,7 @@ async function playOneGame(page) {
   while (halfTurns < MAX_HALF_TURNS) {
     if (await page.locator("#end-screen").isVisible().catch(() => false)) break;
 
+    await handleHeroDeploy(page);   // reinforcement can fire at the start of a turn
     await handleForwardObserver(page);
     await handleArtyTargeting(page);
     await playTurnSmart(page);
@@ -243,11 +259,22 @@ async function playOneGame(page) {
   const logText = await page.locator("#game-log").innerText().catch(() => "");
   const notAutomatedMatches = logText.match(/not automated/gi) || [];
 
+  // Hero deployment counts. Reinforcement is tied to Objective escalation (levels rise at
+  // rounds 4/6/8), so in a 6-10 round game the 4th Hero often never lands. This is the
+  // measurement that decides whether that pacing needs changing.
+  const heroesDeployed = await page.evaluate(() => {
+    const s = window.__SIGNAL_DEBUG__?.state;
+    if (!s) return null;
+    const count = p => (s[p]?.heroZones ?? []).filter(z => z != null).length;
+    return { p1: count('p1'), p2: count('p2') };
+  }).catch(() => null);
+
   return {
     deck1: d1, deck2: d2, map, winner,
     rounds: Math.ceil(halfTurns / 2),
     finalHQ: { p1: p1hq, p2: p2hq },
     notAutomatedTriggers: notAutomatedMatches.length,
+    heroesDeployed,
     stallInfo,
   };
 }
@@ -265,7 +292,8 @@ async function playOneGame(page) {
     try {
       const result = await playOneGame(page);
       results.push(result);
-      console.log(`Game ${g + 1}: ${result.deck1} vs ${result.deck2} on ${result.map} → ${result.winner} (${result.rounds} rounds, HQ p1=${result.finalHQ.p1} p2=${result.finalHQ.p2}, not-automated log hits=${result.notAutomatedTriggers})`);
+      const hd = result.heroesDeployed ? ` heroes=${result.heroesDeployed.p1}/${result.heroesDeployed.p2}` : '';
+      console.log(`Game ${g + 1}: ${result.deck1} vs ${result.deck2} on ${result.map} → ${result.winner} (${result.rounds} rounds, HQ p1=${result.finalHQ.p1} p2=${result.finalHQ.p2},${hd} not-automated log hits=${result.notAutomatedTriggers})`);
     } catch (e) {
       console.log(`Game ${g + 1}: CRASHED — ${e.message}`);
       await page.screenshot({ path: `selfplay_crash_${g + 1}.png` }).catch(() => {});
@@ -288,6 +316,13 @@ async function playOneGame(page) {
   const p2wins = results.filter(r => r.winner.includes("P2")).length;
   console.log(`P1 wins: ${p1wins}  P2 wins: ${p2wins}`);
   console.log(`Total "not automated" log lines hit: ${results.reduce((a, r) => a + r.notAutomatedTriggers, 0)}`);
+  const withHeroes = results.filter(r => r.heroesDeployed);
+  if (withHeroes.length) {
+    const all = withHeroes.flatMap(r => [r.heroesDeployed.p1, r.heroesDeployed.p2]);
+    const avg = (all.reduce((a, n) => a + n, 0) / all.length).toFixed(2);
+    const full = all.filter(n => n === 4).length;
+    console.log(`Heroes deployed per side: avg ${avg} of 4 — full roster in ${full}/${all.length} sides`);
+  }
   console.log(`Console errors: ${consoleErrors.length}`);
   consoleErrors.slice(0, 20).forEach(e => console.log("  " + e));
   console.log(`Uncaught page errors: ${pageErrors.length}`);

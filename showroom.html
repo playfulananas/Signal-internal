@@ -98,6 +98,9 @@
     .type-command  { background: #eef2f8; }
     .type-mission  { background: #fdf6e8; }
     .type-objective{ background: #f0f5ee; }
+    .type-hero     { background: #faf5e6; }
+    /* Gold rank band — echoes the locked .hero-card style in css/game.css */
+    .type-hero .c-header { background: #f5eccd; border-bottom-color: #9a7010; }
 
     /* Header row */
     .c-header {
@@ -285,6 +288,7 @@
       <button class="filter-btn active" data-f="type" data-v="all">All</button>
       <button class="filter-btn" data-f="type" data-v="unit">Units</button>
       <button class="filter-btn" data-f="type" data-v="command">Commands</button>
+      <button class="filter-btn" data-f="type" data-v="hero">Heroes</button>
       <button class="filter-btn" data-f="type" data-v="mission">Missions</button>
       <button class="filter-btn" data-f="type" data-v="objective">Objectives</button>
     </div>
@@ -311,9 +315,12 @@
 <div id="card-grid"></div>
 
 <script type="module">
-import { CARDS } from './js/cards.js?v=1784652722';
+import { CARDS } from './js/cards.js?v=1786495151';
 
-const NEW_THRESHOLD = 59;
+// Marks the current content batch. Bumped 59 → 87 for v0.4 (2026-08-01): ids 87+ are the
+// Hero pool and the v0.4 filler cards. Left at 59 it flagged all 44 new cards plus the
+// older 59-86 batch as NEW, which made the badge meaningless.
+const NEW_THRESHOLD = 87;
 
 const filters = { type: 'all', cls: 'all', rarity: 'all' };
 
@@ -354,7 +361,7 @@ function buildUnit(card) {
       </div>
       <div class="c-keywords">${kwHtml}</div>
       ${card.ability ? `<div class="c-ability">${card.ability}</div>` : ''}
-      <div class="c-footer"><span>AP ${card.ap}</span><span>#${card.id}</span></div>
+      <div class="c-footer"><span>#${card.id}</span></div>
     </div>`;
 }
 
@@ -367,7 +374,27 @@ function buildCommand(card) {
       </div>
       ${metaRow(card, 'Command')}
       <div class="c-effect">${card.effect || ''}</div>
-      <div class="c-footer"><span>AP ${card.ap}</span><span>#${card.id}</span></div>
+      <div class="c-footer"><span>#${card.id}</span></div>
+    </div>`;
+}
+
+// Heroes carry no N/E/S/W, so the stat grid is replaced by the power text.
+// Gold rank band + chevron mirrors the locked .hero-card style in css/game.css.
+function buildHero(card) {
+  const costEl = card.powerType === 'active'
+    ? `<div class="c-cost">${card.activeCost}⛽</div>`
+    : `<div class="c-cost-free">PASSIVE</div>`;
+  const scope = (card.scope ?? 'board').toUpperCase();
+  return `
+    <div class="card type-hero" data-id="${card.id}">
+      <div class="c-header">
+        <div class="c-name">&#9650; ${card.name}</div>
+        ${costEl}
+      </div>
+      ${metaRow(card, 'Hero')}
+      <div class="c-keywords"><span class="kw">${scope}</span></div>
+      <div class="c-effect">${card.ability || ''}</div>
+      <div class="c-footer"><span>${card.direction || ''}</span><span>#${card.id}</span></div>
     </div>`;
 }
 
@@ -376,16 +403,15 @@ function buildMission(card) {
     ? `<div class="c-cost">${card.cost}⛽</div>`
     : `<div class="c-cost-free">Free</div>`;
   return `
-    <div class="card type-mission" data-id="${card.id}">
+    <div class="card type-mission${card.retired ? ' retired' : ''}" data-id="${card.id}">
       <div class="c-header">
         <div class="c-name">${card.name}</div>
         ${costEl}
       </div>
-      ${metaRow(card, 'Mission')}
+      ${metaRow(card, card.retired ? 'Mission (retired)' : 'Mission')}
       <div class="c-req">${card.req || ''}</div>
       <div class="c-reward"><span class="c-reward-label">Reward</span>${card.reward || ''}</div>
       <div class="c-footer">
-        <span>AP ${card.ap}</span>
         <span>#${card.id}</span>
       </div>
     </div>`;
@@ -412,12 +438,13 @@ function buildObjective(card) {
 function buildCard(card) {
   if (card.type === 'unit')      return buildUnit(card);
   if (card.type === 'command')   return buildCommand(card);
+  if (card.type === 'hero')      return buildHero(card);
   if (card.type === 'mission')   return buildMission(card);
   if (card.type === 'objective') return buildObjective(card);
   return '';
 }
 
-const TYPE_ORDER = { unit: 0, command: 1, mission: 2, objective: 3 };
+const TYPE_ORDER = { unit: 0, command: 1, hero: 2, mission: 3, objective: 4 };
 
 function render() {
   const filtered = CARDS.filter(c => {

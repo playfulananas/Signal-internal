@@ -4,6 +4,7 @@
 // page directly — the same elements a human would click. This goes through game.js's existing,
 // unmodified click handlers, so no game logic needed to change to add this feature.
 import { CARD_BY_ID } from "./cards.js";
+import { discountFor } from "./state.js";
 import { bestPlacement, bestExistingAttack, findLethal, bestAttackForUnit, bestDamageCommandTarget } from "./bot_ai.js";
 
 const DAMAGE_COMMAND_IDS = new Set([16, 20, 79]);
@@ -100,8 +101,7 @@ async function playBotTurnSteps() {
     const handUnitIds = ps.hand.filter(id => {
       const c = CARD_BY_ID[id];
       if (!c || c.type !== "unit") return false;
-      const discount = c.cls === "Tank" ? Math.min(c.cost, ps.tempFuelDiscount ?? 0) : 0;
-      return ps.fuel >= (c.cost - discount);
+      return ps.fuel >= (c.cost - discountFor(ps, c, null));
     });
     const emptyTiles = Object.keys(state.board).filter(k => !state.board[k] && !state.objectives[k]);
     const placement = handUnitIds.length && emptyTiles.length ? bestPlacement(state, active, handUnitIds, emptyTiles) : null;

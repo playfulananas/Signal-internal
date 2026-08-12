@@ -18,12 +18,13 @@
 //
 // PlayerState: {
 //   hq: number,                 — starts 25
-//   fuel: number,               — max 6
+//   fuel: number,               — capped at fuelCap (default 6)
+//   fuelCap: number,            — per-player storage cap; a Hero can raise it
 //   pendingFuelGain: number,    — delayed fuel (Industrial Surge), added at next startOfTurn
 //   hand: number[],             — cardIds in hand
 //   deck: number[],             — cardIds remaining (top = index 0)
 //   missions: ActiveMission[],
-//   tempFuelDiscount: number,   — discount on next card of matching class
+//   pendingDiscounts: [{ appliesTo, column, amount, min }],  — unspent Fuel discounts
 // }
 //
 // ActiveMission: { cardId, killsAtDeploy? } — no turn limit; stays active until its reward fires.
@@ -42,21 +43,25 @@
 //   debugSideBonus: number,     — +/-N to all sides from the debug panel; persists until the tester
 //                                 changes it back to 0, NOT cleared by normal turn logic
 //   justPlaced: boolean,        — true only on the turn deployed; cleared by endTurn
+//   rotation: number,           — 0/90/180/270, clockwise, set by Change Formation (124) and
+//                                 Field Engineer (91). Which of the card's own N/E/S/W values
+//                                 lines up with a given physical board side — see rotatedDir.
+//                                 Persists until explicitly rotated again; never auto-clears.
 // }
 
-import { CARD_BY_ID } from './cards.js?v=1784652722';
+import { CARD_BY_ID } from './cards.js?v=1786495151';
 
 // ── State factory ────────────────────────────────────────────────────────────
 
-export function createInitialState(p1DeckIds, p2DeckIds, mapId = 'kursk') {
+export function createInitialState(p1DeckIds, p2DeckIds, mapId = 'kursk', p1HeroIds = [], p2HeroIds = []) {
   return {
     turn: 1,
     initiative: "p1",
     phase: "play",
     p2Joined: false,
     mapId,
-    p1: createPlayerState(p1DeckIds),
-    p2: createPlayerState(p2DeckIds),
+    p1: createPlayerState(p1DeckIds, p1HeroIds),
+    p2: createPlayerState(p2DeckIds, p2HeroIds),
     board: Object.fromEntries(
       Array.from({ length: 4 }, (_, r) =>
         Array.from({ length: 4 }, (_, c) => [`${r},${c}`, null])
@@ -68,19 +73,60 @@ export function createInitialState(p1DeckIds, p2DeckIds, mapId = 'kursk') {
   };
 }
 
-function createPlayerState(deckCardIds) {
+function createPlayerState(deckCardIds, heroIds = []) {
   const shuffled = [...deckCardIds].sort(() => Math.random() - 0.5);
   const hand = shuffled.slice(0, 4);
   const deck = shuffled.slice(4);
   return {
     hq: 25,
     fuel: 0,
+    fuelCap: 6,
     pendingFuelGain: 0,
     hand,
     deck,
     missions: [],
-    tempFuelDiscount: 0,
+    pendingDiscounts: [],
     overrun: false,
+    // ── Hero command layer ──
+    // Heroes are never shuffled into the deck; the roster is a separate fixed list of 4.
+    heroRoster: [...heroIds],
+    // Index = board column (0-3). Value = hero cardId occupying that zone, or null.
+    heroZones: [null, null, null, null],
+    heroActivated: false,       // one Activated Hero Power per turn, across all zones
+    heroRepositioned: false,    // one move/swap per turn; a reinforcement consumes it
+    // Per-player, because P1 and P2 cross each Objective threshold on different half-turns.
+    // Starts at 0 (not 1) so the FIRST Hero deploys at round 2 (Objective Level 1) via
+    // runHeroPhase, same as the 3 reinforcements after it — there is no separate
+    // pre-game "Starting Hero" step anymore (removed 2026-08-11: hero timing now follows
+    // the objective escalation schedule exactly, L1-L4 = all 4 roster Heroes).
+    lastObjLevel: 0,
+    lastUnitClass: null,        // for Combined Arms General (109)
+    // Columns reinforced this cycle — that Hero's Activated Power is locked out until this
+    // player's next startOfTurn (Doc 02 §6 prototype rule). Not set for the Starting Hero.
+    heroArrivalLock: [],
+    // { [heroId]: true } — gates "first X each turn" passives (94, 104, 109, 110) so each
+    // fires at most once per owner turn. Cleared at startOfTurn alongside heroActivated.
+    heroTriggeredThisTurn: {},
+    // heroId of whichever Hero used its Activated Power this turn (null if none yet).
+    // Cleared at startOfTurn alongside heroActivated. Lets Coordinated Orders (126) enforce
+    // "using a different Hero" for its bonus activation.
+    heroActivatedId: null,
+    // Every distinct Hero id whose Activated Power has fired THIS MATCH (not per-turn) —
+    // for Veteran Signal Corps (119): "if you have activated Hero Powers from at least 2
+    // different Heroes this match". Never cleared.
+    heroesActivatedEver: [],
+    // Set by Priority Orders (121): Fuel discount applied to the very next Hero Power
+    // activation this turn, then consumed. Independent of pendingDiscounts (that system is
+    // keyed by card class/type, not applicable to a Hero Power's activeCost).
+    pendingHeroDiscount: 0,
+    // Set by Radio Interference (123) on an ENEMY Hero: extra Fuel cost added to that
+    // column's Activated Hero Power during the controller's next turn. { [col]: amount }.
+    // Cleared at startOfTurn alongside the other per-cycle Hero fields.
+    heroTaxedColumns: {},
+    // Set by Coordinated Orders (126): true for the rest of this turn only, lets the player
+    // activate one additional Hero Power (a different Hero than heroActivatedId) bypassing
+    // the normal heroActivated lock once. Cleared at startOfTurn.
+    extraHeroActivation: false,
   };
 }
 
@@ -97,6 +143,16 @@ export function startOfTurn(state) {
   ps = gainFuel(ps, 3); // base per-turn gain, capped at 6 as normal
   ps = gainFuel(ps, ps.pendingFuelGain, false); // Industrial Surge — may exceed the storage cap this turn
   ps.pendingFuelGain = 0;
+  // Hero Phase allowances refresh here rather than in endTurn: this runs for the active
+  // player only and survives remote sync, matching the killsThisTurn convention.
+  ps.heroActivated = false;
+  ps.heroRepositioned = false;
+  ps.heroArrivalLock = [];
+  ps.heroTriggeredThisTurn = {};
+  ps.heroActivatedId = null;
+  ps.heroTaxedColumns = {};
+  ps.extraHeroActivation = false;
+  ps.pendingHeroDiscount = 0; // "this turn" only (Priority Orders) — expires unused
 
   // Clear per-turn grants and obj bonus for the active player's units before objective effects re-apply.
   // grantedSideBonus (Rally Cry) uses its own counter so it can outlast a single turn (see sideBonusTurns).
@@ -183,18 +239,106 @@ export function spendFuel(playerState, amount) {
 
 export function gainFuel(playerState, amount, cap = true) {
   const newFuel = playerState.fuel + amount;
-  return { ...playerState, fuel: cap ? Math.min(6, newFuel) : newFuel };
+  // Cap is per-player so a Hero can raise it (Logistics Chief: 8 instead of 6).
+  // Callers passing cap=false (objective/mission Fuel grants) still bypass it entirely.
+  return { ...playerState, fuel: cap ? Math.min(fuelCapOf(playerState), newFuel) : newFuel };
+}
+
+// Base cap is 6, but Logistics Chief (89) raises it to 8 while deployed in any Hero Zone.
+export function fuelCapOf(playerState) {
+  const base = playerState.fuelCap ?? 6;
+  const hasLogisticsChief = (playerState.heroZones ?? []).includes(89);
+  return hasLogisticsChief ? Math.max(base, 8) : base;
+}
+
+// ── Fuel discounts ───────────────────────────────────────────────────────────
+// Replaces the old scalar `tempFuelDiscount`, which was hardcoded to Tanks, had no column
+// or floor, and never expired. Entry shape:
+//   { appliesTo, column, amount, min }
+//     appliesTo — a unit class ('Tank'), or 'command', or null for any card
+//     column    — restrict to one board column (Hero powers), or null for anywhere
+//     amount    — Fuel reduction offered
+//     min       — floor for the resulting cost (0 = may reach free; Hero powers use 1)
+// Discounts persist until spent, matching the previous behaviour.
+
+function discountMatches(d, card, col) {
+  if (d.appliesTo === 'command') { if (card.type !== 'command') return false; }
+  else if (d.appliesTo && card.cls !== d.appliesTo) return false;
+  // col === null means "don't filter by column" — used by the hand display and the
+  // affordability pre-check, which run before a tile has been chosen, so they show the
+  // best case. Placement passes the real column and gets the true figure.
+  if (col !== null && d.column != null && d.column !== col) return false;
+  return true;
+}
+
+// Total Fuel reduction available to this card, capped so the cost never falls below the
+// most restrictive `min` among the matching entries.
+export function discountFor(playerState, card, col = null) {
+  const matches = (playerState.pendingDiscounts ?? []).filter(d => discountMatches(d, card, col));
+  if (!matches.length) return 0;
+  const total = matches.reduce((sum, d) => sum + d.amount, 0);
+  const floor = matches.reduce((m, d) => Math.max(m, d.min ?? 0), 0);
+  return Math.max(0, Math.min(total, (card.cost ?? 0) - floor));
+}
+
+// Spends `used` Fuel worth of discount, draining matching entries in order and dropping
+// any that reach zero.
+export function consumeDiscounts(playerState, card, col, used) {
+  if (used <= 0) return playerState;
+  let left = used;
+  const out = [];
+  for (const d of playerState.pendingDiscounts ?? []) {
+    if (left > 0 && discountMatches(d, card, col)) {
+      const take = Math.min(left, d.amount);
+      left -= take;
+      if (d.amount - take > 0) out.push({ ...d, amount: d.amount - take });
+      continue;
+    }
+    out.push(d);
+  }
+  return { ...playerState, pendingDiscounts: out };
+}
+
+export function addDiscount(playerState, entry) {
+  return { ...playerState, pendingDiscounts: [...(playerState.pendingDiscounts ?? []), entry] };
 }
 
 // ── Board unit helpers ───────────────────────────────────────────────────────
 
-// Returns card's base side value + tempSideBonus + grantedSideBonus + objSideBonus + debugSideBonus.
+// Clears Suppression from one unit. Single funnel for every "un-suppress" effect
+// (Field Medic, Last Stand, Combined Arms Doctrine, Fortify the Line) so Hero passives
+// that trigger on Suppression being removed have one hook point instead of four inline
+// call sites. `changed` is false when the unit was not actually suppressed, which is what
+// callers gate their trigger on — un-suppressing a healthy unit must not fire anything.
+export function unsuppressOnBoard(board, key) {
+  const unit = board[key];
+  if (!unit || unit.state !== 'suppressed') return { board, changed: false };
+  return { board: { ...board, [key]: { ...unit, state: 'normal' } }, changed: true };
+}
+
+// ── Rotation (Change Formation 124, Field Engineer 91) ──────────────────────
+// Answers "after rotating the unit `rotation`° clockwise, which of the card's own N/E/S/W
+// attributes is now showing at physical side `dir`?" A 90° clockwise turn moves the card's
+// N attribute to the physical E side, so the physical N side ends up showing what was
+// previously the card's W attribute: rotatedDir('n', 90) === 'w' (look up the card's own
+// attribute `steps` positions counter-clockwise from the physical side being queried).
+const DIR_ORDER = ['n', 'e', 's', 'w'];
+export function rotatedDir(dir, rotationDegrees) {
+  const steps = Math.round((rotationDegrees || 0) / 90) % 4;
+  if (!steps) return dir;
+  const i = DIR_ORDER.indexOf(dir);
+  return DIR_ORDER[(i - steps + 4) % 4];
+}
+
+// Returns card's base side value (after rotation) + tempSideBonus + grantedSideBonus +
+// objSideBonus + debugSideBonus.
 export function getSideValue(boardUnit, dir) {
   const card = CARD_BY_ID[boardUnit.cardId];
   if (!card || card.type !== "unit") return 0;
+  const rotated = rotatedDir(dir, boardUnit.rotation);
   // P2's card faces opposite direction — N is their front facing P1's side (actual South)
   const P2_FLIP = { n: 's', s: 'n', e: 'w', w: 'e' };
-  const d = boardUnit.owner === 'p2' ? P2_FLIP[dir] : dir;
+  const d = boardUnit.owner === 'p2' ? P2_FLIP[rotated] : rotated;
   return card[d] + (boardUnit.tempSideBonus || 0) + (boardUnit.grantedSideBonus || 0) + (boardUnit.objSideBonus || 0) + (boardUnit.debugSideBonus || 0);
 }
 

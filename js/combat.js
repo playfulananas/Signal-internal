@@ -1,5 +1,5 @@
-import { CARD_BY_ID } from './cards.js?v=1784652722';
-import { getSideValue, getKeywords, attackBeats, applyHit, oppositeDir } from './state.js?v=1784652722';
+import { CARD_BY_ID } from './cards.js?v=1786495151';
+import { getSideValue, getKeywords, attackBeats, applyHit, oppositeDir, unsuppressOnBoard, drawCards } from './state.js?v=1786495151';
 
 // Orthogonal directions and their row/col offsets.
 const DIRS = ["n", "e", "s", "w"];
@@ -27,6 +27,139 @@ export function adjacentTiles(row, col) {
     }
     return [];
   });
+}
+
+// ── Column helpers ───────────────────────────────────────────────────────────
+// Hero Zones are aligned 1:1 with board columns and 17 of the 24 Heroes only affect
+// "this Hero's column", so column iteration is a first-class need. Note board keys are
+// "row,col", so the column is the SECOND component.
+
+// All 4 tile keys in a column, top (row 0) to bottom (row 3).
+export function columnKeys(col) {
+  return [0, 1, 2, 3].map(row => tileKey(row, col));
+}
+
+// Live units in a column. Destroyed units are excluded — they linger on the board
+// greyed out for readability but are not valid targets or trigger sources.
+// `owner` optionally filters to 'p1' | 'p2'.
+export function unitsInColumn(state, col, owner = null) {
+  return columnKeys(col).flatMap(key => {
+    const unit = state.board[key];
+    if (!unit || unit.state === 'destroyed') return [];
+    if (owner && unit.owner !== owner) return [];
+    return [{ key, unit }];
+  });
+}
+
+// ── Hero passives — triggered on unit placement ─────────────────────────────
+// Objective Marshal (94), Infantry Commander (104), Combined Arms General (109), and
+// Conventional Warfare Commander (110) each grant "+1 all sides until your next turn" to
+// the first qualifying Unit their controller plays each turn. Each gates on
+// heroTriggeredThisTurn so it fires once per owner turn no matter how many cards are
+// played. grantedSideBonus/sideBonusTurns:1 clears at the owner's next startOfTurn — see
+// the field comment in state.js.
+// Pure: takes/returns state, does no DOM or CARD_BY_ID lookups beyond names for the log.
+export function checkHeroPassivesOnPlace(s, active, col, key, card) {
+  const ps = s[active];
+  const zones = ps.heroZones ?? [null, null, null, null];
+  const triggered = ps.heroTriggeredThisTurn ?? {};
+  const log = [];
+
+  const fire = (heroId, heroName, reason) => {
+    const u = s.board[key];
+    s = {
+      ...s,
+      board: { ...s.board, [key]: { ...u, grantedSideBonus: (u.grantedSideBonus || 0) + 1, sideBonusTurns: 1 } },
+      [active]: { ...s[active], heroTriggeredThisTurn: { ...s[active].heroTriggeredThisTurn, [heroId]: true } },
+    };
+    log.push(`${heroName}: ${card.name} +1 all sides (until your next turn) — ${reason}`);
+  };
+
+  if (zones[col] === 94 && !triggered[94]) { // Objective Marshal — on/adjacent to an Objective
+    const [row, colNum] = tileCoords(key);
+    const onOrAdjacent = s.objectives[key] || adjacentTiles(row, colNum).some(({ key: k }) => s.objectives[k]);
+    if (onOrAdjacent) fire(94, CARD_BY_ID[94].name, 'on/adjacent to Objective');
+  }
+  if (zones[col] === 104 && !triggered[104] && card.cls === 'Infantry') { // Infantry Commander
+    fire(104, CARD_BY_ID[104].name, 'first Infantry this turn');
+  }
+  if (zones[col] === 110 && !triggered[110] && !card.keyword) { // Conventional Warfare Commander
+    fire(110, CARD_BY_ID[110].name, 'first vanilla Unit this turn');
+  }
+  if (zones.includes(109) && !triggered[109] && ps.lastUnitClass != null && ps.lastUnitClass !== card.cls) {
+    fire(109, CARD_BY_ID[109].name, 'mixed-class army'); // Combined Arms General — board-wide
+  }
+
+  s = { ...s, [active]: { ...s[active], lastUnitClass: card.cls } };
+  return { state: s, log };
+}
+
+// ── Hero passive — Counteroffensive General (101) ───────────────────────────
+// "The first friendly Unit in this Hero's column to have Suppression removed each turn
+// gets +1 all sides until END OF TURN" — tempSideBonus (cleared by endTurn for everyone),
+// not grantedSideBonus like the "until your next turn" passives above.
+// Owner is read from the healed unit itself, not passed in — Combined Arms Doctrine (78)
+// removes Suppression from every suppressed unit on the board regardless of owner, so the
+// two players' Counteroffensive Generals (if both deployed) must be checked independently.
+function checkCounteroffensiveGeneral(s, key) {
+  const unit = s.board[key];
+  if (!unit) return { state: s, log: [] };
+  const owner = unit.owner;
+  const ps = s[owner];
+  const zones = ps.heroZones ?? [null, null, null, null];
+  const [, col] = tileCoords(key);
+  if (zones[col] !== 101 || (ps.heroTriggeredThisTurn ?? {})[101]) return { state: s, log: [] };
+
+  const card = CARD_BY_ID[unit.cardId];
+  const state = {
+    ...s,
+    board: { ...s.board, [key]: { ...unit, tempSideBonus: (unit.tempSideBonus || 0) + 1 } },
+    [owner]: { ...ps, heroTriggeredThisTurn: { ...ps.heroTriggeredThisTurn, 101: true } },
+  };
+  return { state, log: [`${CARD_BY_ID[101].name}: ${card?.name ?? 'unit'} +1 all sides (end of turn) — first Suppression removed this turn`] };
+}
+
+// Single funnel for "remove Suppression from this tile" so every command/Hero power that
+// heals Suppression (Recovery Officer, Field Medic, Tactical Withdrawal... — see call sites
+// in game.js) automatically checks Counteroffensive General instead of needing its own
+// inline hook. Mirrors unsuppressOnBoard's own "one hook point instead of four" comment in
+// state.js, extended to actually cover the Hero passive it was written for.
+export function removeSuppression(s, key) {
+  const { board, changed } = unsuppressOnBoard(s.board, key);
+  if (!changed) return { state: s, log: [], changed: false };
+  const { state, log } = checkCounteroffensiveGeneral({ ...s, board }, key);
+  return { state, log, changed: true };
+}
+
+// ── Unit on-play abilities ───────────────────────────────────────────────────
+// Auto-resolving "On Play" triggers for the new v0.4 launch-filler units. Anything needing
+// a player choice (Mobile Command Halftrack's optional Hero move, Radio Operator's top-2
+// look) is handled separately in game.js via a modal, not here.
+export function checkUnitOnPlayAbility(s, active, col, key, card) {
+  const ps = s[active];
+  const log = [];
+
+  if (card.id === 119) { // Veteran Signal Corps — draw 1 if 2+ distinct Heroes activated this match
+    if ((ps.heroesActivatedEver ?? []).length >= 2) {
+      s = { ...s, [active]: drawCards(ps, 1) };
+      log.push(`${card.name}: 2+ Heroes activated this match — draw 1 card`);
+    }
+  }
+
+  if (card.id === 112) { // Combat Engineers — if a friendly Hero is in this column, heal another unit here
+    const zones = ps.heroZones ?? [null, null, null, null];
+    if (zones[col] != null) {
+      const candidate = unitsInColumn(s, col, active).find(({ key: k, unit }) => k !== key && unit.state === 'suppressed');
+      if (candidate) {
+        const result = removeSuppression(s, candidate.key);
+        s = result.state;
+        const healedName = CARD_BY_ID[s.board[candidate.key]?.cardId]?.name ?? 'unit';
+        log.push(`${card.name}: ${healedName} un-suppressed`, ...result.log);
+      }
+    }
+  }
+
+  return { state: s, log };
 }
 
 // ── Bombard targeting ────────────────────────────────────────────────────────

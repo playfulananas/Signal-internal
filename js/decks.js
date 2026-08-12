@@ -1,47 +1,58 @@
 // Deck rules, starter decks, validation, and custom-deck persistence.
 // Validation functions are pure (node-testable). localStorage helpers are
 // browser-only — never called at module top level.
-import { CARDS, CARD_BY_ID } from './cards.js?v=1784653929';
+import { CARDS, CARD_BY_ID } from './cards.js?v=1786495151';
 
 export const DECK_RULES = {
-  apBudget: 50,
+  deckSize: 30, // v0.4 fixed deck size (2026-07-30) — replaces the old 50-AP budget model. Exact, not a ceiling.
   maxCopiesCommon: 2,
   maxCopiesRare: 1,
-  minCards: 15, // guardrail: 4-card opening hand + ~1 draw/turn over 8-10 turns
+  heroRosterSize: 4, // separate from deckSize — Heroes are never shuffled into the main deck (see getDeckPool)
 };
 
 export const STARTER_DECKS = [
   {
     key: 'aggro', name: 'Hammer Strike',
     flavor: 'Bombard units deal hits on placement. Double Attack finishers close the game. Draw fast, destroy everything.',
-    // Trimmed from 2x to 1x Storm Squad (2026-07-21) — card AP retuning since this
-    // list was built pushed it to 52 AP; Storm Squad was the most redundant Double
-    // Attack piece alongside Tank Hunter/Dive Bomber. Now 50 AP exactly.
-    ids: [5,5, 42,42, 40,40, 19,19, 22,22, 10,10, 59, 81,81, 4,4, 13,13, 61,61, 52,52, 8,8],
+    // Rebuilt to exactly 30 cards for the v0.4 fixed-deck model (2026-07-30) — Missions
+    // stripped in Batch 1 (removed 2x Total Onslaught), then filled back up to 30 with
+    // cheap aggressive Commons already on-theme (Storm Squad to 2x, Rifle Squad, Scouts,
+    // Radio Operator) rather than reworking the deck's identity.
+    ids: [5,5, 42,42, 40,40, 19,19, 22,22, 10,10, 59,59, 1,1, 34,34, 111,111, 4,4, 13,13, 61,61, 52,52, 8,8],
+    // Fixed 4-Hero roster (not player-selectable yet — see Batch 4/5 scope notes in cards.js).
+    // Rosters draw only from the implemented Tier 1 pool (see `implemented` in cards.js) so
+    // every starter deck's Heroes actually do something. Reassigned 2026-08-03.
+    heroIds: [92, 104, 110, 87], // Tactical Commander, Infantry Commander, Conventional Warfare Commander, Quartermaster General
   },
   {
     key: 'control', name: 'Iron Fortress',
     flavor: "Armor and Guard wall. Bombard can't suppress Heavy Armor. Guard nullifies Double Attack. Hold objectives, outlast.",
-    ids: [65,65, 6,6, 36,36, 11,11, 39,39, 63,63, 2,2, 75,75, 74,74, 49,49, 54,54, 16,16, 57,57],
+    // Rebuilt to exactly 30 cards (2026-07-30) — Missions stripped in Batch 1 (removed
+    // 2x Fortify the Line), filled back up with more Guard/Armor Commons on-theme.
+    ids: [65,65, 6,6, 36,36, 11,11, 39,39, 63,63, 2,2, 75,75, 74,74, 49,49, 54,54, 16,16, 43,43, 9,9, 66,66],
+    heroIds: [94, 99, 100, 101], // Objective Marshal, Garrison Commander, Recovery Officer, Counteroffensive General
   },
   {
     key: 'counter', name: 'Blitz Breaker',
     flavor: 'Four Guard unit types wall off Double Attack. Armor absorbs Bombard. Cheap flood, full draw engine, Overrun punishes every kill.',
-    ids: [2,2, 11,11, 36,36, 43,43, 6,6, 69,69, 5,5, 1,1, 34,34, 22,22, 19,19, 73,73, 51,51, 25,25, 81,81],
+    // Rebuilt to exactly 30 cards (2026-07-30) — Missions stripped in Batch 1 (removed
+    // 2x Blitz Assault, 2x Total Onslaught), filled back up with more cheap Guard bodies.
+    ids: [2,2, 11,11, 36,36, 43,43, 6,6, 69,69, 5,5, 1,1, 34,34, 22,22, 19,19, 73,73, 51,51, 62,62, 112,112],
+    heroIds: [87, 104, 101, 92], // Quartermaster General, Infantry Commander, Counteroffensive General, Tactical Commander
   },
   {
     key: 'power', name: 'Steel Column',
-    flavor: 'Six Armor / Heavy Armor vehicles grind through hits. Supply Runner and Industrial Surge ramp Fuel, Armored Spearhead discounts Tanks, Hold the Line and Field Medic stabilize.',
-    ids: [63,63, 66,66, 65,65, 39,39, 6,6, 9,9, 5,5, 55,55, 25,25, 23,23, 76,76, 18,18],
+    flavor: 'Six Armor / Heavy Armor vehicles grind through hits. Supply Runner and Industrial Surge ramp Fuel, Field Medic stabilizes.',
+    // Rebuilt to exactly 30 cards (2026-07-30) — Missions stripped in Batch 1 (removed
+    // 2x Armored Spearhead, 2x Blitz Assault, 2x Hold the Line), filled back up with
+    // heavier grind pieces on-theme.
+    ids: [63,63, 66,66, 65,65, 39,39, 6,6, 9,9, 5,5, 76,76, 18,18, 45,45, 41,41, 117,117, 116,116, 64,64, 43,43],
+    heroIds: [89, 103, 109, 107], // Logistics Chief, Armored Commander, Combined Arms General, Command Specialist
   },
 ];
 
 export function getDeckPool() {
-  return CARDS.filter(c => c.type !== 'objective');
-}
-
-export function computeDeckAP(ids) {
-  return ids.reduce((sum, id) => sum + (CARD_BY_ID[id]?.ap ?? 0), 0);
+  return CARDS.filter(c => c.type !== 'objective' && c.type !== 'hero' && !c.retired);
 }
 
 export function countCopies(ids) {
@@ -54,7 +65,7 @@ export function copyCap(card) {
   return card.rarity === 'Rare' ? DECK_RULES.maxCopiesRare : DECK_RULES.maxCopiesCommon;
 }
 
-// Returns { valid, errors: string[], ap }. Checks every rule so the UI can
+// Returns { valid, errors: string[] }. Checks every rule so the UI can
 // show all problems at once, not just the first.
 export function validateDeck(ids) {
   const errors = [];
@@ -68,14 +79,17 @@ export function validateDeck(ids) {
   if (known.some(id => CARD_BY_ID[id].type === 'objective')) {
     errors.push('Objectives cannot be put in a deck.');
   }
-
-  const ap = computeDeckAP(known);
-  if (ap > DECK_RULES.apBudget) {
-    errors.push(`${ap} AP — exceeds the ${DECK_RULES.apBudget} AP budget.`);
+  if (known.some(id => CARD_BY_ID[id].type === 'hero')) {
+    errors.push('Heroes cannot be put in the 30-card deck — they belong to the separate Hero roster.');
   }
 
-  if (ids.length < DECK_RULES.minCards) {
-    errors.push(`${ids.length} cards — minimum is ${DECK_RULES.minCards}.`);
+  const retired = [...new Set(known.filter(id => CARD_BY_ID[id].retired))];
+  for (const id of retired) {
+    errors.push(`${CARD_BY_ID[id].name}: retired, cannot be used in a deck.`);
+  }
+
+  if (ids.length !== DECK_RULES.deckSize) {
+    errors.push(`${ids.length} cards — must be exactly ${DECK_RULES.deckSize}.`);
   }
 
   for (const [id, n] of Object.entries(countCopies(known))) {
@@ -84,7 +98,34 @@ export function validateDeck(ids) {
     if (n > max) errors.push(`${card.name}: ${n} copies — max ${max} for ${card.rarity}.`);
   }
 
-  return { valid: errors.length === 0, errors, ap };
+  return { valid: errors.length === 0, errors };
+}
+
+// Returns { valid, errors: string[] }. A Hero roster is exactly 4 distinct Heroes —
+// no duplicates (each Hero is a unique named character), separate from the 30-card deck.
+export function validateHeroRoster(heroIds) {
+  const errors = [];
+
+  const unknown = [...new Set(heroIds.filter(id => !CARD_BY_ID[id]))];
+  if (unknown.length) {
+    errors.push(`Unknown hero ids: ${unknown.join(', ')}.`);
+  }
+
+  const known = heroIds.filter(id => CARD_BY_ID[id]);
+  if (known.some(id => CARD_BY_ID[id].type !== 'hero')) {
+    errors.push('Only Hero cards can be put in the Hero roster.');
+  }
+
+  if (heroIds.length !== DECK_RULES.heroRosterSize) {
+    errors.push(`${heroIds.length} heroes — must be exactly ${DECK_RULES.heroRosterSize}.`);
+  }
+
+  const dupes = [...new Set(known.filter((id, i) => known.indexOf(id) !== i))];
+  for (const id of dupes) {
+    errors.push(`${CARD_BY_ID[id].name}: duplicate — a Hero roster cannot repeat the same Hero.`);
+  }
+
+  return { valid: errors.length === 0, errors };
 }
 
 // ── Persistence (browser-only) ────────────────────────────────────────────────

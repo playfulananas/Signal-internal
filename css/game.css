@@ -1,5 +1,11 @@
 /* ── Theme variables ──────────────────────────────────────────────────────── */
 :root {
+  /* Board tile size — fixed design size. The whole board+Hero-zones block (#board-area)
+     is scaled as one unit via a JS-computed transform (see fitBoardArea in game.js)
+     instead of resizing this value, so tiles/fonts/icons all stay in proportion — a CSS
+     clamp() on this alone (tried 2026-08-11) shrank the grid tracks but not the fixed-px
+     fonts inside them, so text overflowed the tiles at small sizes. */
+  --tile-size:      120px;
   --bg:             #111111;
   --bg-alt:         #1a1a1a;
   --bg-deep:        #0a0a0a;
@@ -179,13 +185,16 @@ body[data-theme="light"] .theme-toggle {
   overflow: hidden;
 }
 
-/* Board row: preview | stats | board | log | missions */
+/* Board row: preview | stats | board | log */
 .board-row {
   display: flex;
   flex-direction: row;
   gap: 16px;
   align-items: stretch;
-  height: 511px;
+  /* Height follows content (board-area, sized off --tile-size) instead of a hardcoded
+     number — was a fixed 639px, which didn't leave room for the hand on short viewports
+     once the Hero Zone strips were added. */
+  flex-shrink: 0;
 }
 
 /* Bottom row: hand, fills remaining viewport space */
@@ -307,97 +316,6 @@ body[data-theme="light"] .theme-toggle {
   overflow: hidden;
 }
 
-/* ── FAR RIGHT: missions side panel ── */
-.missions-side-panel {
-  width: 190px;
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  min-height: 0;
-  overflow: hidden;
-}
-.missions-panel-title {
-  font-size: 9px;
-  font-weight: bold;
-  letter-spacing: 3px;
-  color: var(--text-c);
-  font-family: 'Arial Narrow', Arial, sans-serif;
-}
-.missions-side {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.missions-empty {
-  font-size: 10px;
-  color: var(--text-d);
-  text-align: center;
-  padding: 20px 8px;
-  border: 1px dashed var(--hint-border);
-  border-radius: 4px;
-  font-family: 'Arial Narrow', Arial, sans-serif;
-  letter-spacing: 1px;
-  line-height: 1.8;
-}
-.mission-detail {
-  position: relative;
-  background: var(--bg-deep);
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--border);
-  border-radius: 3px;
-  padding: 10px;
-  padding-right: 34px;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-.mission-detail.p1 { border-left-color: var(--p1); }
-.mission-detail.p2 { border-left-color: var(--p2); }
-.md-player-badge {
-  position: absolute;
-  top: 8px; right: 10px;
-  font-size: 8px;
-  font-weight: bold;
-  letter-spacing: 1px;
-  font-family: 'Arial Narrow', Arial, sans-serif;
-}
-.md-player-badge.p1 { color: var(--p1); }
-.md-player-badge.p2 { color: var(--p2); }
-.md-name {
-  font-size: 12px;
-  font-weight: bold;
-  color: var(--gold);
-  font-family: 'Arial Narrow', Arial, sans-serif;
-  letter-spacing: 0.5px;
-  margin-bottom: 4px;
-}
-.md-counter {
-  font-size: 10px;
-  color: var(--log-pos);
-  font-family: 'Arial Narrow', Arial, sans-serif;
-  font-weight: bold;
-}
-.md-label {
-  font-size: 8px;
-  color: var(--text-c);
-  letter-spacing: 1px;
-  font-family: 'Arial Narrow', Arial, sans-serif;
-  margin-top: 4px;
-}
-.md-req {
-  font-size: 9px;
-  color: var(--text-c);
-  line-height: 1.4;
-}
-.md-reward {
-  font-size: 9px;
-  color: var(--text-b);
-  line-height: 1.4;
-}
 .log-panel-title {
   font-size: 9px;
   font-weight: bold;
@@ -406,12 +324,30 @@ body[data-theme="light"] .theme-toggle {
   font-family: 'Arial Narrow', Arial, sans-serif;
 }
 
-/* ── Board ── */
-.board-area { position: relative; }
+/* ── Board ──
+   .board-area is the layout footprint — JS (fitBoardArea in game.js) sets explicit
+   width/height on it equal to the scaled size, so the surrounding flex row reserves
+   exactly the right space. .board-area-inner is rendered at native size and scaled via
+   transform — see the comment on --tile-size and on .board-area-inner below. */
+.board-area {
+  position: relative;
+  flex-shrink: 0;
+}
+.board-area-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transform-origin: top left;
+  /* Natural (unscaled) width/height, set inline by fitBoardArea — without it the inner
+     box would collapse to 0 while measuring, since .board-area's own size is JS-driven. */
+  position: absolute;
+  top: 0;
+  left: 0;
+}
 .board {
   display: grid;
-  grid-template-columns: repeat(4, 120px);
-  grid-template-rows: repeat(4, 120px);
+  grid-template-columns: repeat(4, var(--tile-size));
+  grid-template-rows: repeat(4, var(--tile-size));
   gap: 3px;
   background: var(--bg-board);
   padding: 8px;
@@ -420,9 +356,223 @@ body[data-theme="light"] .theme-toggle {
   box-shadow: 0 0 0 1px var(--border), inset 0 0 20px rgba(0,0,0,0.2);
 }
 
+/* ── Hero Zones — UI skeleton only (Batch 2), no data/behavior wired yet ──
+   Column-aligned to the board's own 4x120px grid so slot edges match tile edges
+   exactly. Top strip = P2 (row 0 side), bottom strip = P1 (row 3 side), matching
+   the board's existing top=P2/bottom=P1 convention (see maps.js, state.js P2_FLIP). */
+.hero-zone-strip {
+  display: grid;
+  grid-template-columns: repeat(4, var(--tile-size));
+  gap: 3px;
+  height: 50px;
+  /* matches .board's padding(8px)+border(3px) inset so slots line up with tile columns */
+  padding: 0 11px;
+}
+.hero-zone-slot {
+  border: 1px dashed var(--hint-border);
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 8px;
+  letter-spacing: 1px;
+  color: var(--text-d);
+  font-family: 'Arial Narrow', Arial, sans-serif;
+  text-align: center;
+}
+.hero-zone-strip.hero-zone-p2 .hero-zone-slot { border-color: color-mix(in srgb, var(--p2) 35%, var(--hint-border)); }
+.hero-zone-strip.hero-zone-p1 .hero-zone-slot { border-color: color-mix(in srgb, var(--p1) 35%, var(--hint-border)); }
+/* An occupied zone drops the dashed placeholder chrome and just hosts the hero. */
+.hero-zone-slot.filled { border: none; }
+
+/* ── Hero — PLACED (in a Hero Zone).  112x50 inside the 120x58 slot; 112 matches
+   .board-card so a placed hero lines up exactly with the tiles in its column. ── */
+.hero-placed {
+  width: calc(var(--tile-size) - 8px);
+  height: 44px;
+  border: 2px solid transparent;
+  border-radius: 2px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+  font-size: 10px;
+  cursor: pointer;
+}
+.hero-placed.p1 { border-color: var(--p1); background: var(--p1-bg); }
+.hero-placed.p2 { border-color: var(--p2); background: var(--p2-bg); }
+/* Activation still available this turn — same cue as .board-card.buffed */
+.hero-placed.ready { box-shadow: 0 0 8px 2px var(--gold-glow); }
+/* Activation already spent this turn — same dimming language as a suppressed unit */
+.hero-placed.spent { opacity: 0.5; }
+/* Picked up for repositioning — same gold selection cue units use */
+.hero-placed.picked { border-color: var(--gold) !important; box-shadow: 0 0 8px var(--gold-glow); }
+/* A legal destination while a Hero is picked up */
+.hero-zone-slot.drop-target { border-color: var(--gold); border-style: solid; }
+
+.hp-name {
+  padding: 2px 4px;
+  font-weight: bold;
+  font-size: 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: 'Arial Narrow', Arial, sans-serif;
+  letter-spacing: 0.5px;
+  background: rgba(0,0,0,0.3);
+  color: var(--text);
+}
+.hp-body { flex: 1; display: flex; align-items: center; gap: 3px; padding: 0 4px; }
+.hp-cost {
+  font-size: 13px; font-weight: bold; color: var(--gold);
+  font-family: 'Arial Narrow', Arial, sans-serif; line-height: 1;
+}
+.hp-passive {
+  font-size: 7px; font-weight: bold; color: var(--text-c);
+  letter-spacing: 0.5px; font-family: 'Arial Narrow', Arial, sans-serif;
+}
+/* Full power text lives behind a hover pip — same pattern as .bc-ability-pip on units.
+   The tip itself is #floating-tip (position:fixed, body-level) — see .floating-tip below. */
+.hp-pip {
+  font-size: 7.5px; font-weight: bold;
+  color: #88ccff; border: 1px solid rgba(100,180,255,0.35);
+  border-radius: 2px; padding: 0 3px; line-height: 1.5;
+  cursor: help; margin-left: auto;
+}
+
+/* ── Hero deploy modal ──
+   Was a hardcoded rgba(0,0,0,0.88) inline background — stayed near-black regardless of
+   the theme toggle. Matches #mulligan-screen's pattern (position/background driven by
+   CSS, var(--bg) so it themes) instead. */
+#hero-deploy-modal {
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+  z-index: 600;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  overflow-y: auto;
+  padding: 24px 16px;
+}
+.hero-deploy-cards { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+.hero-deploy-zones { display: grid; grid-template-columns: repeat(4, 120px); gap: 3px; }
+
+/* Sized to match .mulligan-card (210x294) so the Hero pick screen reads at the same
+   scale as the opening-hand mulligan, instead of the cramped 92x126 deck-builder size. */
+.hero-deploy-cards .hero-card {
+  width: 210px !important;
+  height: 294px !important;
+  font-size: 10px !important;
+}
+.hero-deploy-cards .hx-head {
+  font-size: 13px !important;
+  padding: 6px 8px !important;
+  height: 44px !important;
+  -webkit-line-clamp: 2 !important;
+}
+.hero-deploy-cards .hx-costrow { padding: 5px 8px !important; }
+.hero-deploy-cards .hx-cost { font-size: 24px !important; }
+.hero-deploy-cards .hx-passive { font-size: 10px !important; }
+.hero-deploy-cards .hx-scope { font-size: 9px !important; padding: 1px 5px !important; }
+.hero-deploy-cards .hx-type { font-size: 11px !important; padding: 0 8px 4px !important; }
+.hero-deploy-cards .hx-effect {
+  font-size: 13px !important;
+  padding: 6px 8px !important;
+  line-height: 1.6 !important;
+  -webkit-line-clamp: 9 !important;
+}
+.hero-zone-pick {
+  height: 40px;
+  background: var(--bg-alt);
+  border: 1px dashed var(--hint-border);
+  border-radius: 3px;
+  color: var(--text-c);
+  font-family: 'Arial Narrow', Arial, sans-serif;
+  font-size: 10px;
+  font-weight: bold;
+  letter-spacing: 1.5px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+.hero-zone-pick:hover:not(:disabled) { border-color: var(--gold); border-style: solid; color: var(--gold); }
+.hero-zone-pick:disabled { opacity: 0.35; cursor: not-allowed; }
+
+/* ── Hero — CARD (deck builder / hero picker / preview).  92x126, the same
+   footprint as .hand-card so heroes sit beside units without reflowing a row.
+   Gold rank band marks them as heroes at a glance. ── */
+.hero-card {
+  width: 92px;
+  height: 126px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-alt);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  font-size: 8px;
+  position: relative;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.hero-card:hover { border-color: var(--gold); }
+.hero-card.selected { border-color: var(--gold); box-shadow: 0 0 8px var(--gold-glow); }
+.hx-head {
+  padding: 3px 4px;
+  background: var(--gold-bg);
+  border-bottom: 1px solid var(--gold-dim);
+  color: var(--gold);
+  font-weight: bold;
+  font-size: 7.5px;
+  font-family: 'Arial Narrow', Arial, sans-serif;
+  letter-spacing: 0.5px;
+  line-height: 1.25;
+  /* Locked to 2 lines so every hero card leaves identical room for power text,
+     whether or not the name wraps. */
+  height: 25px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.hx-rank { margin-right: 2px; }
+.hx-costrow { display: flex; align-items: center; justify-content: space-between; padding: 2px 4px; }
+.hx-cost { font-size: 12px; font-weight: bold; color: var(--gold); font-family: 'Arial Narrow', Arial, sans-serif; }
+.hx-passive {
+  font-size: 8px; font-weight: bold; color: var(--text-c);
+  letter-spacing: 0.5px; font-family: 'Arial Narrow', Arial, sans-serif;
+}
+.hx-scope {
+  font-size: 7px; font-weight: bold; letter-spacing: 0.5px;
+  color: var(--gold); border: 1px solid var(--gold-dim);
+  border-radius: 2px; padding: 0 3px; line-height: 1.5;
+}
+.hx-type {
+  font-size: 9px; font-weight: bold; color: var(--text-c);
+  padding: 0 4px 2px; letter-spacing: 0.5px; text-transform: uppercase;
+  /* Without this "HERO · COMMON" wraps while "HERO · RARE" doesn't, so Commons
+     silently lose a line of power text. */
+  white-space: nowrap;
+}
+.hx-effect {
+  padding: 3px 4px;
+  font-size: 9px;
+  color: var(--text-b);
+  line-height: 1.35;
+  flex: 1;
+  overflow: hidden;
+  /* Long powers don't fit 92x126 — clamp with an ellipsis so the cut reads as
+     deliberate. Full text shows in the left preview panel on hover, the same way
+     units surface their ability text. */
+  display: -webkit-box;
+  -webkit-line-clamp: 5;
+  -webkit-box-orient: vertical;
+}
+
 .tile {
-  width: 120px;
-  height: 120px;
+  width: var(--tile-size);
+  height: var(--tile-size);
   background: var(--bg-tile);
   border: 1px solid var(--border);
   border-radius: 2px;
@@ -576,8 +726,8 @@ body[data-theme="light"] .theme-toggle {
 
 /* ── Mini card on board ── */
 .board-card {
-  width: 112px;
-  height: 112px;
+  width: calc(var(--tile-size) - 8px);
+  height: calc(var(--tile-size) - 8px);
   border-radius: 2px;
   display: flex;
   flex-direction: column;
@@ -622,22 +772,39 @@ body[data-theme="light"] .theme-toggle {
   letter-spacing: 0.3px;
 }
 .bc-state { position: absolute; bottom: 1px; right: 2px; font-size: 7px; color: var(--gold); font-weight: bold; }
+.bc-rotation { position: absolute; bottom: 1px; left: 2px; font-size: 7px; color: #88ccff; font-weight: bold; z-index: 2; }
 .bc-armor { position: absolute; top: 2px; right: 3px; display: flex; flex-direction: column; gap: 1px; font-size: 9px; line-height: 1; z-index: 2; }
 .armor-pip.full  { color: var(--gold); }
 .armor-pip.spent { color: var(--text-d); }
 .bc-ability-pip {
-  position: relative; font-size: 7.5px; font-weight: bold;
+  font-size: 7.5px; font-weight: bold;
   color: #88ccff; border: 1px solid rgba(100,180,255,0.35);
   border-radius: 2px; padding: 0 3px; line-height: 1.5; cursor: help;
 }
-.bc-ability-tip {
-  display: none; position: absolute; bottom: calc(100% + 5px); left: 0;
-  width: 160px; background: #0d1128; border: 1px solid #4455aa;
-  border-radius: 4px; padding: 6px 8px; font-size: 9px; line-height: 1.5;
-  color: #c8d0f0; z-index: 200; pointer-events: none;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.7); white-space: normal; font-weight: normal;
+
+/* ── Floating tooltip — shared by every [data-tip] element (ability pips on hand/board
+   cards, Hero power pips). position:fixed + appended at body level so it is never
+   clipped by a card's own overflow:hidden; JS in game.js positions it near the hovered
+   pip and clamps it to stay on-screen. ── */
+.floating-tip {
+  display: none;
+  position: fixed;
+  max-width: 220px;
+  background: var(--bg-alt);
+  border: 1px solid var(--gold-dim);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--text);
+  z-index: 1000;
+  pointer-events: none;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+  white-space: normal;
+  font-weight: normal;
+  text-align: left;
+  font-family: Arial, sans-serif;
 }
-.bc-ability-pip:hover .bc-ability-tip { display: block; }
 
 /* ── Card preview (in preview-panel, far left column) ── */
 .card-preview {
@@ -1021,7 +1188,7 @@ body[data-theme="light"] .bc-cls { color: #555566; opacity: 1; }
 body[data-theme="light"] .bc-state { color: #5566aa; }
 body[data-theme="light"] .bc-dirs { color: #111122; }
 body[data-theme="light"] .bc-ability-pip { color: #2255cc; border-color: rgba(34,85,204,0.4); }
-body[data-theme="light"] .bc-ability-tip { background: #f8f9ff; border-color: #8899dd; color: #222244; }
+body[data-theme="light"] .hp-pip { color: #2255cc; border-color: rgba(34,85,204,0.4); }
 body[data-theme="light"] .armor-pip.full  { color: #5566aa; }
 body[data-theme="light"] .armor-pip.spent { color: #ccccdd; }
 
@@ -1035,13 +1202,6 @@ body[data-theme="light"] .stat-block.active-turn { border-color: #2266cc; box-sh
 /* Fuel and cost — neutral dark, not gold */
 body[data-theme="light"] .stat-fuel { color: #2266cc; }
 
-/* Mission panel — E theme */
-body[data-theme="light"] .missions-panel-title { color: #666880; }
-body[data-theme="light"] .mission-detail { background: #ffffff; border-top-color: #d0d4e0; border-right-color: #d0d4e0; border-bottom-color: #d0d4e0; }
-body[data-theme="light"] .missions-empty { color: #9999aa; border-color: #d0d4e0; }
-body[data-theme="light"] .md-name { color: #bb8800; }
-body[data-theme="light"] .md-turns { color: #9999aa; }
-body[data-theme="light"] .md-counter { color: #444455; }
 body[data-theme="light"] .mission-badge { color: #444455; background: #e8eeff; border-color: #b0b8cc; }
 
 /* Log turn marker — blue instead of green */
@@ -1090,7 +1250,19 @@ body[data-theme="light"] .hc-reward-text { color: #7a5500; }
 body[data-theme="light"] .hc-tank-discounted { box-shadow: 0 0 8px rgba(0,160,60,0.3); border-color: #00a03c !important; }
 body[data-theme="light"] .hc-cost-discounted { color: #007a2e; }
 
-/* ── Forward Observer modal ── */
+/* ── Forward Observer / Radio Operator / Field Reserves modals — full-screen deck-look
+   prompts. Same theming-bug fix as #hero-deploy-modal: was a hardcoded rgba(0,0,0,0.88)
+   inline background, stayed dark regardless of the theme toggle. ── */
+#fo-modal, #radio-op-modal, #field-reserves-modal {
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+  z-index: 600;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+}
 .fo-title { font-size: 22px; font-weight: bold; letter-spacing: 4px; color: var(--gold); font-family: 'Arial Narrow', Arial, sans-serif; }
 .fo-subtitle { font-size: 12px; color: var(--text-b); letter-spacing: 0.5px; margin-top: -8px; }
 .fo-cards { display: flex; gap: 20px; align-items: flex-start; }

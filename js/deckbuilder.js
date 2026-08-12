@@ -1,19 +1,19 @@
 // Deck builder page. Pool on the left, working deck on the right.
-// Copy-limit adds are blocked outright; AP overruns are allowed while editing
-// (meter turns red) but block saving.
-import { CARD_BY_ID } from './cards.js?v=1785404543';
+// Copy-limit adds are blocked outright; going over/under 30 cards is allowed
+// while editing (meter turns red) but blocks saving.
+import { CARD_BY_ID } from './cards.js?v=1786495151';
 import {
-  getDeckPool, validateDeck, computeDeckAP, countCopies, copyCap,
+  getDeckPool, validateDeck, countCopies, copyCap,
   DECK_RULES, STARTER_DECKS, loadCustomDecks, saveCustomDeck, deleteCustomDeck,
   mergeRemoteDecks, replaceAllCustomDecks,
-} from './decks.js?v=1785404543';
-import { initAuth, pushUserDecks, fetchUserDecks } from './firebase.js?v=1785404543';
+} from './decks.js?v=1786495151';
+import { initAuth, pushUserDecks, fetchUserDecks } from './firebase.js?v=1786495151';
 
 let deckIds = [];
 let filter = 'all';
 let currentUid = null; // set once anonymous auth resolves; enables server-side deck sync
 
-const TYPE_ORDER = { unit: 0, command: 1, mission: 2 };
+const TYPE_ORDER = { unit: 0, command: 1 }; // mission dropped 2026-07-30 — Missions retired (Batch 1), never in the pool
 
 function esc(s) {
   return String(s).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
@@ -32,7 +32,7 @@ function cardMeta(card) {
     const kw = Array.isArray(card.keyword) ? card.keyword.join(', ') : card.keyword;
     return `${card.cls}${card.rarity === 'Rare' ? ' · Rare' : ''}${kw ? ' · ' + kw : ''}`;
   }
-  return card.type === 'command' ? 'Command' : 'Mission';
+  return 'Command'; // only unit/command ever reach the pool now — hero/objective/retired are filtered out
 }
 
 function renderPool() {
@@ -48,7 +48,6 @@ function renderPool() {
         <span class="meta">${esc(cardMeta(c))}</span>
         <span class="sides">${sides}</span>
         <span class="meta">Fuel ${c.cost}</span>
-        <span class="ap-tag">${c.ap} AP</span>
       </div>`;
     }).join('');
 }
@@ -70,16 +69,14 @@ function renderDeck() {
       `<div class="db-deck-row" data-id="${card.id}" title="Click to remove one copy">
         <span class="copies">×${n}</span>
         <span class="n">${esc(card.name)}</span>
-        <span class="ap-tag">${card.ap * n} AP</span>
       </div>`).join('');
 }
 
 function renderStatus() {
   const v = validateDeck(deckIds);
-  const apEl = document.getElementById('db-ap');
-  apEl.textContent = `${v.ap} / ${DECK_RULES.apBudget} AP`;
-  apEl.classList.toggle('over', v.ap > DECK_RULES.apBudget);
-  document.getElementById('db-count').textContent = `${deckIds.length} cards`;
+  const countEl = document.getElementById('db-ap');
+  countEl.textContent = `${deckIds.length} / ${DECK_RULES.deckSize} cards`;
+  countEl.classList.toggle('over', deckIds.length !== DECK_RULES.deckSize);
 
   const errEl = document.getElementById('db-errors');
   if (deckIds.length === 0 || v.valid) {
@@ -101,7 +98,7 @@ function renderSaved() {
     : decks.map(d =>
       `<div class="db-saved-row">
         <span class="n">${esc(d.name)}</span>
-        <span class="meta">${d.ids.length} cards · ${computeDeckAP(d.ids)} AP</span>
+        <span class="meta">${d.ids.length} cards</span>
         <button data-load="${esc(d.name)}">LOAD</button>
         <button class="del" data-del="${esc(d.name)}">DELETE</button>
       </div>`).join('');
@@ -109,7 +106,7 @@ function renderSaved() {
   document.getElementById('db-starters').innerHTML = STARTER_DECKS.map(d =>
     `<div class="db-saved-row">
       <span class="n">${esc(d.name)}</span>
-      <span class="meta">${d.ids.length} cards · ${computeDeckAP(d.ids)} AP</span>
+      <span class="meta">${d.ids.length} cards</span>
       <button data-load-starter="${d.key}">LOAD</button>
     </div>`).join('');
 }

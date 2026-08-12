@@ -3,12 +3,18 @@
 <head>
   <meta charset="UTF-8">
   <title>SIGNAL — Digital Prototype</title>
-  <link rel="stylesheet" href="css/game.css?v=1784652722">
+  <link rel="stylesheet" href="css/game.css?v=1786495151">
 </head>
 <body>
 
   <!-- Theme toggle — fixed top-right, visible on all screens -->
   <button id="theme-toggle" class="theme-toggle">☾ LIGHT</button>
+
+  <!-- Shared ability-pip tooltip — position:fixed, appended once at body level so it can
+       never be clipped by a card's own overflow:hidden (which every card needs, for its
+       own rounded-corner/name-truncation clipping). Any element with a data-tip attribute
+       (.bc-ability-pip, .hp-pip) shows its text here on hover — see fitAndTooltips in game.js. -->
+  <div id="floating-tip" class="floating-tip"></div>
 
   <!-- ── LOBBY ── -->
   <div id="lobby">
@@ -77,11 +83,34 @@
   </div>
 
   <!-- ── FORWARD OBSERVER MODAL ── -->
-  <div id="fo-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.88); z-index:600; flex-direction:column; align-items:center; justify-content:center; gap:20px;">
+  <div id="fo-modal" style="display:none;">
     <div class="fo-title">FORWARD OBSERVER</div>
     <div class="fo-subtitle">Assign each card a position — one Keep, one Top of Deck, one Bottom of Deck</div>
     <div class="fo-cards" id="fo-cards"></div>
     <button class="btn btn-primary" id="fo-confirm" disabled>Confirm</button>
+  </div>
+
+  <!-- ── RADIO OPERATOR MODAL — look at top 2, choose which goes on top ── -->
+  <div id="radio-op-modal" style="display:none;">
+    <div class="fo-title">RADIO OPERATOR</div>
+    <div class="fo-subtitle">Choose which card goes on top of your deck — the other goes to the bottom</div>
+    <div class="fo-cards" id="radio-op-cards"></div>
+  </div>
+
+  <!-- ── FIELD RESERVES MODAL — look at top 4, may take one Unit into hand ── -->
+  <div id="field-reserves-modal" style="display:none;">
+    <div class="fo-title">FIELD RESERVES</div>
+    <div class="fo-subtitle">You may take one Unit into your hand — the rest go to the bottom of your deck, in order</div>
+    <div class="fo-cards" id="field-reserves-cards"></div>
+    <button class="btn btn-secondary" id="field-reserves-skip">Take None</button>
+  </div>
+
+  <!-- ── HERO DEPLOY MODAL ── -->
+  <div id="hero-deploy-modal" style="display:none;">
+    <div class="fo-title" id="hero-deploy-title">CHOOSE YOUR HERO</div>
+    <div class="fo-subtitle" id="hero-deploy-sub">Pick a Hero, then choose the column it commands.</div>
+    <div class="hero-deploy-cards" id="hero-deploy-cards"></div>
+    <div class="hero-deploy-zones" id="hero-deploy-zones"></div>
   </div>
 
   <!-- ── END GAME OVERLAY ── -->
@@ -245,23 +274,32 @@
         </div>
       </div>
 
-      <!-- BOARD -->
-      <div class="board-area">
-        <div class="board" id="board"></div>
+      <!-- BOARD — .board-area is the layout footprint (sized in JS to natural*scale so
+           the flex row reserves exactly the right space); .board-area-inner is rendered
+           at its fixed native design size and scaled as one unit via transform, so every
+           tile/font/icon inside stays in exact proportion. See fitBoardArea in game.js. -->
+      <div class="board-area" id="board-area">
+        <div class="board-area-inner" id="board-area-inner">
+          <div class="hero-zone-strip hero-zone-p2" id="hero-zone-p2">
+            <div class="hero-zone-slot" data-hero-zone="p2-0">HERO</div>
+            <div class="hero-zone-slot" data-hero-zone="p2-1">HERO</div>
+            <div class="hero-zone-slot" data-hero-zone="p2-2">HERO</div>
+            <div class="hero-zone-slot" data-hero-zone="p2-3">HERO</div>
+          </div>
+          <div class="board" id="board"></div>
+          <div class="hero-zone-strip hero-zone-p1" id="hero-zone-p1">
+            <div class="hero-zone-slot" data-hero-zone="p1-0">HERO</div>
+            <div class="hero-zone-slot" data-hero-zone="p1-1">HERO</div>
+            <div class="hero-zone-slot" data-hero-zone="p1-2">HERO</div>
+            <div class="hero-zone-slot" data-hero-zone="p1-3">HERO</div>
+          </div>
+        </div>
       </div>
 
       <!-- LOG -->
       <div class="log-panel">
         <div class="log-panel-title">BATTLE LOG</div>
         <div class="log" id="game-log"></div>
-      </div>
-
-      <!-- FAR RIGHT: active missions panel -->
-      <div class="missions-side-panel">
-        <div class="missions-panel-title">ACTIVE MISSIONS</div>
-        <div id="missions-side" class="missions-side">
-          <div class="missions-empty">No active missions</div>
-        </div>
       </div>
 
     </div>
@@ -276,7 +314,7 @@
 
   </div>
 
-  <script type="module" src="./js/game.js?v=1784652722"></script>
+  <script type="module" src="./js/game.js?v=1786495151"></script>
 
 </body>
 </html>

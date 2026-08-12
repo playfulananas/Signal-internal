@@ -16,8 +16,8 @@ function baseState() {
     objectives: {
       '1,0': { cardId: 26, level: 1, controller: 'p1' },
     },
-    p1: { hq: 25, fuel: 3, pendingFuelGain: 0, hand: [1, 2], deck: [3, 4, 5], missions: [], tempFuelDiscount: 0 },
-    p2: { hq: 25, fuel: 3, pendingFuelGain: 0, hand: [], deck: [6, 7], missions: [], tempFuelDiscount: 0 },
+    p1: { hq: 25, fuel: 3, pendingFuelGain: 0, hand: [1, 2], deck: [3, 4, 5], missions: [], pendingDiscounts: [] },
+    p2: { hq: 25, fuel: 3, pendingFuelGain: 0, hand: [], deck: [6, 7], missions: [], pendingDiscounts: [] },
     log: [],
   };
 }
