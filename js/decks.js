@@ -1,7 +1,7 @@
 // Deck rules, starter decks, validation, and custom-deck persistence.
 // Validation functions are pure (node-testable). localStorage helpers are
 // browser-only — never called at module top level.
-import { CARDS, CARD_BY_ID } from './cards.js?v=1786495151';
+import { CARDS, CARD_BY_ID } from './cards.js?v=1786594831';
 
 export const DECK_RULES = {
   deckSize: 30, // v0.4 fixed deck size (2026-07-30) — replaces the old 50-AP budget model. Exact, not a ceiling.
@@ -53,6 +53,14 @@ export const STARTER_DECKS = [
 
 export function getDeckPool() {
   return CARDS.filter(c => c.type !== 'objective' && c.type !== 'hero' && !c.retired);
+}
+
+// Heroes selectable for a Hero roster — only ones whose power actually does something.
+// Unimplemented Heroes are fully hidden, not shown-disabled (mirrors getDeckPool's own
+// !c.retired filter, and retired Heroes are already implemented:false so this is belt-
+// and-suspenders against a future authoring mistake).
+export function getHeroPool() {
+  return CARDS.filter(c => c.type === 'hero' && c.implemented && !c.retired);
 }
 
 export function countCopies(ids) {
@@ -116,6 +124,11 @@ export function validateHeroRoster(heroIds) {
     errors.push('Only Hero cards can be put in the Hero roster.');
   }
 
+  const notImplemented = [...new Set(known.filter(id => CARD_BY_ID[id].implemented === false))];
+  for (const id of notImplemented) {
+    errors.push(`${CARD_BY_ID[id].name}: not yet implemented, cannot be used in a Hero roster.`);
+  }
+
   if (heroIds.length !== DECK_RULES.heroRosterSize) {
     errors.push(`${heroIds.length} heroes — must be exactly ${DECK_RULES.heroRosterSize}.`);
   }
@@ -141,9 +154,9 @@ export function loadCustomDecks() {
 }
 
 // Saving under an existing name overwrites that deck.
-export function saveCustomDeck(name, ids) {
+export function saveCustomDeck(name, ids, heroIds = []) {
   const decks = loadCustomDecks().filter(d => d.name !== name);
-  decks.push({ name, ids });
+  decks.push({ name, ids, heroIds });
   localStorage.setItem(STORAGE_KEY, JSON.stringify(decks));
 }
 

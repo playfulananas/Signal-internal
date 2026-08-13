@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  DECK_RULES, STARTER_DECKS, getDeckPool,
+  DECK_RULES, STARTER_DECKS, getDeckPool, getHeroPool,
   countCopies, validateDeck, validateHeroRoster, mergeRemoteDecks,
 } from '../js/decks.js';
 
@@ -95,9 +95,25 @@ test('unknown card id is rejected', () => {
 });
 
 test('a valid 4-Hero roster passes', () => {
-  const hv = validateHeroRoster([95, 96, 97, 105]);
+  // Tactical Commander, Objective Marshal, Garrison Commander, Recovery Officer — all implemented:true
+  const hv = validateHeroRoster([92, 94, 99, 100]);
   assert.deepEqual(hv.errors, []);
   assert.ok(hv.valid);
+});
+
+test('hero roster with a non-implemented Hero is rejected', () => {
+  // id 88 = Operations Planner, implemented:false
+  const hv = validateHeroRoster([88, 92, 94, 99]);
+  assert.ok(!hv.valid);
+  assert.ok(hv.errors.some(e => e.toLowerCase().includes('implemented')));
+});
+
+test('getHeroPool returns only implemented, non-retired Heroes', () => {
+  const pool = getHeroPool();
+  assert.equal(pool.length, 12);
+  assert.ok(pool.every(c => c.type === 'hero'));
+  assert.ok(pool.every(c => c.implemented === true));
+  assert.ok(pool.every(c => !c.retired));
 });
 
 test('hero roster with wrong count is rejected', () => {

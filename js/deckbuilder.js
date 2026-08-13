@@ -1,15 +1,16 @@
 // Deck builder page. Pool on the left, working deck on the right.
 // Copy-limit adds are blocked outright; going over/under 30 cards is allowed
 // while editing (meter turns red) but blocks saving.
-import { CARD_BY_ID } from './cards.js?v=1786495151';
+import { CARD_BY_ID } from './cards.js?v=1786594831';
 import {
-  getDeckPool, validateDeck, countCopies, copyCap,
+  getDeckPool, getHeroPool, validateDeck, validateHeroRoster, countCopies, copyCap,
   DECK_RULES, STARTER_DECKS, loadCustomDecks, saveCustomDeck, deleteCustomDeck,
   mergeRemoteDecks, replaceAllCustomDecks,
-} from './decks.js?v=1786495151';
-import { initAuth, pushUserDecks, fetchUserDecks } from './firebase.js?v=1786495151';
+} from './decks.js?v=1786594831';
+import { initAuth, pushUserDecks, fetchUserDecks } from './firebase.js?v=1786594831';
 
 let deckIds = [];
+let heroIds = [];
 let filter = 'all';
 let currentUid = null; // set once anonymous auth resolves; enables server-side deck sync
 
@@ -35,7 +36,30 @@ function cardMeta(card) {
   return 'Command'; // only unit/command ever reach the pool now — hero/objective/retired are filtered out
 }
 
+function heroPoolSorted() {
+  return getHeroPool().slice().sort((a, b) =>
+    a.scope.localeCompare(b.scope) ||
+    a.rarity.localeCompare(b.rarity) ||
+    a.name.localeCompare(b.name));
+}
+
+function renderHeroPool() {
+  document.getElementById('db-pool').innerHTML = heroPoolSorted().map(h => {
+    const already = heroIds.includes(h.id);
+    const full = heroIds.length >= DECK_RULES.heroRosterSize;
+    const maxed = already || full;
+    const cost = h.powerType === 'active' ? `Active ${h.activeCost}F` : 'Passive';
+    return `<div class="db-card-row${maxed ? ' maxed' : ''}" data-id="${h.id}" title="${esc(h.ability)}">
+      <span class="n">${esc(h.name)}${already ? ' <span class="have">✓</span>' : ''}</span>
+      <span class="meta">Hero · ${esc(h.rarity)}</span>
+      <span class="sides">${h.scope.toUpperCase()}</span>
+      <span class="meta">${esc(cost)}</span>
+    </div>`;
+  }).join('');
+}
+
 function renderPool() {
+  if (filter === 'hero') { renderHeroPool(); return; }
   const counts = countCopies(deckIds);
   document.getElementById('db-pool').innerHTML = poolSorted()
     .filter(c => filter === 'all' || c.type === filter)
@@ -72,22 +96,41 @@ function renderDeck() {
       </div>`).join('');
 }
 
+function renderHeroList() {
+  const listEl = document.getElementById('db-hero-list');
+  const heroes = heroIds.map(id => CARD_BY_ID[id]).filter(Boolean);
+  listEl.innerHTML = heroes.length === 0
+    ? '<div class="db-empty">Click Heroes on the left to add them.</div>'
+    : heroes.map(h =>
+      `<div class="db-deck-row" data-id="${h.id}" title="Click to remove">
+        <span class="ap-tag">${h.scope.toUpperCase()}</span>
+        <span class="n">${esc(h.name)}</span>
+      </div>`).join('');
+}
+
 function renderStatus() {
   const v = validateDeck(deckIds);
   const countEl = document.getElementById('db-ap');
   countEl.textContent = `${deckIds.length} / ${DECK_RULES.deckSize} cards`;
   countEl.classList.toggle('over', deckIds.length !== DECK_RULES.deckSize);
 
+  const hv = validateHeroRoster(heroIds);
+  const heroCountEl = document.getElementById('db-hero-count');
+  heroCountEl.textContent = `${heroIds.length} / ${DECK_RULES.heroRosterSize} heroes`;
+  heroCountEl.classList.toggle('over', heroIds.length !== DECK_RULES.heroRosterSize);
+
   const errEl = document.getElementById('db-errors');
-  if (deckIds.length === 0 || v.valid) {
+  const showDeckErrors = deckIds.length > 0 && !v.valid;
+  const showHeroErrors = heroIds.length > 0 && !hv.valid;
+  if (!showDeckErrors && !showHeroErrors) {
     errEl.style.display = 'none';
   } else {
     errEl.style.display = '';
-    errEl.innerHTML = v.errors.map(esc).join('<br>');
+    errEl.innerHTML = [...(showDeckErrors ? v.errors : []), ...(showHeroErrors ? hv.errors : [])].map(esc).join('<br>');
   }
 
   const name = document.getElementById('db-deck-name').value.trim();
-  document.getElementById('db-save').disabled = !(v.valid && name.length > 0);
+  document.getElementById('db-save').disabled = !(v.valid && hv.valid && name.length > 0);
 }
 
 function renderSaved() {
@@ -98,7 +141,7 @@ function renderSaved() {
     : decks.map(d =>
       `<div class="db-saved-row">
         <span class="n">${esc(d.name)}</span>
-        <span class="meta">${d.ids.length} cards</span>
+        <span class="meta">${d.ids.length} cards · ${(d.heroIds ?? []).length}/${DECK_RULES.heroRosterSize} heroes</span>
         <button data-load="${esc(d.name)}">LOAD</button>
         <button class="del" data-del="${esc(d.name)}">DELETE</button>
       </div>`).join('');
@@ -114,6 +157,7 @@ function renderSaved() {
 function redraw() {
   renderPool();
   renderDeck();
+  renderHeroList();
   renderStatus();
 }
 
@@ -134,7 +178,8 @@ document.getElementById('db-filters').addEventListener('click', e => {
 document.getElementById('db-pool').addEventListener('click', e => {
   const row = e.target.closest('.db-card-row');
   if (!row || row.classList.contains('maxed')) return;
-  deckIds.push(Number(row.dataset.id));
+  const id = Number(row.dataset.id);
+  if (filter === 'hero') heroIds.push(id); else deckIds.push(id);
   redraw();
 });
 
@@ -147,12 +192,21 @@ document.getElementById('db-deck-list').addEventListener('click', e => {
   redraw();
 });
 
+document.getElementById('db-hero-list').addEventListener('click', e => {
+  const row = e.target.closest('.db-deck-row');
+  if (!row) return;
+  const id = Number(row.dataset.id);
+  const i = heroIds.indexOf(id);
+  if (i !== -1) heroIds.splice(i, 1);
+  redraw();
+});
+
 document.getElementById('db-deck-name').addEventListener('input', renderStatus);
 
 document.getElementById('db-save').addEventListener('click', () => {
   const name = document.getElementById('db-deck-name').value.trim();
-  if (!name || !validateDeck(deckIds).valid) return;
-  saveCustomDeck(name, [...deckIds]);
+  if (!name || !validateDeck(deckIds).valid || !validateHeroRoster(heroIds).valid) return;
+  saveCustomDeck(name, [...deckIds], [...heroIds]);
   syncDecksToServer();
   renderSaved();
   const btn = document.getElementById('db-save');
@@ -162,6 +216,7 @@ document.getElementById('db-save').addEventListener('click', () => {
 
 document.getElementById('db-clear').addEventListener('click', () => {
   deckIds = [];
+  heroIds = [];
   document.getElementById('db-deck-name').value = '';
   redraw();
 });
@@ -173,6 +228,7 @@ document.getElementById('db-saved').addEventListener('click', e => {
     const deck = loadCustomDecks().find(d => d.name === loadName);
     if (!deck) return;
     deckIds = [...deck.ids];
+    heroIds = [...(deck.heroIds ?? [])];
     document.getElementById('db-deck-name').value = deck.name;
     redraw();
   } else if (delName) {
@@ -187,6 +243,7 @@ document.getElementById('db-starters').addEventListener('click', e => {
   if (!key) return;
   const starter = STARTER_DECKS.find(d => d.key === key);
   deckIds = [...starter.ids];
+  heroIds = [...(starter.heroIds ?? [])];
   document.getElementById('db-deck-name').value = '';
   redraw();
 });

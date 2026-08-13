@@ -1,4 +1,4 @@
-import { CARD_BY_ID, CARDS } from './cards.js?v=1786591817';
+import { CARD_BY_ID, CARDS } from './cards.js?v=1786594831';
 import {
   createInitialState,
   startOfTurn,
@@ -18,14 +18,14 @@ import {
   discountFor,
   consumeDiscounts,
   addDiscount,
-} from './state.js?v=1786591817';
-import { getAttackableTargets, resolveSingleAttack, tileKey, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkUnitOnPlayAbility, checkCounteroffensiveGeneral } from './combat.js?v=1786591817';
-import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1786591817';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1786591817';
-import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1786591817';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn } from './debug.js?v=1786591817';
-import { STARTER_DECKS, loadCustomDecks, validateDeck } from './decks.js?v=1786591817';
-import { runBotTurn } from './bot_player.js?v=1786591817';
+} from './state.js?v=1786594831';
+import { getAttackableTargets, resolveSingleAttack, tileKey, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkUnitOnPlayAbility, checkCounteroffensiveGeneral } from './combat.js?v=1786594831';
+import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1786594831';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1786594831';
+import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1786594831';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn } from './debug.js?v=1786594831';
+import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1786594831';
+import { runBotTurn } from './bot_player.js?v=1786594831';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
@@ -54,8 +54,8 @@ function renderDeckGrid() {
 
   for (const d of loadCustomDecks()) {
     const v = validateDeck(d.ids);
-    if (v.valid) {
-      // Custom decks have no Hero roster yet — the deck-builder picker is a later stage.
+    const hv = validateHeroRoster(d.heroIds ?? []);
+    if (v.valid && hv.valid) {
       deckChoices.push({ ids: d.ids, heroIds: d.heroIds ?? [] });
       grid.insertAdjacentHTML('beforeend',
         `<div class="deck-option" data-choice="${deckChoices.length - 1}">
@@ -64,10 +64,11 @@ function renderDeckGrid() {
           <div class="deck-ap">${d.ids.length} cards</div>
         </div>`);
     } else {
+      const errors = [...v.errors, ...hv.errors];
       grid.insertAdjacentHTML('beforeend',
-        `<div class="deck-option deck-invalid" title="${escapeHtml(v.errors.join(' '))}">
+        `<div class="deck-option deck-invalid" title="${escapeHtml(errors.join(' '))}">
           <div class="deck-name">${escapeHtml(d.name)}</div>
-          <div class="deck-flavor">INVALID — ${escapeHtml(v.errors[0])} Fix it in the Deck Builder.</div>
+          <div class="deck-flavor">INVALID — ${escapeHtml(errors[0])} Fix it in the Deck Builder.</div>
           <div class="deck-ap">${d.ids.length} cards</div>
         </div>`);
     }
@@ -208,19 +209,26 @@ function beginHostWait(mapId) {
     const toArr = v => Array.isArray(v) ? v : Object.values(v ?? {});
     const p1Deck = toArr(data.p1Deck);
     const p2Deck = toArr(data.p2Deck);
-    // games/{gameId} is world-writable, so both decks are re-validated here even
-    // though the deck-picker UI only ever offers valid decks — this is the one
-    // place an untrusted client (or tampered Firebase data) could otherwise slip
-    // an invalid deck into a match.
+    const p1Heroes = toArr(data.p1Heroes);
+    const p2Heroes = toArr(data.p2Heroes);
+    // games/{gameId} is world-writable, so both decks AND hero rosters are re-validated
+    // here even though the deck-picker UI only ever offers valid ones — this is the one
+    // place an untrusted client (or tampered Firebase data) could otherwise slip an
+    // invalid deck or hero roster into a match.
     const p1Check = validateDeck(p1Deck);
     const p2Check = validateDeck(p2Deck);
-    if (!p1Check.valid || !p2Check.valid) {
-      const who = !p1Check.valid ? 'Your own' : "Player 2's";
-      const reason = !p1Check.valid ? p1Check.errors[0] : p2Check.errors[0];
+    const p1HeroCheck = validateHeroRoster(p1Heroes);
+    const p2HeroCheck = validateHeroRoster(p2Heroes);
+    if (!p1Check.valid || !p2Check.valid || !p1HeroCheck.valid || !p2HeroCheck.valid) {
+      const who = (!p1Check.valid || !p1HeroCheck.valid) ? 'Your own' : "Player 2's";
+      const reason = !p1Check.valid ? p1Check.errors[0]
+        : !p1HeroCheck.valid ? p1HeroCheck.errors[0]
+        : !p2Check.valid ? p2Check.errors[0]
+        : p2HeroCheck.errors[0];
       document.getElementById('waiting-msg').textContent = `${who} deck failed validation (${reason}) — refusing to start.`;
       return; // stay on the waiting screen rather than start a broken match
     }
-    startGame(p1Deck, p2Deck, data.mapId, toArr(data.p1Heroes), toArr(data.p2Heroes));
+    startGame(p1Deck, p2Deck, data.mapId, p1Heroes, p2Heroes);
   });
 }
 
