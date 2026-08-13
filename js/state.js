@@ -17,7 +17,7 @@
 // }
 //
 // PlayerState: {
-//   hq: number,                 — starts 25
+//   hq: number,                 — starts 30
 //   fuel: number,               — capped at fuelCap (default 6)
 //   fuelCap: number,            — per-player storage cap; a Hero can raise it
 //   pendingFuelGain: number,    — delayed fuel (Industrial Surge), added at next startOfTurn
@@ -49,7 +49,7 @@
 //                                 Persists until explicitly rotated again; never auto-clears.
 // }
 
-import { CARD_BY_ID } from './cards.js?v=1786664736';
+import { CARD_BY_ID } from './cards.js?v=1786665143';
 
 // ── State factory ────────────────────────────────────────────────────────────
 
@@ -78,7 +78,7 @@ function createPlayerState(deckCardIds, heroIds = []) {
   const hand = shuffled.slice(0, 4);
   const deck = shuffled.slice(4);
   return {
-    hq: 25,
+    hq: 30,
     fuel: 0,
     fuelCap: 6,
     pendingFuelGain: 0,

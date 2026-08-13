@@ -97,7 +97,7 @@ This is the canonical game state object. Firebase stores this exact shape. Do no
 
 ```js
 {
-  hq: number,                // HQ HP, starts 25, game ends at 0
+  hq: number,                // HQ HP, starts 30, game ends at 0
   fuel: number,              // current fuel, max 6
   pendingFuelGain: number,   // delayed fuel (Industrial Surge), added at next startOfTurn
   hand: number[],            // cardIds in hand, order matters for display
@@ -141,7 +141,7 @@ All functions are **pure** — they return new state, never mutate in place.
 
 ```js
 createInitialState(p1DeckIds: number[], p2DeckIds: number[]) → GameState
-// Shuffles decks, deals 5 cards to each hand, sets hq=25, fuel=0.
+// Shuffles decks, deals 4 cards to each hand, sets hq=30, fuel=0.
 
 startOfTurn(state: GameState) → GameState
 // Active player gains 3 fuel (+pendingFuelGain, capped at 6).

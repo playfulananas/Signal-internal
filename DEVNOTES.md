@@ -44,7 +44,7 @@ state = {
 }
 
 PlayerState = {
-  hq: Number,           // starts 25, win condition
+  hq: Number,           // starts 30, win condition
   fuel: Number,         // max 6, gain 3/turn
   hand: Number[],       // array of card IDs
   deck: Number[],       // remaining deck (top = index 0)
