@@ -49,7 +49,7 @@
 //                                 Persists until explicitly rotated again; never auto-clears.
 // }
 
-import { CARD_BY_ID } from './cards.js?v=1786589651';
+import { CARD_BY_ID } from './cards.js?v=1786664736';
 
 // ── State factory ────────────────────────────────────────────────────────────
 
@@ -328,13 +328,15 @@ export function rotatedDir(dir, rotationDegrees) {
 
 // Returns card's base side value (after rotation) + tempSideBonus + grantedSideBonus +
 // objSideBonus + debugSideBonus.
+// No owner-based flip: a card's printed N/E/S/W always maps to physical N/E/S/W on the
+// fixed board grid, for both players — matching how it's shown in hand and on the tile.
+// (2026-07-02 added an owner-based P2_FLIP here, paired with a per-viewer board rotation
+// in renderBoard; the board rotation was reverted 2026-07-30 but this half was missed,
+// leaving P2's board stats silently mismatched from what was shown in hand. Removed 2026-08-14.)
 export function getSideValue(boardUnit, dir) {
   const card = CARD_BY_ID[boardUnit.cardId];
   if (!card || card.type !== "unit") return 0;
-  const rotated = rotatedDir(dir, boardUnit.rotation);
-  // P2's card faces opposite direction — N is their front facing P1's side (actual South)
-  const P2_FLIP = { n: 's', s: 'n', e: 'w', w: 'e' };
-  const d = boardUnit.owner === 'p2' ? P2_FLIP[rotated] : rotated;
+  const d = rotatedDir(dir, boardUnit.rotation);
   return card[d] + (boardUnit.tempSideBonus || 0) + (boardUnit.grantedSideBonus || 0) + (boardUnit.objSideBonus || 0) + (boardUnit.debugSideBonus || 0);
 }
 

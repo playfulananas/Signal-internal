@@ -110,7 +110,8 @@ test('hero roster with a non-implemented Hero is rejected', () => {
 
 test('getHeroPool returns only implemented, non-retired Heroes', () => {
   const pool = getHeroPool();
-  assert.equal(pool.length, 12);
+  // 11 as of 2026-08-14 — Combined Arms General (109) retired.
+  assert.equal(pool.length, 11);
   assert.ok(pool.every(c => c.type === 'hero'));
   assert.ok(pool.every(c => c.implemented === true));
   assert.ok(pool.every(c => !c.retired));

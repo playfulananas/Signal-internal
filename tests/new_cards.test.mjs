@@ -43,7 +43,7 @@ test('rotatedDir at 360 wraps back to a no-op, matching a full turn', () => {
 const rotUnit = (owner, rotation) => ({ cardId: 1, owner, rotation, tempSideBonus: 0, grantedSideBonus: 0 });
 
 test('getSideValue reads the card\'s N value at the physical N side when unrotated', () => {
-  const card = CARD_BY_ID[1]; // Rifle Squad, p1 (no P2_FLIP to account for)
+  const card = CARD_BY_ID[1]; // Rifle Squad
   const unit = rotUnit('p1', 0);
   assert.equal(getSideValue(unit, 'n'), card.n);
 });
@@ -59,12 +59,17 @@ test('getSideValue: after a 90° rotation, the physical N side shows the card\'s
   assert.equal(getSideValue(unit, 'w'), card.s);
 });
 
-test('getSideValue composes rotation with the existing P2_FLIP (owner-based)', () => {
+test('getSideValue is owner-independent — P2 reads the same physical side as P1', () => {
+  // No owner-based flip (removed 2026-08-14 — see state.js). A P2 unit at the same
+  // rotation as a P1 unit shows the identical value at every physical side, matching
+  // what's shown in hand and keeping display consistent with combat math.
   const card = CARD_BY_ID[1];
+  const unitP1 = rotUnit('p1', 90);
   const unitP2 = rotUnit('p2', 90);
-  // P2 unrotated: physical n reads card.s (P2_FLIP). Rotated 90° on top of that: physical n
-  // first un-rotates to 'w' (rotatedDir back-lookup), then P2_FLIP maps w -> e.
-  assert.equal(getSideValue(unitP2, 'n'), card.e);
+  for (const dir of ['n', 'e', 's', 'w']) {
+    assert.equal(getSideValue(unitP2, dir), getSideValue(unitP1, dir));
+  }
+  assert.equal(getSideValue(unitP2, 'n'), card.w);
 });
 
 test('getSideValue still adds temp/granted bonuses on top of the rotated value', () => {

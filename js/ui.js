@@ -1,6 +1,6 @@
-import { CARD_BY_ID } from './cards.js?v=1786589651';
-import { getKeywords, maxArmorHits, discountFor, fuelCapOf, rotatedDir } from './state.js?v=1786589651';
-import { getTerrain } from './maps.js?v=1786589651';
+import { CARD_BY_ID } from './cards.js?v=1786664736';
+import { getKeywords, maxArmorHits, discountFor, fuelCapOf, rotatedDir } from './state.js?v=1786664736';
+import { getTerrain } from './maps.js?v=1786664736';
 
 const TERRAIN_SHORT = { plains: 'P', forest: 'F', water: 'W', desert: 'D', city: 'C' };
 
@@ -10,9 +10,11 @@ const TERRAIN_SHORT = { plains: 'P', forest: 'F', water: 'W', desert: 'D', city:
 // selectedTileKey: tile currently selected/highlighted (string or null)
 // validDropKeys: Set of tile keys where the selected hand card can be placed (or null)
 // Board orientation is fixed for both players (row 0 = P2 side / top, row 3 = P1
-// side / bottom — see maps.js and state.js's P2_FLIP) — no more per-player/per-turn
-// visual flip, reverted 2026-07-30 to match the GDD's one-time pre-match map
-// orientation rule rather than a continuously recomputed per-viewer rotation.
+// side / bottom — see maps.js) — no per-player/per-turn visual flip, reverted 2026-07-30
+// to match the GDD's one-time pre-match map orientation rule rather than a continuously
+// recomputed per-viewer rotation. Stats shown on a placed card also never flip by owner
+// (see getSideValue in state.js) — a card's printed N/E/S/W always maps to physical
+// N/E/S/W, same as in hand.
 export function renderBoard(state, selectedTileKey, validDropKeys, changedKeys = null) {
   const board = document.getElementById('board');
   board.innerHTML = '';
@@ -131,15 +133,15 @@ function buildBoardCard(unit, viewer = 'p1') {
 
   const CLS_ABBR = { Infantry:'INF', Tank:'TNK', Artillery:'ART', Aircraft:'AIR', Commander:'CMD', Naval:'NAV' };
   const dc = objBonus > 0 ? ' class="bc-dir-buffed"' : '';
-  // rotatedDir first (Change Formation 124 / Field Engineer 91), then the existing
-  // opponent-viewer swap on the rotated attribute — same n<->s/e<->w pattern getSideValue
-  // uses for owner-based P2_FLIP, just keyed by viewer here instead of owner.
+  // rotatedDir only (Change Formation 124 / Field Engineer 91) — no owner/viewer swap.
+  // A card's printed N/E/S/W always shows at physical N/E/S/W, matching hand and getSideValue
+  // (see state.js — the matching P2_FLIP there was removed 2026-08-14 for the same reason).
   const rn = rotatedDir('n', unit.rotation), re = rotatedDir('e', unit.rotation);
   const rs = rotatedDir('s', unit.rotation), rw = rotatedDir('w', unit.rotation);
-  const dn = card[opponent ? rs : rn] + bonus;
-  const ds = card[opponent ? rn : rs] + bonus;
-  const de = card[opponent ? rw : re] + bonus;
-  const dw = card[opponent ? re : rw] + bonus;
+  const dn = card[rn] + bonus;
+  const ds = card[rs] + bonus;
+  const de = card[re] + bonus;
+  const dw = card[rw] + bonus;
   if (card && card.type === 'unit') {
     el.innerHTML = `
       <div class="bc-name">${card.name}</div>

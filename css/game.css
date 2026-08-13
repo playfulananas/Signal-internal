@@ -367,7 +367,7 @@ body.viewer-p2 .stats-panel {
 /* ── Hero Zones — UI skeleton only (Batch 2), no data/behavior wired yet ──
    Column-aligned to the board's own 4x120px grid so slot edges match tile edges
    exactly. Top strip = P2 (row 0 side), bottom strip = P1 (row 3 side), matching
-   the board's existing top=P2/bottom=P1 convention (see maps.js, state.js P2_FLIP). */
+   the board's existing top=P2/bottom=P1 convention (see maps.js). */
 .hero-zone-strip {
   display: grid;
   grid-template-columns: repeat(4, var(--tile-size));

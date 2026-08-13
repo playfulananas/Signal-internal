@@ -30,6 +30,7 @@
 | 18 | 2026-07-08 to 07-21 | Deck builder — pool/build/validate/save UI (`deckbuilder.html`, `js/deckbuilder.js`), deck rules module (`js/decks.js`: `STARTER_DECKS`, `validateDeck`, copy-limit enforcement), custom decks synced to Firebase per anonymous identity; open lobby browser — host/browse/join without a code (`js/lobby-browser.js` + pure helpers in `js/lobbies.js`), replacing the old code-only `index.html`/`lobby.js` flow referenced below |
 | 19 | 2026-07-21 to 07-30 | Bot AI + self-play harness for automated regression testing — `js/bot_ai.js` (pure move scoring, reused by both the in-page bot and the Playwright harness) + `js/bot_player.js` (in-page "vs AI" turn driver) + root-level `selfplay_test.mjs`/`selfplay_vs_ai_smoke.mjs`; Missions retired in the v0.4 balance pass (all mission cards flagged `retired:true` in `cards.js`), deck size fixed at exactly 30 cards |
 | 20 | 2026-08-01 to 08-13 | Hero Command Layer — 4-slot hero roster/zones per player (`heroZones` indexed by board column), Activated + Passive hero powers, Hero Phase turn logic tied to the objective escalation schedule (L1-L4 = all 4 roster Heroes), hero roster selection wired into the deck builder. See the "Hero Command Layer" section below. |
+| 21 | 2026-08-14 | Fixed P2 board-card stat display bug — removed the owner-based P2_FLIP from `getSideValue` (state.js) and the matching opponent-viewer swap from `buildBoardCard` (ui.js). Both were the other half of session 12's per-viewer board rotation, whose visual half was reverted 2026-07-30; left in place, they silently swapped a P2 unit's N/S and E/W the instant it was placed, mismatching what was just shown in hand. Also retired Hero Combined Arms General (109). |
 
 *(Session Log entries above are milestone summaries, not one-per-commit — see `git log` for full commit-level history.)*
 
@@ -162,7 +163,10 @@ gainFuel(playerState: PlayerState, amount: number) → PlayerState
 
 getSideValue(boardUnit: BoardUnit, dir: "n"|"e"|"s"|"w") → number
 // Returns card's base side value + tempSideBonus + objSideBonus.
-// P2's cards have their directions flipped (P2_FLIP) so N = their front facing P1's side.
+// Owner-independent — a card's printed N/E/S/W always maps to physical N/E/S/W, same
+// as in hand. (The 2026-07-02 owner-based P2_FLIP was removed 2026-08-14 — it was the
+// other half of a per-viewer board rotation whose visual half was reverted 2026-07-30,
+// left orphaned in the meantime and silently mismatching P2's board display vs hand.)
 
 getKeywords(boardUnit: BoardUnit) → string[]
 // Returns card's base keyword (if any) + tempKeywords + grantedKeywords arrays.
