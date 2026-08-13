@@ -1,4 +1,4 @@
-import { CARD_BY_ID, CARDS } from './cards.js?v=1786594831';
+import { CARD_BY_ID, CARDS } from './cards.js?v=1786628376';
 import {
   createInitialState,
   startOfTurn,
@@ -18,14 +18,14 @@ import {
   discountFor,
   consumeDiscounts,
   addDiscount,
-} from './state.js?v=1786594831';
-import { getAttackableTargets, resolveSingleAttack, tileKey, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkUnitOnPlayAbility, checkCounteroffensiveGeneral } from './combat.js?v=1786594831';
-import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1786594831';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1786594831';
-import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1786594831';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn } from './debug.js?v=1786594831';
-import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1786594831';
-import { runBotTurn } from './bot_player.js?v=1786594831';
+} from './state.js?v=1786628376';
+import { getAttackableTargets, resolveSingleAttack, tileKey, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkUnitOnPlayAbility, checkCounteroffensiveGeneral } from './combat.js?v=1786628376';
+import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1786628376';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1786628376';
+import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1786628376';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn } from './debug.js?v=1786628376';
+import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1786628376';
+import { runBotTurn } from './bot_player.js?v=1786628376';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
@@ -1185,11 +1185,6 @@ document.getElementById('p1-hand').addEventListener('click', e => {
       checkWin();
     }
     return;
-  } else {
-    const active = state.initiative;
-    if (state[active].fuel < card.cost) { appendLog([`Not enough Fuel`]); redraw(); return; }
-    playMissionCard(cardId);
-    checkWin();
   }
   redraw();
 });
@@ -1296,14 +1291,7 @@ document.getElementById('board').addEventListener('click', e => {
 
     const logLines = [`Placed ${card.name} at ${clickedKey} (${terrain})${discount > 0 ? ` [Armored Spearhead: -${discount} Fuel]` : ''}`];
     state = { ...newState, log: [...(newState.log ?? []), ...logLines] };
-    appendLog(logLines); // fire immediately so it displays before any mission/Hero-passive lines below
-
-    // Check placement-triggered missions (Deep Strike, Encirclement)
-    const { state: afterPlaceMissions, log: placeMissionLog } = checkActiveMissions(state, active, {});
-    if (placeMissionLog.length > 0) {
-      state = { ...afterPlaceMissions, log: [...(afterPlaceMissions.log ?? []), ...placeMissionLog] };
-      appendLog(placeMissionLog);
-    }
+    appendLog(logLines); // fire immediately so it displays before any Hero-passive lines below
 
     // Objective Marshal / Infantry Commander / Combined Arms General / Conventional Warfare
     // Commander — "first qualifying Unit played this turn" passives.
@@ -1415,12 +1403,8 @@ document.getElementById('board').addEventListener('click', e => {
 
     // Kill tracking + mission check
     const wasDestroyed = result.boardMutations.some(m => m.newUnit === null);
-    const missionCtx = {};
     const bonusLog = [];
     if (wasDestroyed) {
-      const attackerCls = CARD_BY_ID[attackerUnit.cardId]?.cls;
-      missionCtx.aircraftKill = attackerCls === 'Aircraft';
-      missionCtx.heavyArmorKill = getKeywords(attackerUnit).includes('Heavy Armor');
       newState = { ...newState, [attacker]: {
         ...newState[attacker],
         killsThisTurn: (newState[attacker].killsThisTurn ?? 0) + 1,
@@ -1439,8 +1423,6 @@ document.getElementById('board').addEventListener('click', e => {
         bonusLog.push(`${CARD_BY_ID[120].name}: first kill for this unit — draw 1 card`);
       }
     }
-    const { state: afterMissions, log: missionLog } = checkActiveMissions(newState, attacker, missionCtx);
-    newState = afterMissions;
 
     // Counteroffensive General (101) — first friendly unit to get Suppressed this turn
     let coGenLog = [];
@@ -1458,7 +1440,7 @@ document.getElementById('board').addEventListener('click', e => {
       pendingAttackerKey = null;
     }
 
-    commitState(newState, [...result.logEntries, ...overrunLog, ...missionLog, ...bonusLog, ...coGenLog]);
+    commitState(newState, [...result.logEntries, ...overrunLog, ...bonusLog, ...coGenLog]);
     checkWin();
     return;
   }
@@ -1503,6 +1485,17 @@ document.getElementById('board').addEventListener('click', e => {
 // ── Objective effects ─────────────────────────────────────────────────────────
 // Called at the start of each player's turn after control is checked.
 // Returns { state, log, pendingArtyHits }.
+// Shared by City (31) and Fortification (33): keys of friendly, non-destroyed units adjacent
+// to an objective, optionally restricted to one unit class (City → Infantry only).
+function friendlyAdjacentUnitKeys(board, key, player, clsFilter = null) {
+  return getAdjacentKeys(key).filter(ak => {
+    const u = board[ak];
+    if (!u || u.owner !== player || u.state === 'destroyed') return false;
+    if (clsFilter && CARD_BY_ID[u.cardId]?.cls !== clsFilter) return false;
+    return true;
+  });
+}
+
 function applyObjectiveEffects(s, player) {
   const log = [];
   const opp = player === 'p1' ? 'p2' : 'p1';
@@ -1568,21 +1561,16 @@ function applyObjectiveEffects(s, player) {
       case 29: log.push(`${nm} L${lv}: Return unit to hand (not automated)`); break;
       case 30: log.push(`${nm} L${lv}: Look at opponent's hand (not automated)`); break;
       case 31: { // City — adjacent friendly Infantry gain Guard and/or side bonus
-        const adjKeys = getAdjacentKeys(key);
+        const targets = friendlyAdjacentUnitKeys(s.board, key, player, 'Infantry');
         const newBoard = { ...s.board };
-        let count = 0;
-        for (const ak of adjKeys) {
-          const u = newBoard[ak];
-          if (!u || u.owner !== player || u.state === 'destroyed') continue;
-          if (CARD_BY_ID[u.cardId]?.cls !== 'Infantry') continue;
-          let updated = { ...u };
+        for (const ak of targets) {
+          let updated = { ...newBoard[ak] };
           if (lv === 1 || lv >= 3) updated.tempKeywords = [...updated.tempKeywords, 'Guard'];
           if (lv >= 2) updated.tempSideBonus = updated.tempSideBonus + (lv === 4 ? 2 : 1);
           newBoard[ak] = updated;
-          count++;
         }
         s = { ...s, board: newBoard };
-        if (count > 0) log.push(`${nm} L${lv}: ${count} adjacent Infantry buffed`);
+        if (targets.length > 0) log.push(`${nm} L${lv}: ${targets.length} adjacent Infantry buffed`);
         if (lv === 4) { s = { ...s, [opp]: { ...s[opp], hq: s[opp].hq - 2 } }; log.push(`${nm} L4: 2 HQ damage`); }
         break;
       }
@@ -1596,19 +1584,15 @@ function applyObjectiveEffects(s, player) {
         break;
       }
       case 33: { // Fortification — adjacent friendly units gain Armor this turn
-        const adjKeys = getAdjacentKeys(key);
+        const targets = friendlyAdjacentUnitKeys(s.board, key, player);
         const newBoard = { ...s.board };
-        let count = 0;
-        for (const ak of adjKeys) {
-          const u = newBoard[ak];
-          if (!u || u.owner !== player || u.state === 'destroyed') continue;
-          let updated = { ...u, tempKeywords: [...u.tempKeywords, 'Armor'] };
+        for (const ak of targets) {
+          let updated = { ...newBoard[ak], tempKeywords: [...newBoard[ak].tempKeywords, 'Armor'] };
           if (lv >= 3) updated.tempSideBonus = updated.tempSideBonus + (lv === 4 ? 2 : 1);
           newBoard[ak] = updated;
-          count++;
         }
         s = { ...s, board: newBoard };
-        if (count > 0) log.push(`${nm} L${lv}: ${count} adjacent units gain Armor`);
+        if (targets.length > 0) log.push(`${nm} L${lv}: ${targets.length} adjacent units gain Armor`);
         if (lv === 4) { s = { ...s, [opp]: { ...s[opp], hq: s[opp].hq - 2 } }; log.push(`${nm} L4: 2 HQ damage`); }
         break;
       }
@@ -1854,6 +1838,30 @@ function resolveEnemyHeroTargeting(role, col) {
   commitState(s, [`Radio Interference: ${heroName}'s Power costs +1F during ${role.toUpperCase()}'s next turn`]);
 }
 
+// Shared by Air Strike (20) and Suppressing Fire (79): 1 hit on targetKey per friendly unit
+// of the given class currently on board. Returns the updated state, log lines, and whether
+// the target became Suppressed (so the caller can check Counteroffensive General).
+function applyClassCountHits(s, active, targetKey, unit, cls, cardName) {
+  const log = [];
+  const count = unitsOnBoard(s, active).filter(({ unit: u }) => CARD_BY_ID[u.cardId]?.cls === cls).length;
+  if (count === 0) {
+    log.push(`${cardName}: no friendly ${cls} on board`);
+    return { state: s, log, becameSuppressed: false };
+  }
+  const unitName = CARD_BY_ID[unit?.cardId]?.name ?? '?';
+  let tgt = unit; let dmg = 0; let becameSuppressed = false;
+  for (let i = 0; i < count && tgt; i++) {
+    const { newUnit, hqDamage } = applyHit(tgt);
+    dmg += hqDamage;
+    if (newUnit.state === 'suppressed') becameSuppressed = true;
+    tgt = newUnit?.state === 'destroyed' ? null : newUnit;
+  }
+  s = { ...s, board: { ...s.board, [targetKey]: tgt },
+        [unit.owner]: { ...s[unit.owner], hq: s[unit.owner].hq - dmg } };
+  log.push(`${cardName}: ${count} hit(s) on ${unitName} — ${dmg} HQ damage`);
+  return { state: s, log, becameSuppressed };
+}
+
 // Apply the effect of a targeted command to the clicked tile.
 function applyCommandEffect(commandId, targetKey) {
   const active = state.initiative;
@@ -1912,19 +1920,10 @@ function applyCommandEffect(commandId, targetKey) {
       break;
     }
     case 20: { // Air Strike — 1 hit per friendly Aircraft
-      const count = Object.values(s.board).filter(u => u && u.owner === active && u.state !== 'destroyed' && CARD_BY_ID[u.cardId]?.cls === 'Aircraft').length;
-      if (count === 0) { log.push(`${card.name}: no friendly Aircraft on board`); break; }
-      let tgt = unit; let dmg = 0; let becameSuppressed = false;
-      for (let i = 0; i < count && tgt; i++) {
-        const { newUnit, hqDamage } = applyHit(tgt);
-        dmg += hqDamage;
-        if (newUnit.state === 'suppressed') becameSuppressed = true;
-        tgt = newUnit?.state === 'destroyed' ? null : newUnit;
-      }
-      s = { ...s, board: { ...s.board, [targetKey]: tgt },
-            [unit.owner]: { ...s[unit.owner], hq: s[unit.owner].hq - dmg } };
-      log.push(`${card.name}: ${count} hit(s) on ${unitName} — ${dmg} HQ damage`);
-      if (becameSuppressed) {
+      const r = applyClassCountHits(s, active, targetKey, unit, 'Aircraft', card.name);
+      s = r.state;
+      log.push(...r.log);
+      if (r.becameSuppressed) {
         const coGen = checkCounteroffensiveGeneral(s, targetKey);
         s = coGen.state;
         log.push(...coGen.log);
@@ -1974,19 +1973,10 @@ function applyCommandEffect(commandId, targetKey) {
       break;
     }
     case 79: { // Suppressing Fire — 1 hit per friendly Infantry
-      const count = Object.values(s.board).filter(u => u && u.owner === active && u.state !== 'destroyed' && CARD_BY_ID[u.cardId]?.cls === 'Infantry').length;
-      if (count === 0) { log.push(`${card.name}: no friendly Infantry on board`); break; }
-      let tgt = unit; let dmg = 0; let becameSuppressed = false;
-      for (let i = 0; i < count && tgt; i++) {
-        const { newUnit, hqDamage } = applyHit(tgt);
-        dmg += hqDamage;
-        if (newUnit.state === 'suppressed') becameSuppressed = true;
-        tgt = newUnit?.state === 'destroyed' ? null : newUnit;
-      }
-      s = { ...s, board: { ...s.board, [targetKey]: tgt },
-            [unit.owner]: { ...s[unit.owner], hq: s[unit.owner].hq - dmg } };
-      log.push(`${card.name}: ${count} hit(s) on ${unitName} — ${dmg} HQ damage`);
-      if (becameSuppressed) {
+      const r = applyClassCountHits(s, active, targetKey, unit, 'Infantry', card.name);
+      s = r.state;
+      log.push(...r.log);
+      if (r.becameSuppressed) {
         const coGen = checkCounteroffensiveGeneral(s, targetKey);
         s = coGen.state;
         log.push(...coGen.log);
@@ -2003,165 +1993,6 @@ function applyCommandEffect(commandId, targetKey) {
   checkWin();
 }
 
-// ── Missions ──────────────────────────────────────────────────────────────────
-
-function playMissionCard(cardId) {
-  const active = state.initiative;
-  const card = CARD_BY_ID[cardId];
-  const handAfter = [...state[active].hand];
-  const idx = handAfter.indexOf(cardId);
-  if (idx !== -1) handAfter.splice(idx, 1);
-  let s = { ...state, [active]: { ...state[active], fuel: state[active].fuel - card.cost, hand: handAfter } };
-  const log = [];
-
-  const newMission = {
-    cardId,
-    ...(cardId === 81 ? { killsAtDeploy: s[active].totalKills ?? 0 } : {}),
-  };
-  s = { ...s, [active]: { ...s[active], missions: [...s[active].missions, newMission] } };
-  log.push(`${card.name}: mission active`);
-  const { state: afterCheck, log: checkLog } = checkActiveMissions(s, active, {});
-  s = afterCheck;
-  log.push(...checkLog);
-
-  commitState(s, log);
-}
-
-// Check all active missions for a player. ctx flags: { endOfTurn, aircraftKill, heavyArmorKill }.
-function checkActiveMissions(s, player, ctx) {
-  const missions = s[player]?.missions;
-  if (!missions?.length) return { state: s, log: [] };
-  const log = [];
-  const remaining = [];
-
-  for (const m of missions) {
-    const { met, targetKey } = evalMissionCondition(s, player, m, ctx);
-    if (met) {
-      const r = applyMissionReward(s, player, m.cardId, targetKey);
-      s = r.state;
-      log.push(...r.log);
-    } else {
-      remaining.push(m);
-    }
-  }
-  s = { ...s, [player]: { ...s[player], missions: remaining } };
-  return { state: s, log };
-}
-
-// mission — the specific ActiveMission instance being checked (not just its cardId), so
-// per-copy progress (e.g. Total Onslaught's killsAtDeploy) isn't confused with a second copy's.
-function evalMissionCondition(s, player, mission, ctx) {
-  const cardId = mission.cardId;
-  const opp = player === 'p1' ? 'p2' : 'p1';
-  const objs = Object.values(s.objectives ?? {});
-  const boardVals = Object.entries(s.board);
-  const friendlies = boardVals.filter(([, u]) => u && u.owner === player && u.state !== 'destroyed');
-  const enemies    = boardVals.filter(([, u]) => u && u.owner === opp   && u.state !== 'destroyed');
-
-  switch (cardId) {
-    case 23: { // Hold the Line: control ALL objectives at end of turn
-      if (!ctx.endOfTurn || objs.length === 0) return { met: false };
-      return { met: objs.every(o => o.controller === player) };
-    }
-    case 24: { // Deep Strike: 1 friendly adjacent to 2+ enemies
-      for (const [fk] of friendlies) {
-        const adjEnemies = getAdjacentKeys(fk).filter(k => s.board[k]?.owner === opp && s.board[k]?.state !== 'destroyed').length;
-        if (adjEnemies >= 2) return { met: true };
-      }
-      return { met: false };
-    }
-    case 25: // Blitz Assault: 2+ kills this turn
-      return { met: (s[player].killsThisTurn ?? 0) >= 2 };
-    case 55: { // Armored Spearhead: 2+ friendly Tanks on board simultaneously
-      const tankCount = friendlies.filter(([, u]) => CARD_BY_ID[u.cardId]?.cls === 'Tank').length;
-      return { met: tankCount >= 2 };
-    }
-    case 56: // Total Air Superiority: kill with Aircraft
-      return { met: !!ctx.aircraftKill };
-    case 57: { // Fortify the Line: control 2+ objectives at end of turn
-      if (!ctx.endOfTurn) return { met: false };
-      return { met: objs.filter(o => o.controller === player).length >= 2 };
-    }
-    case 58: { // Encirclement: an enemy has 2+ friendly units adjacent
-      for (const [ek] of enemies) {
-        const adjFriendly = getAdjacentKeys(ek).filter(k => s.board[k]?.owner === player && s.board[k]?.state !== 'destroyed').length;
-        if (adjFriendly >= 2) return { met: true, targetKey: ek };
-      }
-      return { met: false };
-    }
-    case 81: // Total Onslaught: 3+ kills since this copy was deployed
-      return { met: (s[player].totalKills ?? 0) - (mission.killsAtDeploy ?? 0) >= 3 };
-    case 84: // Overwhelming Force: kill with Heavy Armor
-      return { met: !!ctx.heavyArmorKill };
-    default: return { met: false };
-  }
-}
-
-function applyMissionReward(s, player, cardId, targetKey) {
-  const opp = player === 'p1' ? 'p2' : 'p1';
-  const log = [];
-  const nm = CARD_BY_ID[cardId]?.name ?? '?';
-
-  switch (cardId) {
-    case 23: // Hold the Line: +5 HQ (capped at 25)
-      s = { ...s, [player]: { ...s[player], hq: Math.min(s[player].hq + 5, 25) } };
-      log.push(`${nm}: COMPLETE — +5 HQ HP`);
-      break;
-    case 24: // Deep Strike: 2 HQ damage
-      s = { ...s, [opp]: { ...s[opp], hq: s[opp].hq - 2 } };
-      log.push(`${nm}: COMPLETE — 2 HQ damage to ${opp.toUpperCase()}`);
-      break;
-    case 55: // Armored Spearhead: next Tank costs 2 less Fuel
-      s = { ...s, [player]: addDiscount(s[player], { appliesTo: 'Tank', column: null, amount: 2, min: 0 }) };
-      log.push(`${nm}: COMPLETE — next Tank costs 2 less Fuel`);
-      break;
-    case 25: { // Blitz Assault: draw 2 + 1 Fuel
-      s = { ...s, [player]: drawCards(gainFuel(s[player], 1, false), 2) };
-      log.push(`${nm}: COMPLETE — Draw 2, +1 Fuel`);
-      break;
-    }
-    case 56: // Total Air Superiority: 2 HQ damage
-      s = { ...s, [opp]: { ...s[opp], hq: s[opp].hq - 2 } };
-      log.push(`${nm}: COMPLETE — 2 HQ damage to ${opp.toUpperCase()}`);
-      break;
-    case 57: { // Fortify the Line: un-suppress 1 unit + Armor (auto: first found)
-      const entry = Object.entries(s.board).find(([, u]) => u && u.owner === player && u.state === 'suppressed');
-      if (entry) {
-        const [sk, su] = entry;
-        const cleared = unsuppressOnBoard(s.board, sk).board;
-        const cu = cleared[sk];
-        s = { ...s, board: { ...cleared, [sk]: { ...cu, grantedKeywords: [...(cu.grantedKeywords || []), 'Armor'] } } };
-        log.push(`${nm}: COMPLETE — ${CARD_BY_ID[su.cardId]?.name} un-suppressed + Armor`);
-      } else {
-        log.push(`${nm}: COMPLETE — (no suppressed unit to heal)`);
-      }
-      break;
-    }
-    case 58: { // Encirclement: 1 hit to surrounded enemy
-      const target = s.board[targetKey];
-      if (target) {
-        const { newUnit, hqDamage } = applyHit(target);
-        const final = newUnit?.state === 'destroyed' ? null : newUnit;
-        s = { ...s, board: { ...s.board, [targetKey]: final }, [opp]: { ...s[opp], hq: s[opp].hq - hqDamage } };
-        log.push(`${nm}: COMPLETE — 1 hit on ${CARD_BY_ID[target.cardId]?.name} (${hqDamage} HQ dmg)`);
-      } else {
-        log.push(`${nm}: COMPLETE`);
-      }
-      break;
-    }
-    case 81: // Total Onslaught: 2 HQ damage
-      s = { ...s, [opp]: { ...s[opp], hq: s[opp].hq - 2 } };
-      log.push(`${nm}: COMPLETE — 2 HQ damage to ${opp.toUpperCase()}`);
-      break;
-    case 84: // Overwhelming Force: 2 HQ damage
-      s = { ...s, [opp]: { ...s[opp], hq: s[opp].hq - 2 } };
-      log.push(`${nm}: COMPLETE — 2 HQ damage to ${opp.toUpperCase()}`);
-      break;
-    default: break;
-  }
-  return { state: s, log };
-}
-
 // ── End Turn ──────────────────────────────────────────────────────────────────
 
 document.getElementById('btn-end-turn').addEventListener('click', () => {
@@ -2170,12 +2001,8 @@ document.getElementById('btn-end-turn').addEventListener('click', () => {
 
   const currentPlayer = state.initiative;
 
-  // Check end-of-turn missions before swapping (board/objective state is intact)
-  const { state: afterEndMissions, log: endMissionLog } = checkActiveMissions(state, currentPlayer, { endOfTurn: true });
-  let s = afterEndMissions;
-
   // Reset killsThisTurn for the player who just ended
-  s = { ...s, [currentPlayer]: { ...s[currentPlayer], killsThisTurn: 0 } };
+  let s = { ...state, [currentPlayer]: { ...state[currentPlayer], killsThisTurn: 0 } };
 
   let newState = endTurn(s);                             // swap initiative, increment turn
   const newActive = newState.initiative;
@@ -2188,8 +2015,7 @@ document.getElementById('btn-end-turn').addEventListener('click', () => {
 
   // Supply Runner ability: at start of turn, if on a controlled objective → +1 Fuel
   const supplyLog = [];
-  for (const [bk, u] of Object.entries(newState.board)) {
-    if (!u || u.owner !== newActive || u.state === 'destroyed') continue;
+  for (const { key: bk, unit: u } of unitsOnBoard(newState, newActive)) {
     if (CARD_BY_ID[u.cardId]?.id !== 5) continue;
     if (getAdjacentKeys(bk).some(k => newState.objectives[k]?.controller === newActive)) {
       newState = { ...newState, [newActive]: gainFuel(newState[newActive], 1, false) };
@@ -2198,8 +2024,7 @@ document.getElementById('btn-end-turn').addEventListener('click', () => {
   }
 
   // Quartermaster ability: at start of turn, if you control both objectives on the map → draw 1
-  for (const [bk, u] of Object.entries(newState.board)) {
-    if (!u || u.owner !== newActive || u.state === 'destroyed') continue;
+  for (const { unit: u } of unitsOnBoard(newState, newActive)) {
     if (CARD_BY_ID[u.cardId]?.id !== 69) continue;
     const objs = Object.values(newState.objectives);
     const controlsBoth = objs.length > 0 && objs.every(o => o.controller === newActive);
@@ -2226,7 +2051,7 @@ document.getElementById('btn-end-turn').addEventListener('click', () => {
   pendingHeroTargets = null;
 
   const newRound = Math.ceil(newState.turn / 2);
-  const turnLog = [...endMissionLog, `--- Round ${newRound} — ${newState.initiative.toUpperCase()} ---`, ...supplyLog, ...effectLog];
+  const turnLog = [`--- Round ${newRound} — ${newState.initiative.toUpperCase()} ---`, ...supplyLog, ...effectLog];
   commitState(newState, turnLog);
   checkWin();
 
@@ -2389,9 +2214,9 @@ function showObjectivePreview(tileKey) {
   document.getElementById('preview-hint').style.display = 'none';
 }
 
-// Missions side panel removed 2026-07-30 (Missions retired for v0.4 — see cards.js header).
-// playMissionCard/checkActiveMissions/evalMissionCondition/applyMissionReward are left in
-// place below, unreachable now that no deck/hand can contain a mission card.
+// Missions retired for v0.4 (2026-07-30, see cards.js header) — the dead
+// playMissionCard/checkActiveMissions/evalMissionCondition/applyMissionReward functions and
+// their call sites were removed from this file in the 2026-08 code-optimization pass.
 
 // Hand hover → card preview
 document.getElementById('p1-hand').addEventListener('mouseover', e => {
@@ -2529,21 +2354,29 @@ function buildPreviewCardDiv(card) {
 
 // ── Forward Observer modal ────────────────────────────────────────────────────
 
+// Shared by the 3 "look at N cards from your deck" modals (Forward Observer, Radio
+// Operator, Field Reserves) — each builds one .fo-slot per drawn card the same way and only
+// differs in what buttons a slot gets and how picking one resolves. `buildExtras(slot, card,
+// cardId, i)` appends whatever's specific to that modal onto the freshly-built slot.
+function renderDeckPeekSlots(containerId, drawn, buildExtras) {
+  const container = document.getElementById(containerId);
+  container.innerHTML = '';
+  drawn.forEach((cardId, i) => {
+    const card = CARD_BY_ID[cardId];
+    const slot = document.createElement('div');
+    slot.className = 'fo-slot';
+    slot.appendChild(buildPreviewCardDiv(card));
+    buildExtras(slot, card, cardId, i);
+    container.appendChild(slot);
+  });
+}
+
 function showFOModal(drawn, player) {
   foCards = drawn;
   foPlayer = player;
   foAssignments = {};
 
-  const container = document.getElementById('fo-cards');
-  container.innerHTML = '';
-
-  drawn.forEach((cardId, i) => {
-    const card = CARD_BY_ID[cardId];
-    const slot = document.createElement('div');
-    slot.className = 'fo-slot';
-
-    const cardDiv = buildPreviewCardDiv(card);
-
+  renderDeckPeekSlots('fo-cards', drawn, (slot, card, cardId, i) => {
     const btnGroup = document.createElement('div');
     btnGroup.className = 'fo-btn-group';
     [['keep','KEEP'],['top','TOP'],['bottom','BOT']].forEach(([pos, label]) => {
@@ -2559,10 +2392,7 @@ function showFOModal(drawn, player) {
       });
       btnGroup.appendChild(btn);
     });
-
-    slot.appendChild(cardDiv);
     slot.appendChild(btnGroup);
-    container.appendChild(slot);
   });
 
   document.getElementById('fo-modal').style.display = 'flex';
@@ -2604,24 +2434,13 @@ let radioOpPlayer = null;
 
 function showRadioOperatorModal(drawn, player) {
   radioOpPlayer = player;
-  const container = document.getElementById('radio-op-cards');
-  container.innerHTML = '';
-
-  drawn.forEach(cardId => {
-    const card = CARD_BY_ID[cardId];
-    const slot = document.createElement('div');
-    slot.className = 'fo-slot';
-    slot.appendChild(buildPreviewCardDiv(card));
-
+  renderDeckPeekSlots('radio-op-cards', drawn, (slot, card, cardId) => {
     const btn = document.createElement('button');
     btn.className = 'fo-pos-btn fo-top';
     btn.textContent = 'PUT ON TOP';
     btn.addEventListener('click', () => confirmRadioOperator(cardId, drawn.find(id => id !== cardId)));
     slot.appendChild(btn);
-
-    container.appendChild(slot);
   });
-
   document.getElementById('radio-op-modal').style.display = 'flex';
 }
 
@@ -2644,15 +2463,7 @@ let fieldReservesPlayer = null;
 function showFieldReservesModal(drawn, player) {
   fieldReservesCards = drawn;
   fieldReservesPlayer = player;
-  const container = document.getElementById('field-reserves-cards');
-  container.innerHTML = '';
-
-  drawn.forEach(cardId => {
-    const card = CARD_BY_ID[cardId];
-    const slot = document.createElement('div');
-    slot.className = 'fo-slot';
-    slot.appendChild(buildPreviewCardDiv(card));
-
+  renderDeckPeekSlots('field-reserves-cards', drawn, (slot, card, cardId) => {
     if (card.type === 'unit') {
       const btn = document.createElement('button');
       btn.className = 'fo-pos-btn fo-top';
@@ -2660,10 +2471,7 @@ function showFieldReservesModal(drawn, player) {
       btn.addEventListener('click', () => confirmFieldReserves(cardId));
       slot.appendChild(btn);
     }
-
-    container.appendChild(slot);
   });
-
   document.getElementById('field-reserves-modal').style.display = 'flex';
 }
 
