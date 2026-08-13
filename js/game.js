@@ -1,4 +1,4 @@
-import { CARD_BY_ID, CARDS } from './cards.js?v=1786590272';
+import { CARD_BY_ID, CARDS } from './cards.js?v=1786591036';
 import {
   createInitialState,
   startOfTurn,
@@ -18,14 +18,14 @@ import {
   discountFor,
   consumeDiscounts,
   addDiscount,
-} from './state.js?v=1786590272';
-import { getAttackableTargets, resolveSingleAttack, tileKey, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkUnitOnPlayAbility, checkCounteroffensiveGeneral } from './combat.js?v=1786590272';
-import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1786590272';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1786590272';
-import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1786590272';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn } from './debug.js?v=1786590272';
-import { STARTER_DECKS, loadCustomDecks, validateDeck } from './decks.js?v=1786590272';
-import { runBotTurn } from './bot_player.js?v=1786590272';
+} from './state.js?v=1786591036';
+import { getAttackableTargets, resolveSingleAttack, tileKey, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkUnitOnPlayAbility, checkCounteroffensiveGeneral } from './combat.js?v=1786591036';
+import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1786591036';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1786591036';
+import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1786591036';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn } from './debug.js?v=1786591036';
+import { STARTER_DECKS, loadCustomDecks, validateDeck } from './decks.js?v=1786591036';
+import { runBotTurn } from './bot_player.js?v=1786591036';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
@@ -481,8 +481,9 @@ function startGame(p1Ids, p2Ids, mapId, p1Heroes = [], p2Heroes = []) {
     document.getElementById('waiting-screen').style.display = 'none';
     showMulligan('YOUR OPENING HAND', s.p1.hand, indices => {
       s = applyMulligan(s, 'p1', indices);
-      // First player draws 4, not 5 — no post-mulligan bonus draw for P1 (see P2's own
-      // mulligan branches below/at the online P2 handler, which do get the +1).
+      // First player (P1) draws 5, second player draws 4 — see the P2 mulligan branches
+      // below/at the online P2 handler, which do NOT get this bonus draw.
+      s = { ...s, p1: drawCards(s.p1, 1) };
       finishStartGame(s, mapId);
     });
     return;
@@ -492,14 +493,13 @@ function startGame(p1Ids, p2Ids, mapId, p1Heroes = [], p2Heroes = []) {
     document.getElementById('lobby').style.display = 'none';
     showMulligan('P1 — OPENING HAND', s.p1.hand, indices1 => {
       s = applyMulligan(s, 'p1', indices1);
-      // First player draws 4, not 5 — no post-mulligan bonus draw for P1.
+      // First player (P1) draws 5, second player (P2/bot) draws 4.
+      s = { ...s, p1: drawCards(s.p1, 1) };
       if (isAiMode) {
-        s = { ...s, p2: drawCards(s.p2, 1) }; // bot keeps its opening hand
         finishStartGame(s, mapId);
       } else {
         showMulligan('P2 — OPENING HAND', s.p2.hand, indices2 => {
           s = applyMulligan(s, 'p2', indices2);
-          s = { ...s, p2: drawCards(s.p2, 1) };
           finishStartGame(s, mapId);
         });
       }
@@ -2360,6 +2360,30 @@ function hideCardPreview() {
   document.getElementById('preview-hint').style.display = 'block';
 }
 
+// Objective tiles never populated the CARD DETAIL side panel — only the small hover
+// tooltip (see ui.js's tile.dataset.tipHtml). Reuses the same .obj-tt-level markup/classes
+// as that tooltip so the level breakdown reads identically in both places.
+function showObjectivePreview(tileKey) {
+  const obj = state?.objectives[tileKey];
+  if (!obj) return;
+  const objCard = CARD_BY_ID[obj.cardId];
+  if (!objCard) return;
+  document.getElementById('cp-name').textContent = objCard.name;
+  document.getElementById('cp-badge').className = 'cp-badge';
+  document.getElementById('cp-badge').textContent = obj.controller
+    ? `OBJECTIVE · ${obj.controller.toUpperCase()} CONTROLS`
+    : 'OBJECTIVE · NEUTRAL';
+  document.getElementById('cp-dirs').innerHTML = '';
+  document.getElementById('cp-keyword').innerHTML = '';
+  const levels = [objCard.l1, objCard.l2, objCard.l3, objCard.l4];
+  document.getElementById('cp-effect').innerHTML = levels.map((eff, i) => {
+    const isCurrent = (i + 1) === obj.level;
+    return `<div class="obj-tt-level${isCurrent ? ' current' : ''}"><span class="obj-tt-lnum">L${i + 1}</span> ${eff ?? '—'}</div>`;
+  }).join('');
+  document.getElementById('card-preview').style.display = 'flex';
+  document.getElementById('preview-hint').style.display = 'none';
+}
+
 // Missions side panel removed 2026-07-30 (Missions retired for v0.4 — see cards.js header).
 // playMissionCard/checkActiveMissions/evalMissionCondition/applyMissionReward are left in
 // place below, unreachable now that no deck/hand can contain a mission card.
@@ -2381,6 +2405,7 @@ document.getElementById('board').addEventListener('mouseover', e => {
   }
   const unit = state?.board[tile.dataset.key];
   if (unit && unit.state !== 'destroyed') showCardPreview(unit.cardId);
+  else if (state?.objectives[tile.dataset.key]) showObjectivePreview(tile.dataset.key);
 });
 document.getElementById('board').addEventListener('mouseleave', hideCardPreview);
 
@@ -2454,7 +2479,8 @@ if (isOnline && myRole === 'p2') {
         document.getElementById('waiting-screen').style.display = 'none';
         showMulligan('YOUR OPENING HAND', normalized.p2.hand, indices => {
           state = applyMulligan(normalized, 'p2', indices);
-          state = { ...state, p2: drawCards(state.p2, 1) };
+          // Second player (P2) draws 4, not 5 — no post-mulligan bonus draw here; P1 gets
+          // it instead (see startGame's P1 mulligan branches).
           // No pre-game Hero pick anymore — P2's first Hero arrives at round 2 via
           // runHeroPhase, same as P1 and local hotseat (removed 2026-08-11). This used to
           // deploy a Hero here immediately after mulligan; that stale copy of the old flow
