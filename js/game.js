@@ -1,4 +1,4 @@
-import { CARD_BY_ID, CARDS } from './cards.js?v=1786591036';
+import { CARD_BY_ID, CARDS } from './cards.js?v=1786591612';
 import {
   createInitialState,
   startOfTurn,
@@ -18,14 +18,14 @@ import {
   discountFor,
   consumeDiscounts,
   addDiscount,
-} from './state.js?v=1786591036';
-import { getAttackableTargets, resolveSingleAttack, tileKey, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkUnitOnPlayAbility, checkCounteroffensiveGeneral } from './combat.js?v=1786591036';
-import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1786591036';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1786591036';
-import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1786591036';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn } from './debug.js?v=1786591036';
-import { STARTER_DECKS, loadCustomDecks, validateDeck } from './decks.js?v=1786591036';
-import { runBotTurn } from './bot_player.js?v=1786591036';
+} from './state.js?v=1786591612';
+import { getAttackableTargets, resolveSingleAttack, tileKey, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkUnitOnPlayAbility, checkCounteroffensiveGeneral } from './combat.js?v=1786591612';
+import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1786591612';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1786591612';
+import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1786591612';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn } from './debug.js?v=1786591612';
+import { STARTER_DECKS, loadCustomDecks, validateDeck } from './decks.js?v=1786591612';
+import { runBotTurn } from './bot_player.js?v=1786591612';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
@@ -75,9 +75,6 @@ function renderDeckGrid() {
 }
 
 renderDeckGrid();
-document.getElementById('btn-open-builder').addEventListener('click', () => {
-  window.location.href = 'deckbuilder.html';
-});
 
 // Bridge (29), Radar Station (30), Fortification (33) excluded — effects not automated yet.
 const WORKING_OBJECTIVE_IDS = [26, 27, 28, 31, 32];
