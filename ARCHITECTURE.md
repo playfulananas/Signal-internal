@@ -26,6 +26,12 @@
 | 14 | 2026-07-02 | Objective placement changed from hardcoded corners to random middle-row flanks (rows 1/2, cols 0 and 3) |
 | 15 | 2026-07-02 | Starter decks updated: Iron Fist replaced with Blitz Breaker (counter-aggro, 40 AP, Guard + Armor wall + full draw engine) |
 | 16 | 2026-07-02 | Double Attack nerf: all 5 DA cards -2 total stats (Tank Hunter, Dive Bomber, Ace Pilot, Storm Squad, Shock Troopers) |
+| 17 | 2026-07-06 to 07-08 | Debug panel — full CRUD over live game state (add card, Fuel, HQ, objective control/level, unit state, buff, draw cards, skip-to-turn); `js/debug.js` (pure) + wiring in `game.js`; end-to-end smoke test |
+| 18 | 2026-07-08 to 07-21 | Deck builder — pool/build/validate/save UI (`deckbuilder.html`, `js/deckbuilder.js`), deck rules module (`js/decks.js`: `STARTER_DECKS`, `validateDeck`, copy-limit enforcement), custom decks synced to Firebase per anonymous identity; open lobby browser — host/browse/join without a code (`js/lobby-browser.js` + pure helpers in `js/lobbies.js`), replacing the old code-only `index.html`/`lobby.js` flow referenced below |
+| 19 | 2026-07-21 to 07-30 | Bot AI + self-play harness for automated regression testing — `js/bot_ai.js` (pure move scoring, reused by both the in-page bot and the Playwright harness) + `js/bot_player.js` (in-page "vs AI" turn driver) + root-level `selfplay_test.mjs`/`selfplay_vs_ai_smoke.mjs`; Missions retired in the v0.4 balance pass (all mission cards flagged `retired:true` in `cards.js`), deck size fixed at exactly 30 cards |
+| 20 | 2026-08-01 to 08-13 | Hero Command Layer — 4-slot hero roster/zones per player (`heroZones` indexed by board column), Activated + Passive hero powers, Hero Phase turn logic tied to the objective escalation schedule (L1-L4 = all 4 roster Heroes), hero roster selection wired into the deck builder. See the "Hero Command Layer" section below. |
+
+*(Session Log entries above are milestone summaries, not one-per-commit — see `git log` for full commit-level history.)*
 
 ---
 
@@ -36,14 +42,22 @@
 | `js/cards.js` | `CARDS`, `CARD_BY_ID` | nothing |
 | `js/maps.js` | `MAPS`, `getTerrain`, `canPlaceOnTerrain` | nothing |
 | `js/state.js` | see State API below | `cards.js` |
-| `js/combat.js` | see Combat API below | `cards.js`, `state.js` |
+| `js/combat.js` | see Combat API below (incl. Hero passives — see below) | `cards.js`, `state.js` |
 | `js/ui.js` | see UI API below | `cards.js`, `state.js`, `maps.js` |
 | `js/firebase.js` | see Firebase API below | Firebase SDK (CDN) |
-| `js/lobby.js` | (side-effects only) | `firebase.js`, `state.js` |
-| `game.html` | (entry point) | all of the above |
-| `index.html` | (entry point) | `lobby.js` |
+| `js/debug.js` | `debugAddCard`, `debugSetFuel`, `debugAdjustFuel`, `debugSetHQ`, `debugAdjustHQ`, `debugSetObjective`, `debugSetUnitState`, `debugBuffUnit`, `debugDrawCards`, `debugSkipToTurn` — pure, same `{state, log}` return shape as combat.js | `cards.js`, `state.js` |
+| `js/decks.js` | `DECK_RULES`, `STARTER_DECKS`, `getDeckPool`, `getHeroPool`, `countCopies`, `copyCap`, `validateDeck`, `validateHeroRoster`, `loadCustomDecks`/`saveCustomDeck`/`deleteCustomDeck`/`replaceAllCustomDecks` (localStorage, browser-only), `mergeRemoteDecks` (pure) | `cards.js` |
+| `js/bot_ai.js` | `bestAttackForUnit`, `maxAttacksFor`, `bestExistingAttack`, `findLethal`, `bestPlacement`, `bestDamageCommandTarget` — pure move-scoring, shared by the in-page "vs AI" bot and the Playwright self-play harness so both can never drift from real game rules | `cards.js`, `state.js`, `combat.js`, `maps.js` |
+| `js/bot_player.js` | `runBotTurn()` — drives P2's turn via the same DOM click handlers a human uses (not a separate code path) | `cards.js`, `state.js`, `bot_ai.js` |
+| `js/lobbies.js` | `filterStale`, `sortByNewest`, `formatWaiting` — pure list helpers | nothing |
+| `js/lobby-browser.js` | (side-effects only — open lobby list UI: host/browse/join without a code) | `firebase.js`, `lobbies.js`, `maps.js` |
+| `js/deckbuilder.js` | (side-effects only — deck builder page: pool/build/validate/save) | `cards.js`, `decks.js`, `firebase.js` |
+| `js/game.js` | (side-effects only — entry point for `game.html`: FSM, turn flow, event handlers, card-effect dispatch for objectives/commands/Hero powers) | `cards.js`, `state.js`, `combat.js`, `ui.js`, `maps.js`, `firebase.js`, `debug.js`, `decks.js`, `bot_player.js` |
+| `game.html` | (entry point) | `js/game.js` |
+| `index.html` | (entry point) | `js/lobby-browser.js` |
+| `deckbuilder.html` | (entry point) | `js/deckbuilder.js` |
 
-**Dependency rule:** `cards.js` and `state.js` must never import from `ui.js`, `firebase.js`, or `lobby.js`. The dependency graph flows one way: cards → state → combat/ui → firebase → entry points.
+**Dependency rule:** `cards.js` and `state.js` must never import from `ui.js`, `firebase.js`, `game.js`, or any UI-facing module. The dependency graph flows one way: cards → state → combat/debug/bot_ai → ui/decks/bot_player → firebase/lobbies → entry points (`game.js`, `deckbuilder.js`, `lobby-browser.js`).
 
 ---
 
@@ -219,6 +233,27 @@ resolveSingleAttack(state: GameState, attackerKey: string, targetKey: string)
 
 ---
 
+## Hero Command Layer
+
+Added 2026-08-01 to 2026-08-13 (Session Log 20). Heroes are a separate fixed roster of 4 cards per player (`type:"hero"` in `cards.js`), never shuffled into the main 30-card deck — see `DECK_RULES.heroRosterSize` in `decks.js`.
+
+**State (`PlayerState`, see `createPlayerState` in `state.js`):**
+- `heroRoster: number[]` — the 4 chosen hero card IDs (fixed for the match).
+- `heroZones: [id|null, id|null, id|null, id|null]` — index = board column (0-3), value = hero cardId currently deployed in that zone, or `null`. Every hero has a `scope` of `"column"` (only affects its own column) or `"board"` (affects the whole board) — scope is an authoritative field on the card, never inferred from ability text (see `tests/hero_primitives.test.mjs`).
+- `heroActivated` / `heroRepositioned` — one Activated Hero Power and one reposition/swap per turn, across all zones. Reset in `startOfTurn`.
+- `heroTriggeredThisTurn: { [heroId]: true }` — gates "first X each turn" passives so each fires at most once per owner turn. Reset in `startOfTurn`.
+- `heroesActivatedEver: number[]` — every distinct hero whose Activated Power has fired this **match** (not per-turn), never cleared. Used by cards like Veteran Signal Corps (119).
+- `lastUnitClass` — tracks the class of the last Unit played, for Combined Arms General (109)'s "mixed-class army" trigger.
+
+**Hero Phase timing:** `runHeroPhase` (`game.js`) deploys roster Heroes on the same schedule as objective escalation — a Hero becomes available to deploy at each of Objective Levels 1-4 (round 2, 4, 6, 8), not on a separate pre-game step.
+
+**Where the logic lives:**
+- **Pure, tested hero passives** live in `combat.js` alongside ordinary combat resolution: `checkHeroPassivesOnPlace` (on-place triggers: Objective Marshal 94, Infantry Commander 104, Combined Arms General 109, Conventional Warfare Commander 110) and `checkCounteroffensiveGeneral` (101, fires on the Suppression-*applying* side, not on removal). Covered by `tests/hero_phase.test.mjs` and `tests/hero_primitives.test.mjs`.
+- **Hero Power dispatch** (`heroTargetKeys`, `applyHeroPower` — both switch-on-hero-id, same pattern as the objective/command switches below) and **DOM wiring** (`showHeroDeploy`, `deployHero`, `handleHeroZoneClick`, `tryActivateHero`, `resolveHeroTargeting`) live in `game.js`, uncovered by `node:test` — same gap as the objective/command switches (see "Deferred" section below and the project's optimization plan for the plan to close it).
+- **Fuel cap override**: `fuelCapOf` in `state.js` raises the cap from 6 to 8 while Logistics Chief (89) is deployed in any zone — read this instead of a hardcoded `6` anywhere fuel capacity matters.
+
+---
+
 ## UI API (`js/ui.js`)
 
 ```js
@@ -304,13 +339,8 @@ Always `"row,col"` strings. Row 0 is top, row 3 is bottom. Column 0 is left, col
 
 ## Deferred — Do Not Implement Yet
 
-The following are intentionally out of scope for Phase 1–2. If you're a subagent and a task description doesn't mention these, leave them alone:
+**This list was stale as of 2026-08-13 and has been corrected.** Interactive Command effects, Guard targeting enforcement, the deck builder, the win condition popup/screen, and copy limits are all now implemented — this section previously described Phase 1-2 scope from 2026-07-02 and was never updated as those phases completed. Breakthrough and Inspire are no longer "deferred to implement" either — the Breakthrough- and Inspire-keyword cards (Blitz Tank, Tank Destroyer, Vanguard Tank, Field Commander, Chief of Staff) and the entire Commander class were **retired** 2026-08-13 as a balance decision (unimplemented + unbalanced, and the Commander class's strategic-presence role is now covered by Heroes) — see the `retired:true` comments in `cards.js`. Missions are similarly retired (2026-07-30), not deferred — see the dead-code note called out where the codebase's optimization plan removes them.
 
-- Interactive Command/Mission effects (Field Medic target selection, Tactical Withdrawal, etc.)
-- Guard targeting enforcement in UI
-- Breakthrough chain movement
-- Inspire adjacency bonus
-- Map orientation (flip/rotate — agreed pre-game in physical version, skipped in prototype)
-- Deck builder (card-by-card picker, 50 AP budget)
-- Win condition popup/screen
-- Copy limits (Common max 2, Rare max 1) — relevant only in deck builder
+**Still genuinely incomplete** — check `STATUS.md`'s "Known workarounds / prototype shortcuts" section for the current, authoritative list (Rally Cry choose-2, Artillery Position L2/L4 auto-hit, Bridge return-to-hand, Airfield L1 double-attack-on-placement, Factory L2 Tank discount) rather than duplicating it here, since that list changes faster than this doc gets reviewed.
+
+**One remaining genuine simplification, not a gap to close without discussion:** map orientation is fixed per map rather than agreed/flipped pre-game by both players (the GDD's tabletop rule) — see the comment in `ui.js`'s `renderBoard`. This was a deliberate prototype simplification (reverted from an earlier per-viewer flip attempt on 2026-07-30), not an oversight.

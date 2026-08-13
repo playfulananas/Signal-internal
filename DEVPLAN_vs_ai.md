@@ -6,7 +6,7 @@
 
 **Tech stack:** Vanilla ES modules, no build step, no new dependencies. Reuses `js/state.js`, `js/combat.js`, `js/maps.js`, `js/cards.js` (already pure/DOM-free) and the `window.__SIGNAL_DEBUG__` hook already present in `game.js`.
 
-**Testing approach:** This project has no unit-test framework — verification is manual browser play plus the existing `selfplay_test.mjs` Playwright harness (which exercises the same click handlers this plan reuses). Each task below has a concrete manual and/or automated check before moving to the next.
+**Testing approach:** At the time this plan was written, the project had no unit-test framework; a `node --test` suite covering the pure modules (`state.js`, `combat.js`, `cards.js`, `decks.js`, `lobbies.js`) was added later (see `tests/`, run via `npm test`) but still does not cover `game.js` itself. Verification for this plan remains manual browser play plus the existing `selfplay_test.mjs` Playwright harness (which exercises the same click handlers this plan reuses). Each task below has a concrete manual and/or automated check before moving to the next.
 
 ---
 
