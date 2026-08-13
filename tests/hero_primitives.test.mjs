@@ -2,8 +2,8 @@
 // These are pure functions — no DOM, no Firebase.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { columnKeys, unitsInColumn } from '../js/combat.js';
-import { unsuppressOnBoard } from '../js/state.js';
+import { columnKeys, unitsInColumn, unitsOnBoard } from '../js/combat.js';
+import { unsuppressOnBoard, getKeywords } from '../js/state.js';
 import { CARDS } from '../js/cards.js';
 
 // Minimal board fixture. Board keys are "row,col" — the column is the SECOND component,
@@ -42,6 +42,29 @@ test('unitsInColumn excludes destroyed units', () => {
   assert.equal(found[0].key, '1,3');
 });
 
+test('unitsOnBoard finds units in any column, unlike unitsInColumn', () => {
+  const state = { board: boardWith({ '0,0': unit('p1'), '3,3': unit('p1') }) };
+  assert.equal(unitsOnBoard(state).length, 2);
+});
+
+test('unitsOnBoard filters by owner and excludes destroyed units, same as unitsInColumn', () => {
+  const state = { board: boardWith({ '0,0': unit('p1'), '1,1': unit('p2'), '2,2': unit('p1', 'destroyed') }) };
+  assert.equal(unitsOnBoard(state).length, 2);
+  assert.equal(unitsOnBoard(state, 'p1').length, 1);
+  assert.equal(unitsOnBoard(state, 'p2').length, 1);
+});
+
+test('getKeywords deduplicates — a unit with innate Guard that also gets granted Guard shows it once', () => {
+  const guardCard = 62; // Bunker Crew — innate Guard (see cards.js)
+  const unitWithGrant = { cardId: guardCard, tempKeywords: [], grantedKeywords: ['Guard'] };
+  assert.deepEqual(getKeywords(unitWithGrant), ['Guard']);
+});
+
+test('getKeywords still returns distinct keywords from different sources untouched', () => {
+  const unitMixed = { cardId: 62, tempKeywords: ['Armor'], grantedKeywords: ['Guard'] };
+  assert.deepEqual(getKeywords(unitMixed), ['Guard', 'Armor']);
+});
+
 test('unsuppressOnBoard clears a suppressed unit and reports the change', () => {
   const board = boardWith({ '1,1': unit('p1', 'suppressed') });
   const { board: after, changed } = unsuppressOnBoard(board, '1,1');
@@ -74,7 +97,9 @@ test('every hero carries an authoritative scope and implemented flag', () => {
     assert.equal(typeof h.implemented, 'boolean', `${h.name} has no implemented flag`);
   }
   assert.equal(heroes.filter(h => h.implemented).length, 12);
-  assert.equal(heroes.filter(h => h.scope === 'column').length, 17);
+  // 14 column / 10 board as of the 2026-08 balance pass — Garrison Commander (99),
+  // Counteroffensive General (101), and Armored Commander (103) moved column -> board.
+  assert.equal(heroes.filter(h => h.scope === 'column').length, 14);
 });
 
 test('implemented heroes cover both scopes, both power types, and all 3 Commons', () => {

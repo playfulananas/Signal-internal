@@ -2,9 +2,9 @@
 // behavior, moved out of an inline <script> tag) plus the open-lobby browser
 // (host a lobby with a fixed map, browse and join others without typing a code).
 import { generateGameCode, initAuth, getDisplayName, setDisplayName,
-         createOpenLobby, removeOpenLobby, subscribeOpenLobbies } from './firebase.js?v=1784654458';
-import { filterStale, sortByNewest, formatWaiting } from './lobbies.js?v=1784654458';
-import { MAPS } from './maps.js?v=1784654458';
+         createOpenLobby, removeOpenLobby, subscribeOpenLobbies } from './firebase.js?v=1786589651';
+import { filterStale, sortByNewest, formatWaiting } from './lobbies.js?v=1786589651';
+import { MAPS } from './maps.js?v=1786589651';
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
@@ -41,6 +41,11 @@ document.getElementById('btn-join-option').addEventListener('click', () => {
 document.getElementById('btn-join').addEventListener('click', () => {
   const code = document.getElementById('code-input').value.trim().toUpperCase();
   if (code.length < 4) return;
+  // Deliberately not pre-checking the code exists here: the host's own lobby write is
+  // itself async, so a fast Join right after Create can race it and produce a false
+  // "not found" for a code that's actually about to be valid. game.html's own
+  // "Connecting..." screen has a timeout that surfaces a warning if the code truly
+  // never resolves, without this race.
   window.location.href = `game.html?game=${code}&role=p2`;
 });
 

@@ -1,6 +1,6 @@
-import { CARD_BY_ID } from './cards.js?v=1786495151';
-import { getKeywords, maxArmorHits, discountFor, fuelCapOf, rotatedDir } from './state.js?v=1786495151';
-import { getTerrain } from './maps.js?v=1786495151';
+import { CARD_BY_ID } from './cards.js?v=1786589651';
+import { getKeywords, maxArmorHits, discountFor, fuelCapOf, rotatedDir } from './state.js?v=1786589651';
+import { getTerrain } from './maps.js?v=1786589651';
 
 const TERRAIN_SHORT = { plains: 'P', forest: 'F', water: 'W', desert: 'D', city: 'C' };
 
@@ -73,11 +73,10 @@ export function renderBoard(state, selectedTileKey, validDropKeys, changedKeys =
           }
           tile.appendChild(track);
 
-          // Hover tooltip
-          const tooltip = document.createElement('div');
-          tooltip.className = 'objective-tooltip';
-          if (c >= 2) { tooltip.style.right = '100px'; tooltip.style.left = 'auto'; }
-          else         { tooltip.style.left  = '100px'; tooltip.style.right = 'auto'; }
+          // Hover tooltip — rendered through the shared #floating-tip (position:fixed,
+          // body-level) instead of a tile-local absolute div, so it isn't clipped/scaled
+          // by fitBoardArea's transform on #board-area-inner. See game.js's delegated
+          // [data-tip]/[data-tip-html] mouseover listener.
           const ctrlLabel = ctrl
             ? `<div class="obj-ctrl ${ctrl}">${ctrl.toUpperCase()} CONTROLS</div>`
             : `<div class="obj-ctrl neutral">NEUTRAL</div>`;
@@ -86,8 +85,7 @@ export function renderBoard(state, selectedTileKey, validDropKeys, changedKeys =
             const isCurrent = (i + 1) === obj.level;
             return `<div class="obj-tt-level${isCurrent ? ' current' : ''}"><span class="obj-tt-lnum">L${i+1}</span> ${eff ?? '—'}</div>`;
           }).join('');
-          tooltip.innerHTML = `<div class="obj-tt-name">${objCard.name}</div>${ctrlLabel}${levelHtml}`;
-          tile.appendChild(tooltip);
+          tile.dataset.tipHtml = `<div class="obj-tt-name">${objCard.name}</div>${ctrlLabel}${levelHtml}`;
         }
       }
 

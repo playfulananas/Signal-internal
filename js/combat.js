@@ -1,5 +1,5 @@
-import { CARD_BY_ID } from './cards.js?v=1786495151';
-import { getSideValue, getKeywords, attackBeats, applyHit, oppositeDir, unsuppressOnBoard, drawCards } from './state.js?v=1786495151';
+import { CARD_BY_ID } from './cards.js?v=1786589651';
+import { getSideValue, getKeywords, attackBeats, applyHit, oppositeDir, unsuppressOnBoard, drawCards } from './state.js?v=1786589651';
 
 // Orthogonal directions and their row/col offsets.
 const DIRS = ["n", "e", "s", "w"];
@@ -51,6 +51,16 @@ export function unitsInColumn(state, col, owner = null) {
   });
 }
 
+// Live units anywhere on the board — board-scoped equivalent of unitsInColumn, for Heroes
+// like Garrison Commander (99) whose targeting isn't restricted to their own column.
+export function unitsOnBoard(state, owner = null) {
+  return Object.entries(state.board).flatMap(([key, unit]) => {
+    if (!unit || unit.state === 'destroyed') return [];
+    if (owner && unit.owner !== owner) return [];
+    return [{ key, unit }];
+  });
+}
+
 // ── Hero passives — triggered on unit placement ─────────────────────────────
 // Objective Marshal (94), Infantry Commander (104), Combined Arms General (109), and
 // Conventional Warfare Commander (110) each grant "+1 all sides until your next turn" to
@@ -95,20 +105,19 @@ export function checkHeroPassivesOnPlace(s, active, col, key, card) {
 }
 
 // ── Hero passive — Counteroffensive General (101) ───────────────────────────
-// "The first friendly Unit in this Hero's column to have Suppression removed each turn
-// gets +1 all sides until END OF TURN" — tempSideBonus (cleared by endTurn for everyone),
-// not grantedSideBonus like the "until your next turn" passives above.
-// Owner is read from the healed unit itself, not passed in — Combined Arms Doctrine (78)
-// removes Suppression from every suppressed unit on the board regardless of owner, so the
-// two players' Counteroffensive Generals (if both deployed) must be checked independently.
-function checkCounteroffensiveGeneral(s, key) {
+// "The first friendly Unit that gets Suppressed each turn gets +1 all sides until END OF
+// TURN" — tempSideBonus (cleared by endTurn for everyone), not grantedSideBonus like the
+// "until your next turn" passives above. Board-wide (no column gate) — call this after any
+// hit that transitions a unit's state to 'suppressed' (see applyHitAndCheckHero below).
+// Owner is read from the hit unit itself, not passed in, so each player's own
+// Counteroffensive General (if deployed) is checked independently.
+export function checkCounteroffensiveGeneral(s, key) {
   const unit = s.board[key];
   if (!unit) return { state: s, log: [] };
   const owner = unit.owner;
   const ps = s[owner];
   const zones = ps.heroZones ?? [null, null, null, null];
-  const [, col] = tileCoords(key);
-  if (zones[col] !== 101 || (ps.heroTriggeredThisTurn ?? {})[101]) return { state: s, log: [] };
+  if (!zones.includes(101) || (ps.heroTriggeredThisTurn ?? {})[101]) return { state: s, log: [] };
 
   const card = CARD_BY_ID[unit.cardId];
   const state = {
@@ -116,19 +125,19 @@ function checkCounteroffensiveGeneral(s, key) {
     board: { ...s.board, [key]: { ...unit, tempSideBonus: (unit.tempSideBonus || 0) + 1 } },
     [owner]: { ...ps, heroTriggeredThisTurn: { ...ps.heroTriggeredThisTurn, 101: true } },
   };
-  return { state, log: [`${CARD_BY_ID[101].name}: ${card?.name ?? 'unit'} +1 all sides (end of turn) — first Suppression removed this turn`] };
+  return { state, log: [`${CARD_BY_ID[101].name}: ${card?.name ?? 'unit'} +1 all sides (end of turn) — first Suppression this turn`] };
 }
 
 // Single funnel for "remove Suppression from this tile" so every command/Hero power that
 // heals Suppression (Recovery Officer, Field Medic, Tactical Withdrawal... — see call sites
-// in game.js) automatically checks Counteroffensive General instead of needing its own
-// inline hook. Mirrors unsuppressOnBoard's own "one hook point instead of four" comment in
-// state.js, extended to actually cover the Hero passive it was written for.
+// in game.js) shares one hook point instead of four inline call sites. Mirrors
+// unsuppressOnBoard's own comment in state.js. No longer checks Counteroffensive General —
+// that passive now triggers on Suppression being applied, not removed (see
+// checkCounteroffensiveGeneral call sites in game.js/combat.js instead).
 export function removeSuppression(s, key) {
   const { board, changed } = unsuppressOnBoard(s.board, key);
   if (!changed) return { state: s, log: [], changed: false };
-  const { state, log } = checkCounteroffensiveGeneral({ ...s, board }, key);
-  return { state, log, changed: true };
+  return { state: { ...s, board }, log: [], changed: true };
 }
 
 // ── Unit on-play abilities ───────────────────────────────────────────────────

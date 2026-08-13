@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <title>SIGNAL — Digital Prototype</title>
-  <link rel="stylesheet" href="css/game.css?v=1786495151">
+  <link rel="stylesheet" href="css/game.css?v=1786589651">
 </head>
 <body>
 
@@ -15,6 +15,9 @@
        own rounded-corner/name-truncation clipping). Any element with a data-tip attribute
        (.bc-ability-pip, .hp-pip) shows its text here on hover — see fitAndTooltips in game.js. -->
   <div id="floating-tip" class="floating-tip"></div>
+
+  <!-- Turn-start toast — brief centered banner, flashes then fades. See showTurnToast in game.js. -->
+  <div id="turn-toast" class="turn-toast"></div>
 
   <!-- ── LOBBY ── -->
   <div id="lobby">
@@ -314,7 +317,7 @@
 
   </div>
 
-  <script type="module" src="./js/game.js?v=1786495151"></script>
+  <script type="module" src="./js/game.js?v=1786589651"></script>
 
 </body>
 </html>

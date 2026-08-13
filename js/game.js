@@ -1,4 +1,4 @@
-import { CARD_BY_ID, CARDS } from './cards.js?v=1786539470';
+import { CARD_BY_ID, CARDS } from './cards.js?v=1786589651';
 import {
   createInitialState,
   startOfTurn,
@@ -18,14 +18,14 @@ import {
   discountFor,
   consumeDiscounts,
   addDiscount,
-} from './state.js?v=1786539470';
-import { getAttackableTargets, resolveSingleAttack, tileKey, unitsInColumn, checkHeroPassivesOnPlace, removeSuppression, checkUnitOnPlayAbility } from './combat.js?v=1786539470';
-import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1786539470';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1786539470';
-import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1786539470';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn } from './debug.js?v=1786539470';
-import { STARTER_DECKS, loadCustomDecks, validateDeck } from './decks.js?v=1786539470';
-import { runBotTurn } from './bot_player.js?v=1786539470';
+} from './state.js?v=1786589651';
+import { getAttackableTargets, resolveSingleAttack, tileKey, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkUnitOnPlayAbility, checkCounteroffensiveGeneral } from './combat.js?v=1786589651';
+import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1786589651';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1786589651';
+import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1786589651';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn } from './debug.js?v=1786589651';
+import { STARTER_DECKS, loadCustomDecks, validateDeck } from './decks.js?v=1786589651';
+import { runBotTurn } from './bot_player.js?v=1786589651';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
@@ -112,8 +112,30 @@ function tryPushP2Ready() {
     mapId:  p1LobbyData.mapId,
     p2Deck: p2DeckIds,
     p2Heroes: p2HeroIds,
+  }).catch(err => {
+    console.error('tryPushP2Ready failed', err);
+    document.getElementById('waiting-msg').textContent = 'Connection error — could not reach the host. Check your connection and reload.';
   });
   document.getElementById('waiting-msg').textContent = 'Waiting for host to start the game...';
+  armWaitingTimeout('waiting-msg', 'Still waiting on the host — this is taking longer than usual. Check your connection, or ask them to reload.');
+}
+
+// Waiting/Connecting screens have no explicit failure path — a dropped or slow Firebase
+// write previously just left the message on screen forever with nothing telling the player
+// something's wrong. This doesn't retry (no safe way to know if the original write actually
+// landed), it just surfaces that the wait has gone on longer than a normal connection should
+// take, so a stuck player knows to check their connection or reload instead of waiting blind.
+let waitingTimeoutTimer = null;
+function armWaitingTimeout(msgElId, timeoutText, ms = 20000) {
+  clearTimeout(waitingTimeoutTimer);
+  waitingTimeoutTimer = setTimeout(() => {
+    if (state) return; // already started, nothing to warn about
+    const el = document.getElementById(msgElId);
+    if (el) el.textContent = timeoutText;
+  }, ms);
+}
+function disarmWaitingTimeout() {
+  clearTimeout(waitingTimeoutTimer);
 }
 
 document.getElementById('deck-grid').addEventListener('click', e => {
@@ -129,6 +151,10 @@ document.getElementById('deck-grid').addEventListener('click', e => {
     document.getElementById('lobby').style.display = 'none';
     document.getElementById('waiting-screen').style.display = 'flex';
     document.getElementById('waiting-msg').textContent = 'Connecting...';
+    // Covers a bad/expired code too, not just a slow connection — if the host's lobby data
+    // never arrives (p1LobbyData stays null), tryPushP2Ready keeps no-op'ing forever with
+    // nothing else telling the player anything is wrong.
+    armWaitingTimeout('waiting-msg', 'Still connecting — double-check the code with the host, or check your connection.');
     tryPushP2Ready(); // fires immediately if P1 lobby data already arrived; otherwise waits
     return;
   }
@@ -171,10 +197,14 @@ document.getElementById('deck-grid').addEventListener('click', e => {
 // host picks the map here) and directly from the deck-grid handler when the
 // map was already fixed by the open-lobby browser (urlMapId is set).
 function beginHostWait(mapId) {
-  pushState(gameId, { _phase: 'lobby', p1Deck: p1DeckIds, p1Heroes: p1HeroIds, mapId });
+  pushState(gameId, { _phase: 'lobby', p1Deck: p1DeckIds, p1Heroes: p1HeroIds, mapId }).catch(err => {
+    console.error('beginHostWait failed', err);
+    document.getElementById('waiting-msg').textContent = 'Connection error — could not create the lobby. Check your connection and reload.';
+  });
   document.getElementById('lobby').style.display = 'none';
   document.getElementById('waiting-screen').style.display = 'flex';
   document.getElementById('waiting-msg').textContent = 'Waiting for Player 2 to choose their deck...';
+  armWaitingTimeout('waiting-msg', 'Still waiting on Player 2 — this is taking longer than usual. Make sure they have the right code and a working connection.');
   subscribeState(gameId, data => {
     if (state) return; // already started
     if (data._phase !== 'ready' || !data.p2Deck) return;
@@ -214,6 +244,13 @@ const myRole   = params.get('role') ?? null; // 'p1' | 'p2' | null for local pla
 const isAiMode = params.get('ai') === '1';
 const urlMapId = params.get('mapId') ?? null; // set when this game came from the open-lobby browser — the map was already chosen there, so skip the map-picker
 let myLastPushId = null;
+
+// Board grid itself stays fixed/unrotated for both players (see renderBoard's comment in
+// ui.js) — this class only makes the HUD framing around it (Hero Zone strip position, unit
+// colors) feel viewer-relative for an online P2, without touching combat math or board
+// coordinates. Local hotseat (myRole === null) keeps literal P1/P2 framing since both
+// players share one screen there.
+if (isOnline && myRole === 'p2') document.body.classList.add('viewer-p2');
 
 // ── Game state ────────────────────────────────────────────────────────────────
 let state = null;
@@ -444,7 +481,8 @@ function startGame(p1Ids, p2Ids, mapId, p1Heroes = [], p2Heroes = []) {
     document.getElementById('waiting-screen').style.display = 'none';
     showMulligan('YOUR OPENING HAND', s.p1.hand, indices => {
       s = applyMulligan(s, 'p1', indices);
-      s = { ...s, p1: drawCards(s.p1, 1) };
+      // First player draws 4, not 5 — no post-mulligan bonus draw for P1 (see P2's own
+      // mulligan branches below/at the online P2 handler, which do get the +1).
       finishStartGame(s, mapId);
     });
     return;
@@ -454,7 +492,7 @@ function startGame(p1Ids, p2Ids, mapId, p1Heroes = [], p2Heroes = []) {
     document.getElementById('lobby').style.display = 'none';
     showMulligan('P1 — OPENING HAND', s.p1.hand, indices1 => {
       s = applyMulligan(s, 'p1', indices1);
-      s = { ...s, p1: drawCards(s.p1, 1) };
+      // First player draws 4, not 5 — no post-mulligan bonus draw for P1.
       if (isAiMode) {
         s = { ...s, p2: drawCards(s.p2, 1) }; // bot keeps its opening hand
         finishStartGame(s, mapId);
@@ -473,6 +511,7 @@ function startGame(p1Ids, p2Ids, mapId, p1Heroes = [], p2Heroes = []) {
 }
 
 function finishStartGame(s, mapId) {
+  disarmWaitingTimeout();
   document.getElementById('lobby').style.display = 'none';
   document.getElementById('waiting-screen').style.display = 'none';
   document.getElementById('game-area').style.display = 'flex';
@@ -554,26 +593,32 @@ function fitBoardArea() {
   const sideWidths = (previewPanel?.offsetWidth ?? 0) + (statsPanel?.offsetWidth ?? 0) + (logPanel?.offsetWidth ?? 0) + rowGap * 3;
   // Not boardRow.clientWidth — .game-layout/.board-row are align-items:center, sized to
   // their own content rather than stretched to the viewport, so that would be circular
-  // (board-row's width already depends on board-area's current width). window.innerWidth
-  // is the true budget: body/.game-layout carry no horizontal padding.
-  const availableWidth = window.innerWidth - sideWidths - 24; // small safety margin
+  // (board-row's width already depends on board-area's current width). document.
+  // documentElement.clientWidth is the true budget: body/.game-layout carry no horizontal
+  // padding, and clientWidth (unlike window.innerWidth) stays consistent under browser
+  // zoom, where innerWidth/innerHeight can drift from the actual CSS-pixel layout box.
+  const viewportWidth = document.documentElement.clientWidth;
+  const viewportHeight = document.documentElement.clientHeight;
+  const availableWidth = viewportWidth - sideWidths - 24; // small safety margin
 
-  // Reserve exactly what the hand needs right now. bottomRow.scrollHeight looked circular
-  // on a first attempt (game-layout/bottom-row stretch to their widest child, which used to
-  // be board-row's OWN width — i.e. what this function was computing), but availableWidth
-  // above is derived from window.innerWidth, not from board-row's current rendered width,
-  // so that circularity doesn't actually exist: the hand's wrap width — and therefore its
-  // wrapped height — never depends on the board's scale. A FIXED reserve (tried first) broke
-  // on any hand that wraps past one row (12+ cards after several turns of draw effects):
-  // the board claimed more height than was actually free, and the hand scrolled off-screen
-  // instead of just needing its own scrollbar.
-  const bottomRow = document.querySelector('.bottom-row');
+  // Reserve exactly what the hand needs right now — measured from .hand-area, not
+  // .bottom-row. .bottom-row has `flex: 1` in the column layout (see game.css), so it
+  // stretches to fill whatever's left over from .board-row's CURRENT height; its own
+  // scrollHeight then reports that stretched box size, not the hand's actual content
+  // height, which starves the board on every call (each call inherits the previous call's
+  // leftover space instead of the hand's true minimum). .hand-area is a plain flex item
+  // inside .bottom-row with no flex-grow of its own, so it always sizes to its real content
+  // regardless of how tall .bottom-row has been stretched — not circular. A FIXED reserve
+  // (tried before .bottom-row.scrollHeight) broke on any hand that wraps past one row
+  // (12+ cards after several turns of draw effects): the board claimed more height than was
+  // actually free, and the hand scrolled off-screen instead of just needing its own scrollbar.
+  const handArea = document.querySelector('.hand-area');
   const layout = document.querySelector('.game-layout');
   const layoutStyle = layout ? getComputedStyle(layout) : null;
   const layoutGap = layoutStyle ? (parseFloat(layoutStyle.gap) || 0) : 8;
   const layoutPadV = layoutStyle ? (parseFloat(layoutStyle.paddingTop) || 0) + (parseFloat(layoutStyle.paddingBottom) || 0) : 20;
-  const reservedBottom = Math.max(bottomRow?.scrollHeight ?? 0, 170);
-  const availableHeight = window.innerHeight - reservedBottom - layoutGap - layoutPadV;
+  const reservedBottom = Math.max(handArea?.scrollHeight ?? 0, 170);
+  const availableHeight = viewportHeight - reservedBottom - layoutGap - layoutPadV;
 
   // Clamp scale to a sane range — 0.5 keeps it legible on a tiny window, 2 keeps tiles
   // from becoming absurdly large on an ultrawide monitor with a narrow browser height.
@@ -594,6 +639,24 @@ function fitBoardArea() {
   boardRow.style.height = `${naturalH * scale}px`;
 }
 window.addEventListener('resize', fitBoardArea);
+// Browser zoom doesn't reliably fire a plain 'resize' event in every browser, but does
+// fire on visualViewport — without this, zooming can leave the board fit stale until the
+// next redraw()-triggering action.
+window.visualViewport?.addEventListener('resize', fitBoardArea);
+
+let turnToastTimer = null;
+// Brief centered banner flash on turn start, Hearthstone-style — separate from the
+// persistent #turn-display text, which stays on screen for the whole turn.
+function showTurnToast(text) {
+  const toast = document.getElementById('turn-toast');
+  if (!toast) return;
+  clearTimeout(turnToastTimer);
+  toast.textContent = text;
+  toast.classList.remove('show');
+  void toast.offsetWidth; // restart the CSS animation if the toast fires again quickly
+  toast.classList.add('show');
+  turnToastTimer = setTimeout(() => toast.classList.remove('show'), 1200);
+}
 
 function redraw() {
   if (!state) return;
@@ -778,7 +841,10 @@ function receiveRemoteState(remoteState) {
   // The opponent's End Turn handler can't prompt us, so an inbound state that hands us the
   // turn is where this client runs its own Hero Phase. runHeroPhase re-checks lastObjLevel,
   // so arriving at the same state twice can't double-deploy.
-  if (isOnline && !gameOver && normalized.initiative === myRole) runHeroPhase(myRole);
+  if (isOnline && !gameOver && normalized.initiative === myRole) {
+    showTurnToast('YOUR TURN');
+    runHeroPhase(myRole);
+  }
 }
 
 function showEndScreen(winner) {
@@ -800,9 +866,9 @@ function heroTargetKeys(s, role, col, hero) {
   switch (hero.id) {
     case 92: // Tactical Commander — any friendly unit in the column
       return unitsInColumn(s, col, role).map(u => u.key);
-    case 99: // Garrison Commander — friendly unit on or adjacent to an Objective
-      return unitsInColumn(s, col, role)
-        .filter(({ key }) => s.objectives[key] || getAdjacentKeys(key).some(k => s.objectives[k]))
+    case 99: // Garrison Commander — friendly unit adjacent to (not on) an Objective, board-wide
+      return unitsOnBoard(s, role)
+        .filter(({ key }) => getAdjacentKeys(key).some(k => s.objectives[k]))
         .map(u => u.key);
     case 100: // Recovery Officer — only a suppressed friendly unit is worth targeting
       return unitsInColumn(s, col, role).filter(({ unit }) => unit.state === 'suppressed').map(u => u.key);
@@ -822,14 +888,14 @@ function applyHeroPower(s, role, col, hero, targetKey) {
       log.push(`${hero.name}: draw 1 card`);
       break;
 
-    case 103: // Armored Commander — next Tank in THIS column costs 2 less, min 1
-      s = { ...s, [role]: addDiscount(s[role], { appliesTo: 'Tank', column: col, amount: 2, min: 1 }) };
-      log.push(`${hero.name}: next Tank in column ${col + 1} costs 2 less Fuel (min 1)`);
+    case 103: // Armored Commander — next Tank anywhere on board costs 3 less
+      s = { ...s, [role]: addDiscount(s[role], { appliesTo: 'Tank', column: null, amount: 3, min: 0 }) };
+      log.push(`${hero.name}: next Tank costs 3 less Fuel`);
       break;
 
-    case 107: // Command Specialist — next Command costs 2 less, min 1 (board-wide)
-      s = { ...s, [role]: addDiscount(s[role], { appliesTo: 'command', column: null, amount: 2, min: 1 }) };
-      log.push(`${hero.name}: next Command costs 2 less Fuel (min 1)`);
+    case 107: // Command Specialist — next Command costs 2 less (board-wide)
+      s = { ...s, [role]: addDiscount(s[role], { appliesTo: 'command', column: null, amount: 2, min: 0 }) };
+      log.push(`${hero.name}: next Command costs 2 less Fuel`);
       break;
 
     case 92: { // Tactical Commander — +1 all sides this turn
@@ -1147,12 +1213,18 @@ document.getElementById('board').addEventListener('click', e => {
     const defOwner = unit.owner;
     pendingArtyHitCount--;
     uiState = pendingArtyHitCount > 0 ? 'arty-targeting' : 'idle';
-    const newS = {
+    let newS = {
       ...state, board: newBoard, pendingArtyHits: pendingArtyHitCount,
       [defOwner]: { ...state[defOwner], hq: state[defOwner].hq - hqDamage },
     };
     const stateLabel = finalUnit === null ? 'Destroyed' : newUnit.state === 'suppressed' ? 'Suppressed' : 'armor absorbed';
-    commitState(newS, [`Artillery Position: ${CARD_BY_ID[unit.cardId]?.name} → ${stateLabel}`]);
+    const log = [`Artillery Position: ${CARD_BY_ID[unit.cardId]?.name} → ${stateLabel}`];
+    if (newUnit.state === 'suppressed') {
+      const coGen = checkCounteroffensiveGeneral(newS, clickedKey);
+      newS = coGen.state;
+      log.push(...coGen.log);
+    }
+    commitState(newS, log);
     checkWin();
     return;
   }
@@ -1355,6 +1427,14 @@ document.getElementById('board').addEventListener('click', e => {
     const { state: afterMissions, log: missionLog } = checkActiveMissions(newState, attacker, missionCtx);
     newState = afterMissions;
 
+    // Counteroffensive General (101) — first friendly unit to get Suppressed this turn
+    let coGenLog = [];
+    if (newState.board[clickedKey]?.state === 'suppressed') {
+      const coGen = checkCounteroffensiveGeneral(newState, clickedKey);
+      newState = coGen.state;
+      coGenLog = coGen.log;
+    }
+
     if (isDoubleAttack && attackCount < 2 && postAttackTargets.length > 0) {
       uiState = "targeting";
       pendingAttackerKey = attackerKey;
@@ -1363,7 +1443,7 @@ document.getElementById('board').addEventListener('click', e => {
       pendingAttackerKey = null;
     }
 
-    commitState(newState, [...result.logEntries, ...overrunLog, ...missionLog, ...bonusLog]);
+    commitState(newState, [...result.logEntries, ...overrunLog, ...missionLog, ...bonusLog, ...coGenLog]);
     checkWin();
     return;
   }
@@ -1777,6 +1857,11 @@ function applyCommandEffect(commandId, targetKey) {
       s = { ...s, board: { ...s.board, [targetKey]: suppressed },
             [unit.owner]: { ...s[unit.owner], hq: s[unit.owner].hq - hqDmg } };
       log.push(`${card.name}: ${unitName} Armor stripped + Suppressed (${hqDmg} HQ damage)`);
+      if (suppressed.state === 'suppressed') {
+        const coGen = checkCounteroffensiveGeneral(s, targetKey);
+        s = coGen.state;
+        log.push(...coGen.log);
+      }
       break;
     }
     case 17: { // Blitzkrieg Order — Tank attacks immediately (enter attack targeting)
@@ -1814,15 +1899,21 @@ function applyCommandEffect(commandId, targetKey) {
     case 20: { // Air Strike — 1 hit per friendly Aircraft
       const count = Object.values(s.board).filter(u => u && u.owner === active && u.state !== 'destroyed' && CARD_BY_ID[u.cardId]?.cls === 'Aircraft').length;
       if (count === 0) { log.push(`${card.name}: no friendly Aircraft on board`); break; }
-      let tgt = unit; let dmg = 0;
+      let tgt = unit; let dmg = 0; let becameSuppressed = false;
       for (let i = 0; i < count && tgt; i++) {
         const { newUnit, hqDamage } = applyHit(tgt);
         dmg += hqDamage;
+        if (newUnit.state === 'suppressed') becameSuppressed = true;
         tgt = newUnit?.state === 'destroyed' ? null : newUnit;
       }
       s = { ...s, board: { ...s.board, [targetKey]: tgt },
             [unit.owner]: { ...s[unit.owner], hq: s[unit.owner].hq - dmg } };
       log.push(`${card.name}: ${count} hit(s) on ${unitName} — ${dmg} HQ damage`);
+      if (becameSuppressed) {
+        const coGen = checkCounteroffensiveGeneral(s, targetKey);
+        s = coGen.state;
+        log.push(...coGen.log);
+      }
       break;
     }
     case 49: { // Smoke Screen — give Guard until owner's next turn
@@ -1870,15 +1961,21 @@ function applyCommandEffect(commandId, targetKey) {
     case 79: { // Suppressing Fire — 1 hit per friendly Infantry
       const count = Object.values(s.board).filter(u => u && u.owner === active && u.state !== 'destroyed' && CARD_BY_ID[u.cardId]?.cls === 'Infantry').length;
       if (count === 0) { log.push(`${card.name}: no friendly Infantry on board`); break; }
-      let tgt = unit; let dmg = 0;
+      let tgt = unit; let dmg = 0; let becameSuppressed = false;
       for (let i = 0; i < count && tgt; i++) {
         const { newUnit, hqDamage } = applyHit(tgt);
         dmg += hqDamage;
+        if (newUnit.state === 'suppressed') becameSuppressed = true;
         tgt = newUnit?.state === 'destroyed' ? null : newUnit;
       }
       s = { ...s, board: { ...s.board, [targetKey]: tgt },
             [unit.owner]: { ...s[unit.owner], hq: s[unit.owner].hq - dmg } };
       log.push(`${card.name}: ${count} hit(s) on ${unitName} — ${dmg} HQ damage`);
+      if (becameSuppressed) {
+        const coGen = checkCounteroffensiveGeneral(s, targetKey);
+        s = coGen.state;
+        log.push(...coGen.log);
+      }
       break;
     }
     default: break;
@@ -2118,6 +2215,10 @@ document.getElementById('btn-end-turn').addEventListener('click', () => {
   commitState(newState, turnLog);
   checkWin();
 
+  // Local hotseat only — both players share this screen, so flash whose turn it now is.
+  // Online is handled separately in receiveRemoteState (fires on the receiving client only).
+  if (!isOnline && !gameOver) showTurnToast(`${newState.initiative.toUpperCase()}'S TURN`);
+
   // Hero Phase for the player whose turn just began.
   if (!gameOver) runHeroPhase(newState.initiative);
 
@@ -2283,15 +2384,19 @@ for (const role of ['p1', 'p2']) {
   strip?.addEventListener('mouseleave', hideCardPreview);
 }
 
-// ── Floating tooltip — [data-tip] pips (ability icons on hand/board cards, Hero powers) ──
-// Delegated at the document level so it works for every card everywhere without each
-// card's own overflow:hidden clipping it (see .floating-tip comment in game.css).
+// ── Floating tooltip — [data-tip]/[data-tip-html] elements (ability icons on hand/board
+// cards, Hero powers, Objective tiles) — delegated at the document level so it works for
+// every card/tile everywhere without each one's own overflow:hidden (or, for the board,
+// fitBoardArea's transform: scale()) clipping or shrinking it (see .floating-tip comment
+// in game.css). data-tip is plain text; data-tip-html allows richer markup (Objective
+// tiles' name/controller/level breakdown).
 {
   const tip = document.getElementById('floating-tip');
   document.addEventListener('mouseover', e => {
-    const pip = e.target.closest('[data-tip]');
+    const pip = e.target.closest('[data-tip], [data-tip-html]');
     if (!pip) return;
-    tip.textContent = pip.dataset.tip;
+    if (pip.dataset.tipHtml) tip.innerHTML = pip.dataset.tipHtml;
+    else tip.textContent = pip.dataset.tip;
     tip.style.display = 'block';
     const r = pip.getBoundingClientRect();
     const tipRect = tip.getBoundingClientRect();
@@ -2305,7 +2410,7 @@ for (const role of ['p1', 'p2']) {
     tip.style.left = `${left}px`;
   });
   document.addEventListener('mouseout', e => {
-    if (e.target.closest('[data-tip]')) tip.style.display = 'none';
+    if (e.target.closest('[data-tip], [data-tip-html]')) tip.style.display = 'none';
   });
 }
 

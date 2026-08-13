@@ -1,11 +1,12 @@
 // Unit tests for Hero Phase turn logic added 2026-08-11: the reinforcement arrival lock,
 // the Logistics Chief Fuel cap, the four "first Unit played this turn" passives
 // (Objective Marshal 94, Infantry Commander 104, Combined Arms General 109,
-// Conventional Warfare Commander 110), and Counteroffensive General (101, wired via
-// removeSuppression — the shared suppression-removal funnel). Run: node --test tests/
+// Conventional Warfare Commander 110), and Counteroffensive General (101 — board-wide,
+// fires on Suppression being applied; see checkCounteroffensiveGeneral in combat.js).
+// Run: node --test tests/
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { checkHeroPassivesOnPlace, removeSuppression } from '../js/combat.js';
+import { checkHeroPassivesOnPlace, removeSuppression, checkCounteroffensiveGeneral } from '../js/combat.js';
 import { fuelCapOf } from '../js/state.js';
 import { CARD_BY_ID } from '../js/cards.js';
 
@@ -124,15 +125,19 @@ test('multiple column Heroes can stack their bonus onto the same Unit', () => {
   assert.equal(after.board['0,0'].grantedSideBonus, 2);
 });
 
-// ── removeSuppression / Counteroffensive General (101) ──────────────────────
+// ── removeSuppression ─────────────────────────────────────────────────────────
+// No longer checks Counteroffensive General (101) — that passive moved to the
+// Suppression-APPLYING side (see checkCounteroffensiveGeneral tests below), since its
+// ability was redesigned from "first Suppression removed" to "first Suppression applied".
 const suppressedUnit = (owner = 'p1') => ({ cardId: 1, owner, state: 'suppressed', armorHits: 0, tempSideBonus: 0 });
 
-test('removeSuppression clears Suppression and reports changed:true with no Hero deployed', () => {
-  const s = { p1: playerState(), board: boardWith({ '0,0': suppressedUnit() }) };
+test('removeSuppression clears Suppression and reports changed:true, with no Hero side-effects', () => {
+  const s = { p1: playerState({ heroZones: [101, null, null, null] }), board: boardWith({ '0,0': suppressedUnit() }) };
   const { state: after, log, changed } = removeSuppression(s, '0,0');
   assert.equal(changed, true);
   assert.equal(after.board['0,0'].state, 'normal');
-  assert.deepEqual(log, []);
+  assert.deepEqual(log, [], 'removeSuppression itself never triggers Counteroffensive General anymore');
+  assert.equal(after.board['0,0'].tempSideBonus, 0, 'unchanged — Counteroffensive General only fires from the Suppress-applying side now');
 });
 
 test('removeSuppression is a no-op (changed:false) on an already-healthy unit', () => {
@@ -143,41 +148,53 @@ test('removeSuppression is a no-op (changed:false) on an already-healthy unit', 
   assert.equal(after, s, 'must return the same state reference — nothing to update');
 });
 
-test('Counteroffensive General grants +1 all sides (tempSideBonus) when its column heals', () => {
+// ── checkCounteroffensiveGeneral (101) ───────────────────────────────────────
+// Board-wide (2026-08 balance pass, was column-gated) and now called from the Suppression-
+// APPLYING side (game.js, after any hit that transitions a unit's state to 'suppressed'),
+// not from removeSuppression. The function itself doesn't know or care whether the state
+// change was real — callers gate the call on the transition; checkCounteroffensiveGeneral
+// only re-checks "is 101 deployed anywhere in this owner's heroZones, and hasn't fired yet
+// this turn".
+test('Counteroffensive General grants +1 all sides (tempSideBonus) to a newly-suppressed unit', () => {
   const s = { p1: playerState({ heroZones: [101, null, null, null] }), board: boardWith({ '0,0': suppressedUnit() }) };
-  const { state: after, log, changed } = removeSuppression(s, '0,0');
-  assert.equal(changed, true);
-  assert.equal(after.board['0,0'].state, 'normal');
+  const { state: after, log } = checkCounteroffensiveGeneral(s, '0,0');
   assert.equal(after.board['0,0'].tempSideBonus, 1, 'uses tempSideBonus (end of turn), not grantedSideBonus');
   assert.equal(log.length, 1);
   assert.equal(after.p1.heroTriggeredThisTurn[101], true);
 });
 
+test('Counteroffensive General is board-wide — fires regardless of which column the Hero sits in', () => {
+  // Old behavior required the Hero's own column to match; scope changed column -> board.
+  const s = { p1: playerState({ heroZones: [null, 101, null, null] }), // column 1
+    board: boardWith({ '0,0': suppressedUnit() }) }; // suppressed unit is column 0
+  const { log } = checkCounteroffensiveGeneral(s, '0,0');
+  assert.equal(log.length, 1, 'column no longer gates this passive');
+});
+
 test('Counteroffensive General only fires once per turn', () => {
   const s = { p1: playerState({ heroZones: [101, null, null, null], heroTriggeredThisTurn: { 101: true } }),
     board: boardWith({ '0,0': suppressedUnit() }) };
-  const { log } = removeSuppression(s, '0,0');
+  const { log } = checkCounteroffensiveGeneral(s, '0,0');
   assert.deepEqual(log, []);
 });
 
-test('Counteroffensive General does not fire if deployed in a different column', () => {
-  const s = { p1: playerState({ heroZones: [null, 101, null, null] }), // column 1, healed unit is column 0
-    board: boardWith({ '0,0': suppressedUnit() }) };
-  const { log } = removeSuppression(s, '0,0');
+test('Counteroffensive General does not fire when not deployed', () => {
+  const s = { p1: playerState(), board: boardWith({ '0,0': suppressedUnit() }) };
+  const { log } = checkCounteroffensiveGeneral(s, '0,0');
   assert.deepEqual(log, []);
 });
 
-test('Counteroffensive General checks the healed unit\'s own owner, not a fixed player', () => {
-  // Reproduces the Combined Arms Doctrine case: it heals both players' units in one pass.
-  // p2 has Counteroffensive General; a p1 unit healed in the same column must NOT trigger it.
+test('Counteroffensive General checks the affected unit\'s own owner, not a fixed player', () => {
+  // A command that suppresses units on both sides (e.g. Combined Arms Doctrine-style) must
+  // check each owner's own Hero independently, not attribute the trigger to whoever acted.
   const s = {
     p1: playerState({ heroZones: [null, null, null, null] }),
     p2: playerState({ heroZones: [101, null, null, null] }),
     board: boardWith({ '0,0': suppressedUnit('p1'), '1,0': suppressedUnit('p2') }),
   };
-  const r1 = removeSuppression(s, '0,0'); // p1's unit — p2's Hero must not care
+  const r1 = checkCounteroffensiveGeneral(s, '0,0'); // p1's unit — p2's Hero must not care
   assert.deepEqual(r1.log, []);
-  const r2 = removeSuppression(r1.state, '1,0'); // p2's unit, same column as p2's Hero — fires
+  const r2 = checkCounteroffensiveGeneral(r1.state, '1,0'); // p2's unit — fires for p2
   assert.equal(r2.log.length, 1);
   assert.equal(r2.state.board['1,0'].tempSideBonus, 1);
 });

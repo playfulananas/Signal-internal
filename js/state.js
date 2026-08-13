@@ -49,7 +49,7 @@
 //                                 Persists until explicitly rotated again; never auto-clears.
 // }
 
-import { CARD_BY_ID } from './cards.js?v=1786539470';
+import { CARD_BY_ID } from './cards.js?v=1786589651';
 
 // ── State factory ────────────────────────────────────────────────────────────
 
@@ -345,7 +345,7 @@ export function getKeywords(boardUnit) {
   const base = card?.keyword
     ? (Array.isArray(card.keyword) ? card.keyword : [card.keyword])
     : [];
-  return [...base, ...(boardUnit.tempKeywords || []), ...(boardUnit.grantedKeywords || [])];
+  return [...new Set([...base, ...(boardUnit.tempKeywords || []), ...(boardUnit.grantedKeywords || [])])];
 }
 
 // Heavy Armor → 2, Armor → 1, else → 0.

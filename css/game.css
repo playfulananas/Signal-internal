@@ -182,7 +182,7 @@ body[data-theme="light"] .theme-toggle {
   gap: 8px;
   padding: 10px 0;
   height: 100dvh;
-  overflow: hidden;
+  overflow: auto; /* fallback if fitBoardArea's computed scale is ever off — scroll instead of clip */
 }
 
 /* Board row: preview | stats | board | log */
@@ -343,6 +343,14 @@ body[data-theme="light"] .theme-toggle {
   position: absolute;
   top: 0;
   left: 0;
+}
+/* Viewer-relative framing for online P2 — see the .viewer-p2 comment in game.js. The board
+   grid itself never reorders (it's the single middle child either way); this only flips
+   which Hero Zone strip and stat block render on top vs bottom, so the viewing player's own
+   side always reads as "mine, at the bottom" without touching board coordinates/combat math. */
+body.viewer-p2 .board-area-inner,
+body.viewer-p2 .stats-panel {
+  flex-direction: column-reverse;
 }
 .board {
   display: grid;
@@ -697,24 +705,9 @@ body[data-theme="light"] .theme-toggle {
   z-index: 5;
 }
 
-/* Objective hover tooltip */
-.objective-tooltip {
-  display: none;
-  position: absolute;
-  top: 0;
-  width: 200px;
-  background: var(--bg-deep);
-  border: 1px solid var(--obj-border);
-  border-radius: 4px;
-  padding: 8px;
-  z-index: 200;
-  font-size: 9px;
-  line-height: 1.6;
-  pointer-events: none;
-  white-space: normal;
-}
-.tile:hover .objective-tooltip { display: block; }
-
+/* Objective hover tooltip content — rendered inside the shared #floating-tip via
+   data-tip-html (see ui.js/game.js), not a tile-local element, so these are just content
+   classes now, no positioning/display rules needed here. */
 .obj-tt-name { font-weight: bold; font-size: 11px; color: var(--text); margin-bottom: 4px; }
 .obj-ctrl { font-size: 8px; font-weight: bold; margin-bottom: 5px; font-family: 'Arial Narrow', Arial, sans-serif; letter-spacing: 1px; }
 .obj-ctrl.p1 { color: var(--p1); }
@@ -804,6 +797,37 @@ body[data-theme="light"] .theme-toggle {
   font-weight: normal;
   text-align: left;
   font-family: Arial, sans-serif;
+}
+
+/* ── Turn-start toast — brief attention flash on turn change, Hearthstone-style. ── */
+.turn-toast {
+  display: none;
+  position: fixed;
+  top: 40%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: var(--bg-alt);
+  border: 2px solid var(--gold);
+  border-radius: 6px;
+  padding: 14px 32px;
+  font-size: 22px;
+  font-weight: bold;
+  letter-spacing: 2px;
+  color: var(--gold);
+  z-index: 1500;
+  pointer-events: none;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+  text-align: center;
+}
+.turn-toast.show {
+  display: block;
+  animation: turn-toast-flash 1.2s ease-out forwards;
+}
+@keyframes turn-toast-flash {
+  0%   { opacity: 0; transform: translate(-50%, -50%) scale(0.9); }
+  15%  { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  75%  { opacity: 1; }
+  100% { opacity: 0; }
 }
 
 /* ── Card preview (in preview-panel, far left column) ── */
@@ -1010,6 +1034,9 @@ body[data-theme="light"] .theme-toggle {
   gap: 24px;
   padding: 56px 16px;
   width: 100%;
+  max-height: 100dvh;
+  overflow-y: auto;
+  box-sizing: border-box;
 }
 .lobby-title {
   font-size: 44px;
@@ -1407,4 +1434,26 @@ body[data-theme="light"] .hc-cost-discounted { color: #007a2e; }
 .lobby-row .host { flex: 1; color: var(--text); font-weight: bold; }
 .lobby-row .map { color: var(--text-b); }
 .lobby-row .waiting { color: var(--text-c); font-size: 11px; }
+
+/* ── Viewer-relative unit color, online P2 only ──────────────────────────────
+   See the .viewer-p2 comment in game.js/board-area-inner above. Only the genuine
+   ownership-color consumers are swapped here (board units, Hero Zone cards, objective
+   control tint) — NOT --p1/--p2 themselves, since those are also borrowed as plain UI
+   accents elsewhere (attack-preview hit/block color, hand-card selection glow) that have
+   nothing to do with unit ownership and must stay put. Placed last in the file so these
+   explicit overrides win regardless of dark/light theme source order. */
+body.viewer-p2 .board-card.p1 { border-color: var(--p2); background: var(--p2-bg); }
+body.viewer-p2 .board-card.p2 { border-color: var(--p1); background: var(--p1-bg); }
+body.viewer-p2[data-theme="light"] .board-card.p1 { background: #ffe8e8; border-color: #cc2233; }
+body.viewer-p2[data-theme="light"] .board-card.p2 { background: #e8f0ff; border-color: #2266cc; }
+body.viewer-p2 .hero-placed.p1 { border-color: var(--p2); background: var(--p2-bg); }
+body.viewer-p2 .hero-placed.p2 { border-color: var(--p1); background: var(--p1-bg); }
+body.viewer-p2 .hero-zone-strip.hero-zone-p1 .hero-zone-slot { border-color: color-mix(in srgb, var(--p2) 35%, var(--hint-border)); }
+body.viewer-p2 .hero-zone-strip.hero-zone-p2 .hero-zone-slot { border-color: color-mix(in srgb, var(--p1) 35%, var(--hint-border)); }
+body.viewer-p2 .tile.obj-ctrl-p1 { background: var(--p2-obj-bg) !important; border-color: var(--p2-obj-border) !important; }
+body.viewer-p2 .tile.obj-ctrl-p2 { background: var(--p1-obj-bg) !important; border-color: var(--p1-obj-border) !important; }
+body.viewer-p2 .obj-ctrl-badge.p1,
+body.viewer-p2 .obj-ctrl.p1 { color: var(--p2); }
+body.viewer-p2 .obj-ctrl-badge.p2,
+body.viewer-p2 .obj-ctrl.p2 { color: var(--p1); }
 .lobby-empty { color: var(--text-d); font-size: 11px; text-align: center; padding: 16px 0; }
