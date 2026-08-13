@@ -1,7 +1,7 @@
 // Deck rules, starter decks, validation, and custom-deck persistence.
 // Validation functions are pure (node-testable). localStorage helpers are
 // browser-only — never called at module top level.
-import { CARDS, CARD_BY_ID } from './cards.js?v=1786594831';
+import { CARDS, CARD_BY_ID } from './cards.js?v=1786598601';
 
 export const DECK_RULES = {
   deckSize: 30, // v0.4 fixed deck size (2026-07-30) — replaces the old 50-AP budget model. Exact, not a ceiling.
@@ -45,8 +45,10 @@ export const STARTER_DECKS = [
     flavor: 'Six Armor / Heavy Armor vehicles grind through hits. Supply Runner and Industrial Surge ramp Fuel, Field Medic stabilizes.',
     // Rebuilt to exactly 30 cards (2026-07-30) — Missions stripped in Batch 1 (removed
     // 2x Armored Spearhead, 2x Blitz Assault, 2x Hold the Line), filled back up with
-    // heavier grind pieces on-theme.
-    ids: [63,63, 66,66, 65,65, 39,39, 6,6, 9,9, 5,5, 76,76, 18,18, 45,45, 41,41, 117,117, 116,116, 64,64, 43,43],
+    // heavier grind pieces on-theme. 2x Tank Destroyer (41) swapped for 2x Flak Halftrack
+    // (40) on 2026-08-13 — Tank Destroyer retired along with Breakthrough (unbalanced as
+    // vanilla); Flak Halftrack keeps the slot in-class (Tank) and fills a cost-2 curve gap.
+    ids: [63,63, 66,66, 65,65, 39,39, 6,6, 9,9, 5,5, 76,76, 18,18, 45,45, 40,40, 117,117, 116,116, 64,64, 43,43],
     heroIds: [89, 103, 109, 107], // Logistics Chief, Armored Commander, Combined Arms General, Command Specialist
   },
 ];

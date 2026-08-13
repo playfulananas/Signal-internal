@@ -24,14 +24,14 @@ export const CARDS = [
   { id:4,  name:"Mortar Team",         cls:"Infantry",  rarity:"Common", type:"unit", cost:2, ap:2,  keyword:"Bombard",       n:5, e:2, s:4, w:2, ability:null },
   { id:5,  name:"Supply Runner",       cls:"Infantry",  rarity:"Common", type:"unit", cost:1, ap:2,  keyword:null,           n:3, e:3, s:3, w:3, ability:"Start of your turn: if on an objective you control, gain 1 Fuel." },
   { id:6,  name:"Halftrack",           cls:"Tank",      rarity:"Common", type:"unit", cost:2, ap:2,  keyword:"Armor",         n:5, e:4, s:1, w:4, ability:null },
-  { id:7,  name:"Blitz Tank",          cls:"Tank",      rarity:"Common", type:"unit", cost:3, ap:4,  keyword:"Breakthrough",  n:5, e:5, s:5, w:5, ability:null },
+  { id:7,  name:"Blitz Tank",          cls:"Tank",      rarity:"Common", type:"unit", cost:3, ap:4,  keyword:"Breakthrough",  n:5, e:5, s:5, w:5, ability:null, retired:true }, // Retired 2026-08-13 — Breakthrough not implemented/balanced; not converted to vanilla since its stats were priced assuming the keyword discount.
   { id:8,  name:"Tank Hunter",         cls:"Tank",      rarity:"Common", type:"unit", cost:3, ap:3,  keyword:"Double Attack", n:5, e:5, s:3, w:2, ability:null },
   { id:9,  name:"Heavy Tank",          cls:"Tank",      rarity:"Common", type:"unit", cost:4, ap:4,  keyword:"Heavy Armor",   n:5, e:4, s:4, w:4, ability:null },
   { id:10, name:"Field Howitzer",      cls:"Artillery", rarity:"Common", type:"unit", cost:2, ap:1,  keyword:"Bombard",       n:4, e:3, s:4, w:3, ability:null },
   { id:11, name:"Anti-Tank Gun",       cls:"Artillery", rarity:"Common", type:"unit", cost:2, ap:2,  keyword:"Guard",         n:2, e:6, s:2, w:6, ability:null },
   { id:12, name:"Fighter",             cls:"Aircraft",  rarity:"Common", type:"unit", cost:3, ap:3,  keyword:"Airborne",      n:7, e:6, s:5, w:1, ability:null },
   { id:13, name:"Dive Bomber",         cls:"Aircraft",  rarity:"Common", type:"unit", cost:3, ap:4,  keyword:"Double Attack", n:6, e:1, s:6, w:2, ability:null },
-  { id:14, name:"Field Commander",     cls:"Commander", rarity:"Rare",   type:"unit", cost:4, ap:4,  keyword:"Inspire",       n:6, e:6, s:6, w:6, ability:null },
+  { id:14, name:"Field Commander",     cls:"Commander", rarity:"Rare",   type:"unit", cost:4, ap:4,  keyword:"Inspire",       n:6, e:6, s:6, w:6, ability:null, retired:true }, // Retired 2026-08-13 — Commander class parked now that Heroes cover the out-of-grid strategic-presence role.
   { id:15, name:"River Gunboat",       cls:"Naval",     rarity:"Common", type:"unit", cost:2, ap:1,  keyword:"Bombard",       n:2, e:5, s:2, w:5, ability:null },
   { id:34, name:"Scouts",              cls:"Infantry",  rarity:"Common", type:"unit", cost:1, ap:1,  keyword:null,           n:5, e:5, s:1, w:1, ability:null },
   { id:35, name:"Mountain Troops",     cls:"Infantry",  rarity:"Common", type:"unit", cost:2, ap:2,  keyword:null,           n:4, e:5, s:4, w:5, ability:null },
@@ -40,7 +40,7 @@ export const CARDS = [
   { id:38, name:"Panzer II",           cls:"Tank",      rarity:"Common", type:"unit", cost:1, ap:1,  keyword:null,           n:5, e:2, s:5, w:2, ability:null },
   { id:39, name:"Sherman Tank",        cls:"Tank",      rarity:"Common", type:"unit", cost:3, ap:3,  keyword:"Armor",         n:7, e:6, s:4, w:1, ability:null },
   { id:40, name:"Flak Halftrack",      cls:"Tank",      rarity:"Common", type:"unit", cost:2, ap:2,  keyword:"Bombard",       n:6, e:5, s:2, w:1, ability:null },
-  { id:41, name:"Tank Destroyer",      cls:"Tank",      rarity:"Common", type:"unit", cost:4, ap:4,  keyword:"Breakthrough",  n:9, e:3, s:9, w:3, ability:null },
+  { id:41, name:"Tank Destroyer",      cls:"Tank",      rarity:"Common", type:"unit", cost:4, ap:4,  keyword:"Breakthrough",  n:9, e:3, s:9, w:3, ability:null, retired:true }, // Retired 2026-08-13 — Breakthrough not implemented/balanced; not converted to vanilla since its stats were priced assuming the keyword discount.
   { id:42, name:"Rocket Launcher",     cls:"Artillery", rarity:"Common", type:"unit", cost:3, ap:4,  keyword:["Bombard","Double Attack"], n:5, e:1, s:1, w:1, ability:null },
   { id:43, name:"Anti-Aircraft Gun",   cls:"Artillery", rarity:"Common", type:"unit", cost:2, ap:2,  keyword:"Guard",         n:6, e:5, s:4, w:1, ability:null },
   { id:44, name:"Recon Plane",         cls:"Aircraft",  rarity:"Common", type:"unit", cost:2, ap:3,  keyword:"Airborne",      n:6, e:4, s:4, w:1, ability:null },
@@ -49,7 +49,7 @@ export const CARDS = [
   { id:47, name:"Destroyer",           cls:"Naval",     rarity:"Common", type:"unit", cost:3, ap:2,  keyword:"Armor",         n:8, e:1, s:8, w:1, ability:null },
   { id:48, name:"Ace Pilot",           cls:"Aircraft",  rarity:"Common", type:"unit", cost:4, ap:4,  keyword:"Double Attack", n:7, e:7, s:3, w:3, ability:null },
   { id:59, name:"Storm Squad",         cls:"Infantry",  rarity:"Common", type:"unit", cost:2, ap:2,  keyword:"Double Attack", n:3, e:1, s:5, w:2, ability:null },
-  { id:60, name:"Vanguard Tank",       cls:"Tank",      rarity:"Common", type:"unit", cost:2, ap:2,  keyword:"Breakthrough",  n:6, e:5, s:4, w:1, ability:null },
+  { id:60, name:"Vanguard Tank",       cls:"Tank",      rarity:"Common", type:"unit", cost:2, ap:2,  keyword:"Breakthrough",  n:6, e:5, s:4, w:1, ability:null, retired:true }, // Retired 2026-08-13 — Breakthrough not implemented/balanced; not converted to vanilla since its stats were priced assuming the keyword discount.
   { id:61, name:"Shock Troopers",      cls:"Infantry",  rarity:"Common", type:"unit", cost:1, ap:1,  keyword:"Double Attack", n:2, e:2, s:3, w:1, ability:null },
   { id:62, name:"Bunker Crew",         cls:"Infantry",  rarity:"Common", type:"unit", cost:3, ap:2,  keyword:"Guard",         n:7, e:2, s:7, w:2, ability:null },
   { id:63, name:"Self-Propelled Gun",  cls:"Artillery", rarity:"Common", type:"unit", cost:3, ap:3,  keyword:"Armor",         n:9, e:1, s:1, w:4, ability:null },
@@ -57,7 +57,7 @@ export const CARDS = [
   { id:65, name:"Panzer Brigade",      cls:"Tank",      rarity:"Common", type:"unit", cost:3, ap:3,  keyword:"Heavy Armor",   n:5, e:4, s:2, w:2, ability:null },
   { id:66, name:"King Tiger",          cls:"Tank",      rarity:"Common", type:"unit", cost:5, ap:4,  keyword:"Heavy Armor",   n:4, e:7, s:6, w:6, ability:null },
   { id:67, name:"Battleship",          cls:"Naval",     rarity:"Common", type:"unit", cost:4, ap:3,  keyword:"Heavy Armor",   n:5, e:5, s:5, w:1, ability:null },
-  { id:68, name:"Chief of Staff",      cls:"Commander", rarity:"Rare",   type:"unit", cost:3, ap:3,  keyword:"Inspire",       n:1, e:8, s:6, w:1, ability:null },
+  { id:68, name:"Chief of Staff",      cls:"Commander", rarity:"Rare",   type:"unit", cost:3, ap:3,  keyword:"Inspire",       n:1, e:8, s:6, w:1, ability:null, retired:true }, // Retired 2026-08-13 — Commander class parked now that Heroes cover the out-of-grid strategic-presence role.
   { id:69, name:"Quartermaster",       cls:"Infantry",  rarity:"Common", type:"unit", cost:1, ap:1,  keyword:null,           n:1, e:1, s:4, w:4, ability:"Start of your turn: if you control both objectives, draw a card." },
   { id:70, name:"Trench Runners",      cls:"Infantry",  rarity:"Common", type:"unit", cost:1, ap:1,  keyword:null,           n:4, e:1, s:6, w:1, ability:null },
   { id:71, name:"Light Skirmishers",   cls:"Infantry",  rarity:"Common", type:"unit", cost:1, ap:1,  keyword:null,           n:1, e:5, s:2, w:5, ability:null },
