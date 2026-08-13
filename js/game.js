@@ -1,4 +1,4 @@
-import { CARD_BY_ID, CARDS } from './cards.js?v=1786589651';
+import { CARD_BY_ID, CARDS } from './cards.js?v=1786590272';
 import {
   createInitialState,
   startOfTurn,
@@ -18,14 +18,14 @@ import {
   discountFor,
   consumeDiscounts,
   addDiscount,
-} from './state.js?v=1786589651';
-import { getAttackableTargets, resolveSingleAttack, tileKey, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkUnitOnPlayAbility, checkCounteroffensiveGeneral } from './combat.js?v=1786589651';
-import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1786589651';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1786589651';
-import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1786589651';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn } from './debug.js?v=1786589651';
-import { STARTER_DECKS, loadCustomDecks, validateDeck } from './decks.js?v=1786589651';
-import { runBotTurn } from './bot_player.js?v=1786589651';
+} from './state.js?v=1786590272';
+import { getAttackableTargets, resolveSingleAttack, tileKey, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkUnitOnPlayAbility, checkCounteroffensiveGeneral } from './combat.js?v=1786590272';
+import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1786590272';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1786590272';
+import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1786590272';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn } from './debug.js?v=1786590272';
+import { STARTER_DECKS, loadCustomDecks, validateDeck } from './decks.js?v=1786590272';
+import { runBotTurn } from './bot_player.js?v=1786590272';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
@@ -634,9 +634,19 @@ function fitBoardArea() {
   // .log-panel/.log are designed to scroll internally rather than grow, but that only
   // works if the row gives them a height ceiling from OUTSIDE — with auto, a long battle
   // log instead inflated the row itself (unbounded), pushing the hand off-screen below it.
-  // Pinning the row's height to the board's own computed height makes board-area the single
-  // source of truth and lets the other columns' own overflow rules do their job.
-  boardRow.style.height = `${naturalH * scale}px`;
+  // Pinning the row's height to the board's own computed height makes board-area the usual
+  // source of truth — EXCEPT at high zoom / a short window, where the scaled board can end
+  // up shorter than .preview-panel/.stats-panel's own real minimum content height (their
+  // text/padding don't scale down with the board — only #board-area-inner does). .board-row
+  // has no overflow:hidden of its own, so if its forced height comes out smaller than a
+  // sibling's unshrinkable content minimum, that sibling spills straight past the row's
+  // bottom edge into .bottom-row below it (P1's stat block overlapping the hand). Flooring
+  // the row height at previewPanel/statsPanel's own natural height (they have no min-height:0,
+  // so this reliably reports their true minimum regardless of the row's current height)
+  // prevents that — logPanel is deliberately excluded, it opts into shrinking via its own
+  // min-height:0 + internal .log scroll.
+  const rowFloor = Math.max(naturalH * scale, previewPanel?.scrollHeight ?? 0, statsPanel?.scrollHeight ?? 0);
+  boardRow.style.height = `${rowFloor}px`;
 }
 window.addEventListener('resize', fitBoardArea);
 // Browser zoom doesn't reliably fire a plain 'resize' event in every browser, but does
