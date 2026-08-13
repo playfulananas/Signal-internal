@@ -6,6 +6,10 @@
   <link rel="stylesheet" href="css/game.css">
 </head>
 <body>
+  <!-- Sets the theme before anything paints. Runs synchronously (not type="module", so it's
+       not deferred like lobby-browser.js) and as the very first thing in <body>, so there's
+       no flash of the default dark theme before the deferred module script gets to it. -->
+  <script>(function(){try{if(localStorage.getItem('signal-theme')==='light')document.body.dataset.theme='light';}catch(e){}})();</script>
 
   <!-- Theme toggle — fixed top-right, matches game.html -->
   <button id="theme-toggle" class="theme-toggle">☾ LIGHT</button>
@@ -77,7 +81,7 @@
     </div>
   </div>
 
-  <script type="module" src="./js/lobby-browser.js?v=1786495151"></script>
+  <script type="module" src="./js/lobby-browser.js?v=1786591817"></script>
 
 </body>
 </html>

@@ -3,9 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <title>SIGNAL — Digital Prototype</title>
-  <link rel="stylesheet" href="css/game.css?v=1786591612">
+  <link rel="stylesheet" href="css/game.css?v=1786591817">
 </head>
 <body>
+  <!-- Sets the theme before anything paints — see the matching script/comment in index.html.
+       game.js's own initTheme() is a huge, deferred module script; without this, the flash
+       of default dark theme was even more noticeable here than on the lobby screen. -->
+  <script>(function(){try{if(localStorage.getItem('signal-theme')==='light')document.body.dataset.theme='light';}catch(e){}})();</script>
 
   <!-- Theme toggle — fixed top-right, visible on all screens -->
   <button id="theme-toggle" class="theme-toggle">☾ LIGHT</button>
@@ -314,7 +318,7 @@
 
   </div>
 
-  <script type="module" src="./js/game.js?v=1786591612"></script>
+  <script type="module" src="./js/game.js?v=1786591817"></script>
 
 </body>
 </html>

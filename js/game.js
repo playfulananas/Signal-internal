@@ -1,4 +1,4 @@
-import { CARD_BY_ID, CARDS } from './cards.js?v=1786591612';
+import { CARD_BY_ID, CARDS } from './cards.js?v=1786591817';
 import {
   createInitialState,
   startOfTurn,
@@ -18,14 +18,14 @@ import {
   discountFor,
   consumeDiscounts,
   addDiscount,
-} from './state.js?v=1786591612';
-import { getAttackableTargets, resolveSingleAttack, tileKey, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkUnitOnPlayAbility, checkCounteroffensiveGeneral } from './combat.js?v=1786591612';
-import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1786591612';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1786591612';
-import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1786591612';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn } from './debug.js?v=1786591612';
-import { STARTER_DECKS, loadCustomDecks, validateDeck } from './decks.js?v=1786591612';
-import { runBotTurn } from './bot_player.js?v=1786591612';
+} from './state.js?v=1786591817';
+import { getAttackableTargets, resolveSingleAttack, tileKey, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkUnitOnPlayAbility, checkCounteroffensiveGeneral } from './combat.js?v=1786591817';
+import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1786591817';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1786591817';
+import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1786591817';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn } from './debug.js?v=1786591817';
+import { STARTER_DECKS, loadCustomDecks, validateDeck } from './decks.js?v=1786591817';
+import { runBotTurn } from './bot_player.js?v=1786591817';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
@@ -2676,9 +2676,9 @@ function confirmFieldReserves(takenId) {
 document.getElementById('field-reserves-skip').addEventListener('click', () => confirmFieldReserves(null));
 
 // ── Theme toggle ──────────────────────────────────────────────────────────────
+// The attribute itself is already set by the inline blocking script at the top of <body>
+// (before this deferred module script runs) — this just wires up the button.
 (function initTheme() {
-  const saved = localStorage.getItem('signal-theme');
-  if (saved === 'light') document.body.dataset.theme = 'light';
   const btn = document.getElementById('theme-toggle');
   if (!btn) return;
   btn.textContent = document.body.dataset.theme === 'light' ? '☀ DARK' : '☾ LIGHT';

@@ -2,9 +2,9 @@
 // behavior, moved out of an inline <script> tag) plus the open-lobby browser
 // (host a lobby with a fixed map, browse and join others without typing a code).
 import { generateGameCode, initAuth, getDisplayName, setDisplayName,
-         createOpenLobby, removeOpenLobby, subscribeOpenLobbies } from './firebase.js?v=1786589651';
-import { filterStale, sortByNewest, formatWaiting } from './lobbies.js?v=1786589651';
-import { MAPS } from './maps.js?v=1786589651';
+         createOpenLobby, removeOpenLobby, subscribeOpenLobbies } from './firebase.js?v=1786591817';
+import { filterStale, sortByNewest, formatWaiting } from './lobbies.js?v=1786591817';
+import { MAPS } from './maps.js?v=1786591817';
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
@@ -53,10 +53,10 @@ document.getElementById('code-input').addEventListener('keydown', e => {
   if (e.key === 'Enter') document.getElementById('btn-join').click();
 });
 
-// Theme toggle — same 'signal-theme' localStorage key as game.html, so the choice carries over.
+// Theme toggle — same 'signal-theme' localStorage key as game.html, so the choice carries
+// over. The attribute itself is already set by the inline blocking script at the top of
+// <body> (before this deferred module script runs) — this just wires up the button.
 (function initTheme() {
-  const saved = localStorage.getItem('signal-theme');
-  if (saved === 'light') document.body.dataset.theme = 'light';
   const btn = document.getElementById('theme-toggle');
   btn.textContent = document.body.dataset.theme === 'light' ? '☀ DARK' : '☾ LIGHT';
   btn.addEventListener('click', () => {
