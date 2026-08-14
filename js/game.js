@@ -1,4 +1,4 @@
-import { CARD_BY_ID, CARDS } from './cards.js?v=1786667882';
+import { CARD_BY_ID, CARDS } from './cards.js?v=1786735886';
 import {
   createInitialState,
   startOfTurn,
@@ -18,14 +18,14 @@ import {
   discountFor,
   consumeDiscounts,
   addDiscount,
-} from './state.js?v=1786667882';
-import { getAttackableTargets, resolveSingleAttack, tileKey, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkUnitOnPlayAbility, checkCounteroffensiveGeneral } from './combat.js?v=1786667882';
-import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1786667882';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1786667882';
-import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1786667882';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn } from './debug.js?v=1786667882';
-import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1786667882';
-import { runBotTurn } from './bot_player.js?v=1786667882';
+} from './state.js?v=1786735886';
+import { getAttackableTargets, resolveSingleAttack, tileKey, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkUnitOnPlayAbility, checkCounteroffensiveGeneral, canStrikeHQDirectly, resolveEmptyBoardStrike } from './combat.js?v=1786735886';
+import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1786735886';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1786735886';
+import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1786735886';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn } from './debug.js?v=1786735886';
+import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1786735886';
+import { runBotTurn } from './bot_player.js?v=1786735886';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
@@ -1351,6 +1351,19 @@ document.getElementById('board').addEventListener('click', e => {
     if (targets.length > 0) {
       uiState = "targeting";
       pendingAttackerKey = clickedKey;
+    } else if (canStrikeHQDirectly(state, clickedKey)) {
+      const hits = getKeywords(state.board[clickedKey]).includes('Double Attack') ? 2 : 1;
+      const result = resolveEmptyBoardStrike(state, clickedKey, hits);
+      state = {
+        ...state,
+        p1: { ...state.p1, hq: state.p1.hq - result.hqDamageToP1 },
+        p2: { ...state.p2, hq: state.p2.hq - result.hqDamageToP2 },
+        log: [...(state.log ?? []), ...result.logEntries],
+      };
+      attackedThisTurn.set(clickedKey, hits);
+      appendLog(result.logEntries);
+      uiState = "idle";
+      pendingAttackerKey = null;
     } else {
       uiState = "idle";
       pendingAttackerKey = null;
@@ -1436,7 +1449,26 @@ document.getElementById('board').addEventListener('click', e => {
       coGenLog = coGen.log;
     }
 
-    if (isDoubleAttack && attackCount < 2 && postAttackTargets.length > 0) {
+    // Double Attack's 2nd hit had a real target a moment ago (postAttackTargets was computed
+    // above) but the 1st hit just emptied the board — don't lose the 2nd attack, resolve it as
+    // an Empty-Board HQ Strike instead of dropping straight to idle. hits=1 (not re-derived
+    // from the keyword) since the 1st hit already consumed one of this unit's two attacks.
+    // Applied directly to newState.p1/p2.hq, deliberately AFTER the Overrun-bonus block above
+    // (which only covers the 1st hit's damage) — an HQ strike isn't a Suppress/Destroy event,
+    // so it must never pass back through that check.
+    let hqStrikeLog = [];
+    if (isDoubleAttack && attackCount < 2 && postAttackTargets.length === 0 && canStrikeHQDirectly(newState, attackerKey)) {
+      const strikeResult = resolveEmptyBoardStrike(newState, attackerKey, 1);
+      newState = {
+        ...newState,
+        p1: { ...newState.p1, hq: newState.p1.hq - strikeResult.hqDamageToP1 },
+        p2: { ...newState.p2, hq: newState.p2.hq - strikeResult.hqDamageToP2 },
+      };
+      hqStrikeLog = strikeResult.logEntries;
+      attackedThisTurn.set(attackerKey, 2);
+      uiState = "idle";
+      pendingAttackerKey = null;
+    } else if (isDoubleAttack && attackCount < 2 && postAttackTargets.length > 0) {
       uiState = "targeting";
       pendingAttackerKey = attackerKey;
     } else {
@@ -1444,7 +1476,7 @@ document.getElementById('board').addEventListener('click', e => {
       pendingAttackerKey = null;
     }
 
-    commitState(newState, [...result.logEntries, ...overrunLog, ...bonusLog, ...coGenLog]);
+    commitState(newState, [...result.logEntries, ...overrunLog, ...bonusLog, ...coGenLog, ...hqStrikeLog]);
     checkWin();
     return;
   }
@@ -1475,6 +1507,19 @@ document.getElementById('board').addEventListener('click', e => {
 
     const targets = getAttackableTargets(state, clickedKey);
     if (targets.length === 0) {
+      if (canStrikeHQDirectly(state, clickedKey)) {
+        const hits = maxAttacks - (attackedThisTurn.get(clickedKey) ?? 0);
+        const result = resolveEmptyBoardStrike(state, clickedKey, hits);
+        const newState = {
+          ...state,
+          p1: { ...state.p1, hq: state.p1.hq - result.hqDamageToP1 },
+          p2: { ...state.p2, hq: state.p2.hq - result.hqDamageToP2 },
+        };
+        attackedThisTurn.set(clickedKey, maxAttacks);
+        commitState(newState, result.logEntries);
+        checkWin();
+        return;
+      }
       appendLog([`${CARD_BY_ID[unit.cardId]?.name ?? '?'} at ${clickedKey}: No valid targets`]);
       return;
     }

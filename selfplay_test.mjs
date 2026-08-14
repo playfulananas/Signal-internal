@@ -128,8 +128,11 @@ async function playTurnSmart(page) {
     if (lethal) {
       await clickTile(page, lethal.attackerKey);
       await page.waitForTimeout(30);
-      await clickTile(page, lethal.targetKey);
-      await page.waitForTimeout(30);
+      // Empty-Board HQ Strike resolves on the attacker's own click — no target tile to click.
+      if (!lethal.isHQStrike) {
+        await clickTile(page, lethal.targetKey);
+        await page.waitForTimeout(30);
+      }
       continue;
     }
 
@@ -148,7 +151,7 @@ async function playTurnSmart(page) {
 
     const candidates = [];
     if (placement) candidates.push({ type: "place", score: placement.score, cardId: placement.cardId, tileKey: placement.tileKey });
-    if (attack) candidates.push({ type: "attack", score: attack.score, unitKey: attack.unitKey, targetKey: attack.targetKey });
+    if (attack) candidates.push({ type: "attack", score: attack.score, unitKey: attack.unitKey, targetKey: attack.targetKey, isHQStrike: attack.isHQStrike });
     if (affordableCommandId !== undefined) candidates.push({ type: "command", score: 0.1, cardId: affordableCommandId });
     if (candidates.length === 0 && affordableMissionId !== undefined) candidates.push({ type: "mission", score: 0.1, cardId: affordableMissionId });
 
@@ -166,8 +169,10 @@ async function playTurnSmart(page) {
     } else if (choice.type === "attack") {
       await clickTile(page, choice.unitKey);
       await page.waitForTimeout(30);
-      await clickTile(page, choice.targetKey);
-      await page.waitForTimeout(30);
+      if (!choice.isHQStrike) {
+        await clickTile(page, choice.targetKey);
+        await page.waitForTimeout(30);
+      }
     } else if (choice.type === "command") {
       const handBefore = ps.hand.length;
       await clickHandCard(page, choice.cardId);

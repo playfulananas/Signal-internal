@@ -1,5 +1,5 @@
-import { CARD_BY_ID } from './cards.js?v=1786589651';
-import { getSideValue, getKeywords, attackBeats, applyHit, oppositeDir, unsuppressOnBoard, drawCards } from './state.js?v=1786589651';
+import { CARD_BY_ID } from './cards.js?v=1786735886';
+import { getSideValue, getKeywords, attackBeats, applyHit, oppositeDir, unsuppressOnBoard, drawCards } from './state.js?v=1786735886';
 
 // Orthogonal directions and their row/col offsets.
 const DIRS = ["n", "e", "s", "w"];
@@ -59,6 +59,40 @@ export function unitsOnBoard(state, owner = null) {
     if (owner && unit.owner !== owner) return [];
     return [{ key, unit }];
   });
+}
+
+// ── Empty-Board HQ Strike ────────────────────────────────────────────────────
+// GDD Locked Decision (2026-08-13): if the opponent has zero LIVE units on the board and
+// it isn't Turn 1 (the game's literal first half-turn — P2's own first turn, turn 2, IS
+// eligible), a friendly unit that hasn't yet used all its attacks this turn strikes the HQ
+// directly instead of an adjacent/Bombard enemy, since there's nothing to hit. Prevents a
+// player from stalling out all combat pressure by simply refusing to place any units.
+
+// True when attackerKey's owner has a live target-less opponent to strike directly.
+export function canStrikeHQDirectly(state, attackerKey) {
+  const attacker = state.board[attackerKey];
+  if (!attacker || state.turn === 1) return false;
+  const opp = attacker.owner === 'p1' ? 'p2' : 'p1';
+  return unitsOnBoard(state, opp).length === 0;
+}
+
+// hits is caller-supplied rather than re-derived from the Double Attack keyword here, so a
+// unit completing its second attack mid-combat (see game.js's TARGETING handler — a Double
+// Attack unit whose first hit just emptied the board) can request exactly the 1 hit it has
+// left instead of a formula recomputing "Double Attack -> 2" and double-granting.
+// Returns the same shape as resolveSingleAttack so callers can apply either result through
+// the same code path — boardMutations is always empty (no unit is hit), so the existing
+// wasDestroyed/kill-tracking checks downstream correctly no-op for a direct HQ strike.
+export function resolveEmptyBoardStrike(state, attackerKey, hits) {
+  const attacker = state.board[attackerKey];
+  const card = CARD_BY_ID[attacker.cardId];
+  const opp = attacker.owner === 'p1' ? 'p2' : 'p1';
+  return {
+    boardMutations: [],
+    hqDamageToP1: opp === 'p1' ? hits : 0,
+    hqDamageToP2: opp === 'p2' ? hits : 0,
+    logEntries: [`${card.name} strikes ${opp.toUpperCase()}'s HQ directly — ${hits} HQ damage (no enemy units on board)`],
+  };
 }
 
 // ── Hero passives — triggered on unit placement ─────────────────────────────

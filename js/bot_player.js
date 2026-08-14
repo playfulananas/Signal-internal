@@ -93,8 +93,12 @@ async function playBotTurnSteps() {
     if (lethal) {
       clickTile(lethal.attackerKey);
       await sleep(CLICK_DELAY_MS);
-      clickTile(lethal.targetKey);
-      await sleep(CLICK_DELAY_MS);
+      // Empty-Board HQ Strike resolves on the attacker's own click — no target tile exists
+      // to click (there's nothing on the board to click).
+      if (!lethal.isHQStrike) {
+        clickTile(lethal.targetKey);
+        await sleep(CLICK_DELAY_MS);
+      }
       continue;
     }
 
@@ -112,7 +116,7 @@ async function playBotTurnSteps() {
 
     const candidates = [];
     if (placement) candidates.push({ type: "place", score: placement.score, cardId: placement.cardId, tileKey: placement.tileKey });
-    if (attack) candidates.push({ type: "attack", score: attack.score, unitKey: attack.unitKey, targetKey: attack.targetKey });
+    if (attack) candidates.push({ type: "attack", score: attack.score, unitKey: attack.unitKey, targetKey: attack.targetKey, isHQStrike: attack.isHQStrike });
     if (affordableCommandId !== undefined) candidates.push({ type: "command", score: 0.1, cardId: affordableCommandId });
     if (candidates.length === 0 && affordableMissionId !== undefined) candidates.push({ type: "mission", score: 0.1, cardId: affordableMissionId });
 
@@ -130,8 +134,10 @@ async function playBotTurnSteps() {
     } else if (choice.type === "attack") {
       clickTile(choice.unitKey);
       await sleep(CLICK_DELAY_MS);
-      clickTile(choice.targetKey);
-      await sleep(CLICK_DELAY_MS);
+      if (!choice.isHQStrike) {
+        clickTile(choice.targetKey);
+        await sleep(CLICK_DELAY_MS);
+      }
     } else if (choice.type === "command") {
       const handBefore = ps.hand.length;
       clickHandCard(choice.cardId);

@@ -5,7 +5,7 @@
 // picks the best legal action. It does not touch the DOM — callers (selfplay_test.mjs,
 // bot_player.js) execute the chosen action via clicks.
 import { CARD_BY_ID } from "./cards.js";
-import { getAttackableTargets, resolveSingleAttack } from "./combat.js";
+import { getAttackableTargets, resolveSingleAttack, canStrikeHQDirectly } from "./combat.js";
 import { getKeywords, maxArmorHits } from "./state.js";
 import { canPlaceOnTerrain, getTerrain } from "./maps.js";
 
@@ -28,9 +28,21 @@ function scoreAttack(state, attackerKey, targetKey) {
   return { score: hqDamage * W_HQ + matSwing * W_MATERIAL, hqDamage, succeeded: true };
 }
 
-// Best attack available for a specific friendly unit already on the board.
-export function bestAttackForUnit(state, unitKey) {
+export function maxAttacksFor(unit) {
+  return getKeywords(unit).includes("Double Attack") ? 2 : 1;
+}
+
+// Best attack available for a specific friendly unit already on the board. attackCount is
+// how many of its attacks it's already used this turn (0 for a fresh/hypothetical unit) —
+// needed so an Empty-Board HQ Strike (see combat.js) grants only the hits actually
+// remaining, not a fresh Double Attack's full 2 every time this is called.
+export function bestAttackForUnit(state, unitKey, attackCount = 0) {
   const targets = getAttackableTargets(state, unitKey);
+  if (targets.length === 0) {
+    if (!canStrikeHQDirectly(state, unitKey)) return null;
+    const hits = maxAttacksFor(state.board[unitKey]) - attackCount;
+    return { targetKey: null, isHQStrike: true, hits, hqDamage: hits, score: hits * W_HQ, succeeded: true };
+  }
   let best = null;
   for (const t of targets) {
     const s = scoreAttack(state, unitKey, t.key);
@@ -39,17 +51,14 @@ export function bestAttackForUnit(state, unitKey) {
   return best;
 }
 
-export function maxAttacksFor(unit) {
-  return getKeywords(unit).includes("Double Attack") ? 2 : 1;
-}
-
 // Best not-yet-exhausted friendly unit + target this turn (attackedMap: tileKey -> attacks used so far).
 export function bestExistingAttack(state, active, attackedMap = new Map()) {
   let best = null;
   for (const [key, unit] of Object.entries(state.board)) {
     if (!unit || unit.owner !== active || unit.state !== "normal") continue;
-    if ((attackedMap.get(key) ?? 0) >= maxAttacksFor(unit)) continue;
-    const atk = bestAttackForUnit(state, key);
+    const attackCount = attackedMap.get(key) ?? 0;
+    if (attackCount >= maxAttacksFor(unit)) continue;
+    const atk = bestAttackForUnit(state, key, attackCount);
     if (atk && (!best || atk.score > best.score)) best = { unitKey: key, ...atk };
   }
   return best;
@@ -60,8 +69,15 @@ export function findLethal(state, active, attackedMap = new Map()) {
   const opp = active === "p1" ? "p2" : "p1";
   for (const [key, unit] of Object.entries(state.board)) {
     if (!unit || unit.owner !== active || unit.state !== "normal") continue;
-    if ((attackedMap.get(key) ?? 0) >= maxAttacksFor(unit)) continue;
+    const attackCount = attackedMap.get(key) ?? 0;
+    if (attackCount >= maxAttacksFor(unit)) continue;
     const targets = getAttackableTargets(state, key);
+    if (targets.length === 0) {
+      if (!canStrikeHQDirectly(state, key)) continue;
+      const hits = maxAttacksFor(unit) - attackCount;
+      if (hits >= state[opp].hq) return { attackerKey: key, targetKey: null, isHQStrike: true };
+      continue;
+    }
     for (const t of targets) {
       const s = scoreAttack(state, key, t.key);
       if (s.succeeded && s.hqDamage >= state[opp].hq) return { attackerKey: key, targetKey: t.key };
