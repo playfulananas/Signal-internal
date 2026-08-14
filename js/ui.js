@@ -1,6 +1,6 @@
-import { CARD_BY_ID } from './cards.js?v=1786664736';
-import { getKeywords, maxArmorHits, discountFor, fuelCapOf, rotatedDir } from './state.js?v=1786664736';
-import { getTerrain } from './maps.js?v=1786664736';
+import { CARD_BY_ID } from './cards.js?v=1786667882';
+import { getKeywords, maxArmorHits, discountFor, fuelCapOf, rotatedDir } from './state.js?v=1786667882';
+import { getTerrain } from './maps.js?v=1786667882';
 
 const TERRAIN_SHORT = { plains: 'P', forest: 'F', water: 'W', desert: 'D', city: 'C' };
 
@@ -213,9 +213,16 @@ export function renderHand(handCardIds, containerId, selectedCardId, extras = {}
       `;
     } else if (card.type === 'command') {
       div.classList.add('hc-command');
+      // Same discount as units above (Command Specialist's Hero Power applies here — see
+      // discountFor's 'command' appliesTo — previously shown at full price regardless).
+      const cmdDiscount = extras.playerState ? discountFor(extras.playerState, card, null) : 0;
+      const cmdDisplayCost = card.cost - cmdDiscount;
+      const cmdCostHtml = cmdDiscount > 0
+        ? `<span class="hc-cost-discounted">${cmdDisplayCost} ⛽</span>`
+        : `${cmdDisplayCost} ⛽`;
       div.innerHTML = `
         <div class="hc-header">${card.name}</div>
-        <div class="hc-cost">${card.cost} ⛽</div>
+        <div class="hc-cost">${cmdCostHtml}</div>
         <div class="hc-type hc-command-label">COMMAND</div>
         <div class="hc-effect">${card.effect || ''}</div>
       `;

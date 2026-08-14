@@ -1,4 +1,4 @@
-import { CARD_BY_ID, CARDS } from './cards.js?v=1786628376';
+import { CARD_BY_ID, CARDS } from './cards.js?v=1786667882';
 import {
   createInitialState,
   startOfTurn,
@@ -18,14 +18,14 @@ import {
   discountFor,
   consumeDiscounts,
   addDiscount,
-} from './state.js?v=1786628376';
-import { getAttackableTargets, resolveSingleAttack, tileKey, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkUnitOnPlayAbility, checkCounteroffensiveGeneral } from './combat.js?v=1786628376';
-import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1786628376';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1786628376';
-import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1786628376';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn } from './debug.js?v=1786628376';
-import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1786628376';
-import { runBotTurn } from './bot_player.js?v=1786628376';
+} from './state.js?v=1786667882';
+import { getAttackableTargets, resolveSingleAttack, tileKey, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkUnitOnPlayAbility, checkCounteroffensiveGeneral } from './combat.js?v=1786667882';
+import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1786667882';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1786667882';
+import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1786667882';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn } from './debug.js?v=1786667882';
+import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1786667882';
+import { runBotTurn } from './bot_player.js?v=1786667882';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
@@ -1163,8 +1163,12 @@ document.getElementById('p1-hand').addEventListener('click', e => {
     uiState = "placing";
   } else if (card.type === 'command') {
     const active = state.initiative;
-    if (state[active].fuel < card.cost) {
-      appendLog([`Not enough Fuel for ${card.name} (need ${card.cost}, have ${state[active].fuel})`]);
+    // Same discount formula as the placement handler above (Command Specialist's Hero
+    // Power applies here — it was previously ignored everywhere in the command path).
+    const discount = discountFor(state[active], card, null);
+    const effectiveCost = card.cost - discount;
+    if (state[active].fuel < effectiveCost) {
+      appendLog([`Not enough Fuel for ${card.name} (need ${effectiveCost}, have ${state[active].fuel})`]);
       redraw();
       return;
     }
@@ -1607,6 +1611,8 @@ function applyObjectiveEffects(s, player) {
 function playInstantCommand(cardId) {
   const active = state.initiative;
   const card = CARD_BY_ID[cardId];
+  const discount = discountFor(state[active], card, null);
+  const effectiveCost = card.cost - discount;
 
   const handAfter = [...state[active].hand];
   const idx = handAfter.indexOf(cardId);
@@ -1614,7 +1620,10 @@ function playInstantCommand(cardId) {
 
   let s = {
     ...state,
-    [active]: { ...state[active], fuel: state[active].fuel - card.cost, hand: handAfter },
+    [active]: consumeDiscounts(
+      { ...state[active], fuel: state[active].fuel - effectiveCost, hand: handAfter },
+      card, null, discount,
+    ),
   };
   const log = [];
 
@@ -1789,11 +1798,19 @@ function getCommandTargets(commandId) {
 function startCommandTargeting(cardId) {
   const active = state.initiative;
   const card = CARD_BY_ID[cardId];
+  const discount = discountFor(state[active], card, null);
+  const effectiveCost = card.cost - discount;
   const handAfter = [...state[active].hand];
   const idx = handAfter.indexOf(cardId);
   if (idx !== -1) handAfter.splice(idx, 1);
   preCommandState = state;
-  state = { ...state, [active]: { ...state[active], fuel: state[active].fuel - card.cost, hand: handAfter } };
+  state = {
+    ...state,
+    [active]: consumeDiscounts(
+      { ...state[active], fuel: state[active].fuel - effectiveCost, hand: handAfter },
+      card, null, discount,
+    ),
+  };
   pendingCommandId = cardId;
   pendingRallyCryCount = cardId === 51 ? 2 : 0;
   uiState = 'command-targeting';
@@ -1812,11 +1829,19 @@ function startEnemyHeroTargeting(cardId) {
     appendLog([`${card.name}: opponent has no deployed Hero`]);
     return;
   }
+  const discount = discountFor(state[active], card, null);
+  const effectiveCost = card.cost - discount;
   const handAfter = [...state[active].hand];
   const idx = handAfter.indexOf(cardId);
   if (idx !== -1) handAfter.splice(idx, 1);
   preCommandState = state;
-  state = { ...state, [active]: { ...state[active], fuel: state[active].fuel - card.cost, hand: handAfter } };
+  state = {
+    ...state,
+    [active]: consumeDiscounts(
+      { ...state[active], fuel: state[active].fuel - effectiveCost, hand: handAfter },
+      card, null, discount,
+    ),
+  };
   pendingCommandId = cardId;
   uiState = 'command-hero-targeting';
   appendLog([`${card.name}: choose an enemy Hero`]);
