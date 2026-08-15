@@ -1,4 +1,4 @@
-import { CARD_BY_ID, CARDS } from './cards.js?v=1786735886';
+import { CARD_BY_ID, CARDS } from './cards.js?v=1786807783';
 import {
   createInitialState,
   startOfTurn,
@@ -18,14 +18,14 @@ import {
   discountFor,
   consumeDiscounts,
   addDiscount,
-} from './state.js?v=1786735886';
-import { getAttackableTargets, resolveSingleAttack, tileKey, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkUnitOnPlayAbility, checkCounteroffensiveGeneral, canStrikeHQDirectly, resolveEmptyBoardStrike } from './combat.js?v=1786735886';
-import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1786735886';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1786735886';
-import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1786735886';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn } from './debug.js?v=1786735886';
-import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1786735886';
-import { runBotTurn } from './bot_player.js?v=1786735886';
+} from './state.js?v=1786807783';
+import { getAttackableTargets, resolveSingleAttack, tileKey, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkUnitOnPlayAbility, checkCounteroffensiveGeneral, canStrikeHQDirectly, resolveEmptyBoardStrike } from './combat.js?v=1786807783';
+import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1786807783';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1786807783';
+import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1786807783';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn } from './debug.js?v=1786807783';
+import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1786807783';
+import { runBotTurn } from './bot_player.js?v=1786807783';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
@@ -2076,7 +2076,9 @@ document.getElementById('btn-end-turn').addEventListener('click', () => {
 
   let newState = endTurn(s);                             // swap initiative, increment turn
   const newActive = newState.initiative;
-  if (newState.turn > 2) {                               // skip P2's first turn — they start with 5 already
+  if (newState.turn > 1) {                               // skip only turn 1 (P1) — they already got their
+                                                          // 5th card pre-game in startGame; P2 gets no such
+                                                          // bonus draw, so their first turn (turn 2) must draw here.
     newState = { ...newState, [newActive]: drawCards(newState[newActive], 1) };
   }
   newState = startOfTurn(newState);                      // gain fuel for new active player
