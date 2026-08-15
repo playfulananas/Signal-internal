@@ -1,6 +1,6 @@
-import { CARD_BY_ID } from './cards.js?v=1786830557';
-import { getKeywords, maxArmorHits, discountFor, fuelCapOf, rotatedDir } from './state.js?v=1786830557';
-import { getTerrain } from './maps.js?v=1786830557';
+import { CARD_BY_ID } from './cards.js?v=1786832554';
+import { getKeywords, maxArmorHits, discountFor, fuelCapOf, rotatedDir } from './state.js?v=1786832554';
+import { getTerrain } from './maps.js?v=1786832554';
 
 const TERRAIN_SHORT = { plains: 'P', forest: 'F', water: 'W', desert: 'D', city: 'C' };
 
@@ -27,7 +27,7 @@ const KEYWORD_TEXT = {
 // recomputed per-viewer rotation. Stats shown on a placed card also never flip by owner
 // (see getSideValue in state.js) — a card's printed N/E/S/W always maps to physical
 // N/E/S/W, same as in hand.
-export function renderBoard(state, selectedTileKey, validDropKeys, changedKeys = null) {
+export function renderBoard(state, selectedTileKey, validDropKeys, changedKeys = null, transitionFlags = null) {
   const board = document.getElementById('board');
   board.innerHTML = '';
 
@@ -105,11 +105,14 @@ export function renderBoard(state, selectedTileKey, validDropKeys, changedKeys =
 
       // Unit on tile
       if (unit) {
-        // Destroyed units are still shown (greyed out) so board state is clear
         tile.classList.add('has-unit');
-        tile.appendChild(buildBoardCard(unit));
-      } else if (validDropKeys?.has(key)) {
-        tile.classList.add('valid-drop');
+        tile.appendChild(buildBoardCard(unit, 'p1', transitionFlags?.get(key)));
+      } else {
+        if (validDropKeys?.has(key)) tile.classList.add('valid-drop');
+        // A destroyed unit is nulled out of state.board the instant it dies (see applyHit /
+        // resolveSingleAttack) — there's no lingering "destroyed" card to animate, so the
+        // flash plays on the now-empty tile itself instead.
+        if (transitionFlags?.get(key) === 'destroyed') tile.classList.add('tile-just-destroyed');
       }
 
       if (key === selectedTileKey) {
@@ -121,12 +124,13 @@ export function renderBoard(state, selectedTileKey, validDropKeys, changedKeys =
   }
 }
 
-function buildBoardCard(unit, viewer = 'p1') {
+function buildBoardCard(unit, viewer = 'p1', transitionFlag = null) {
   const card = CARD_BY_ID[unit.cardId];
   const el = document.createElement('div');
   const buffed = unit.tempSideBonus > 0 || unit.grantedSideBonus > 0 || unit.debugSideBonus > 0 || (unit.tempKeywords?.length > 0) || (unit.grantedKeywords?.length > 0);
   const opponent = unit.owner !== viewer;
-  el.className = `board-card ${unit.owner} ${unit.state}${buffed ? ' buffed' : ''}${opponent ? ' opponent-card' : ''}`;
+  const justSuppressed = transitionFlag === 'suppressed' ? ' just-suppressed' : '';
+  el.className = `board-card ${unit.owner} ${unit.state}${buffed ? ' buffed' : ''}${opponent ? ' opponent-card' : ''}${justSuppressed}`;
 
   const kwList = getKeywords(unit);
   const kwHtml = kwList.map(k => `<span class="bc-kw-tag"${KEYWORD_TEXT[k] ? ` data-tip="${esc(KEYWORD_TEXT[k])}"` : ''}>${k}</span>`).join('');

@@ -1,4 +1,4 @@
-import { CARD_BY_ID, CARDS } from './cards.js?v=1786830557';
+import { CARD_BY_ID, CARDS } from './cards.js?v=1786832554';
 import {
   createInitialState,
   startOfTurn,
@@ -18,14 +18,14 @@ import {
   discountFor,
   consumeDiscounts,
   addDiscount,
-} from './state.js?v=1786830557';
-import { getAttackableTargets, resolveSingleAttack, tileKey, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkUnitOnPlayAbility, checkCounteroffensiveGeneral, canStrikeHQDirectly, resolveEmptyBoardStrike } from './combat.js?v=1786830557';
-import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1786830557';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1786830557';
-import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1786830557';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1786830557';
-import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1786830557';
-import { runBotTurn } from './bot_player.js?v=1786830557';
+} from './state.js?v=1786832554';
+import { getAttackableTargets, resolveSingleAttack, tileKey, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkUnitOnPlayAbility, checkCounteroffensiveGeneral, canStrikeHQDirectly, resolveEmptyBoardStrike } from './combat.js?v=1786832554';
+import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1786832554';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1786832554';
+import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1786832554';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1786832554';
+import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1786832554';
+import { runBotTurn } from './bot_player.js?v=1786832554';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
@@ -268,6 +268,7 @@ let pendingCommandId = null;       // card ID of command awaiting a board target
 let preCommandState = null;        // state snapshot before command-targeting started (for cancel)
 let pendingRallyCryCount = 0;      // remaining Rally Cry target picks (0 = not active)
 let lastChangedKeys = new Set();   // tiles changed by opponent's last move (cleared on own action)
+let lastTransitionFlags = new Map(); // tileKey -> 'suppressed'|'destroyed' this commit, for a one-shot render animation
 let gameOver = false;
 
 // ── Forward Observer state ─────────────────────────────────────────────────────
@@ -681,9 +682,9 @@ function redraw() {
   renderHQ(state);
 
   if (uiState === "placing") {
-    renderBoard(state, null, getValidTiles(), lastChangedKeys);
+    renderBoard(state, null, getValidTiles(), lastChangedKeys, lastTransitionFlags);
   } else {
-    renderBoard(state, null, null, lastChangedKeys);
+    renderBoard(state, null, null, lastChangedKeys, lastTransitionFlags);
   }
 
   if (uiState === "targeting" && pendingAttackerKey) {
@@ -766,8 +767,9 @@ function syncArtyTargetingUiState() {
   }
 }
 
-function commitState(newState, logLines) {
+function commitState(newState, logLines, transitionFlags) {
   lastChangedKeys = new Set(); // player acted — clear opponent highlights
+  lastTransitionFlags = transitionFlags ?? new Map();
   state = { ...newState, log: [...(newState.log ?? []), ...(logLines ?? [])] };
   if (logLines?.length) appendLog(logLines);
   syncArtyTargetingUiState();
@@ -1238,7 +1240,10 @@ document.getElementById('board').addEventListener('click', e => {
       newS = coGen.state;
       log.push(...coGen.log);
     }
-    commitState(newS, log);
+    const artyTransitionFlags = new Map();
+    if (finalUnit === null) artyTransitionFlags.set(clickedKey, 'destroyed');
+    else if (newUnit.state === 'suppressed') artyTransitionFlags.set(clickedKey, 'suppressed');
+    commitState(newS, log, artyTransitionFlags);
     checkWin();
     return;
   }
@@ -1476,7 +1481,17 @@ document.getElementById('board').addEventListener('click', e => {
       pendingAttackerKey = null;
     }
 
-    commitState(newState, [...result.logEntries, ...overrunLog, ...bonusLog, ...coGenLog, ...hqStrikeLog]);
+    // result.boardMutations always targets clickedKey — newUnit===null means destroyed,
+    // otherwise .state tells us whether this specific hit just suppressed it (vs. an
+    // armor-absorb hit, which changes armorHits but not .state and shouldn't animate).
+    const transitionFlags = new Map();
+    if (result.boardMutations.length > 0) {
+      const { newUnit } = result.boardMutations[0];
+      if (newUnit === null) transitionFlags.set(clickedKey, 'destroyed');
+      else if (newUnit.state === 'suppressed') transitionFlags.set(clickedKey, 'suppressed');
+    }
+
+    commitState(newState, [...result.logEntries, ...overrunLog, ...bonusLog, ...coGenLog, ...hqStrikeLog], transitionFlags);
     checkWin();
     return;
   }
@@ -2056,10 +2071,20 @@ function applyCommandEffect(commandId, targetKey) {
     default: break;
   }
 
+  // Only cases 16/20/79 (Artillery Barrage/Air Strike/Suppressing Fire) can transition
+  // targetKey's unit — the other ~9 cases leave it alone, so a before/after diff against
+  // `unit` (captured at function entry) covers all 3 for free without touching each case.
+  const cmdTransitionFlags = new Map();
+  const afterUnit = s.board[targetKey];
+  if (unit && !afterUnit) cmdTransitionFlags.set(targetKey, 'destroyed');
+  else if (unit && afterUnit && unit.state !== 'suppressed' && afterUnit.state === 'suppressed') {
+    cmdTransitionFlags.set(targetKey, 'suppressed');
+  }
+
   pendingCommandId = null;
   preCommandState = null;
   uiState = 'idle';
-  commitState(s, log);
+  commitState(s, log, cmdTransitionFlags);
   checkWin();
 }
 
@@ -2749,7 +2774,10 @@ function applyDebugUnitState(newUnitState) {
     return;
   }
   const { state: newState, log } = debugSetUnitState(state, debugSelectedUnitKey, newUnitState);
-  commitState(newState, log);
+  const debugTransitionFlags = newUnitState !== 'normal'
+    ? new Map([[debugSelectedUnitKey, newUnitState]]) // 'suppressed' or 'destroyed'; Reset shouldn't animate
+    : new Map();
+  commitState(newState, log, debugTransitionFlags);
   if (newUnitState === 'destroyed') {
     debugSelectedUnitKey = null;
     document.getElementById('debug-unit-hint').textContent = 'Click "Select Unit", then click a unit on the board.';

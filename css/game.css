@@ -733,6 +733,24 @@ body.viewer-p2 .stats-panel {
 .board-card.p2 { border-color: var(--p2); background: var(--p2-bg); }
 .board-card.suppressed { opacity: 0.55; border-style: dashed; }
 .board-card.destroyed  { opacity: 0.25; filter: grayscale(1); }
+
+/* One-shot flash on the exact render where a unit transitions — see transitionFlags in
+   game.js/ui.js. Plays automatically on the freshly-created node (renderBoard rebuilds
+   every tile every render, so no "toggle off/on" restart trick is needed here, unlike the
+   persistent #turn-toast node). */
+@keyframes suppress-flash {
+  0%   { filter: brightness(1); box-shadow: 0 0 0 0 rgba(240,192,48,0); }
+  25%  { filter: brightness(1.35); box-shadow: 0 0 14px 4px rgba(240,192,48,0.85); }
+  100% { filter: brightness(1); box-shadow: 0 0 0 0 rgba(240,192,48,0); }
+}
+.board-card.just-suppressed { animation: suppress-flash 0.5s ease-out; }
+
+@keyframes destroy-flash {
+  0%   { box-shadow: inset 0 0 0 0 rgba(200,40,40,0); }
+  30%  { box-shadow: inset 0 0 0 3px rgba(200,40,40,0.85); background: rgba(200,40,40,0.22); }
+  100% { box-shadow: inset 0 0 0 0 rgba(200,40,40,0); }
+}
+.tile.tile-just-destroyed { animation: destroy-flash 0.45s ease-out; }
 .board-card.buffed { box-shadow: 0 0 8px 2px var(--gold-glow); }
 
 .bc-name {
