@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ,
-  debugSetObjective, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn,
+  debugAddCard, debugRemoveCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ,
+  debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn,
 } from '../js/debug.js';
 
 function baseState() {
@@ -29,6 +29,29 @@ test('debugAddCard adds the card to the target player\'s hand and logs the card 
   assert.equal(state.p1.hand.length, 2); // untouched
   assert.match(log[0], /King Tiger/);
   assert.match(log[0], /P2/);
+});
+
+test('debugRemoveCard removes the first matching copy and logs the card name + player', () => {
+  const s = baseState(); // p1.hand = [1, 2]
+  const { state, log } = debugRemoveCard(s, 'p1', 1);
+  assert.deepEqual(state.p1.hand, [2]);
+  assert.deepEqual(state.p2.hand, []); // untouched
+  assert.match(log[0], /Rifle Squad/);
+  assert.match(log[0], /P1/);
+});
+
+test('debugRemoveCard removes only one copy, leaving duplicates in place', () => {
+  const s = { ...baseState() };
+  const withDupes = { ...s, p1: { ...s.p1, hand: [1, 1, 2] } };
+  const { state } = debugRemoveCard(withDupes, 'p1', 1);
+  assert.deepEqual(state.p1.hand, [1, 2]);
+});
+
+test('debugRemoveCard no-ops when the card isn\'t in hand', () => {
+  const s = baseState();
+  const { state, log } = debugRemoveCard(s, 'p1', 999);
+  assert.equal(state, s);
+  assert.deepEqual(log, []);
 });
 
 test('debugSetFuel sets an exact value, uncapped above 6', () => {
@@ -73,6 +96,23 @@ test('debugSetObjective maps \'neutral\' to controller: null', () => {
   const s = baseState();
   const { state } = debugSetObjective(s, '1,0', 'neutral', 2);
   assert.equal(state.objectives['1,0'].controller, null);
+});
+
+test('debugSetObjectiveCard swaps the cardId and resets level/controller', () => {
+  const s = baseState(); // '1,0' starts as Factory (26), L1, P1-controlled
+  const withControl = { ...s, objectives: { '1,0': { cardId: 26, level: 4, controller: 'p1' } } };
+  const { state, log } = debugSetObjectiveCard(withControl, '1,0', 27); // Airfield
+  assert.equal(state.objectives['1,0'].cardId, 27);
+  assert.equal(state.objectives['1,0'].level, 1);
+  assert.equal(state.objectives['1,0'].controller, null);
+  assert.match(log[0], /Airfield/);
+});
+
+test('debugSetObjectiveCard no-ops on a tile with no objective', () => {
+  const s = baseState();
+  const { state, log } = debugSetObjectiveCard(s, '3,3', 27);
+  assert.equal(state, s);
+  assert.deepEqual(log, []);
 });
 
 test('debugSetUnitState suppresses a unit', () => {

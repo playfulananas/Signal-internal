@@ -1,8 +1,20 @@
-import { CARD_BY_ID } from './cards.js?v=1786667882';
-import { getKeywords, maxArmorHits, discountFor, fuelCapOf, rotatedDir } from './state.js?v=1786667882';
-import { getTerrain } from './maps.js?v=1786667882';
+import { CARD_BY_ID } from './cards.js?v=1786830557';
+import { getKeywords, maxArmorHits, discountFor, fuelCapOf, rotatedDir } from './state.js?v=1786830557';
+import { getTerrain } from './maps.js?v=1786830557';
 
 const TERRAIN_SHORT = { plains: 'P', forest: 'F', water: 'W', desert: 'D', city: 'C' };
+
+// Player-facing keyword rules text for the hover tooltip on .bc-kw-tag badges — see GDD
+// Section 7. Only mapped keywords get a data-tip attribute; an unmapped one (e.g. a future
+// keyword not yet documented here) silently shows no tooltip rather than an empty bubble.
+const KEYWORD_TEXT = {
+  'Armor': 'Absorbs 1 hit before Suppression — 3 hits total to destroy.',
+  'Heavy Armor': 'Absorbs 2 hits before Suppression — 4 hits total to destroy.',
+  'Guard': 'Adjacent enemies must attack this unit first.',
+  'Double Attack': 'This unit resolves two attacks per activation.',
+  'Bombard': 'Can attack any enemy in its row or column, not just adjacent tiles.',
+  'Airborne': 'Ignores terrain placement restrictions.',
+};
 
 // ── Board rendering ───────────────────────────────────────────────────────────
 
@@ -117,7 +129,7 @@ function buildBoardCard(unit, viewer = 'p1') {
   el.className = `board-card ${unit.owner} ${unit.state}${buffed ? ' buffed' : ''}${opponent ? ' opponent-card' : ''}`;
 
   const kwList = getKeywords(unit);
-  const kwHtml = kwList.map(k => `<span class="bc-kw-tag">${k}</span>`).join('');
+  const kwHtml = kwList.map(k => `<span class="bc-kw-tag"${KEYWORD_TEXT[k] ? ` data-tip="${esc(KEYWORD_TEXT[k])}"` : ''}>${k}</span>`).join('');
   const abilityHtml = card.ability
     ? `<span class="bc-ability-pip" data-tip="${esc(card.ability)}">⚡</span>`
     : '';
@@ -206,7 +218,7 @@ export function renderHand(handCardIds, containerId, selectedCardId, extras = {}
         </div>
         ${(() => {
         const kws = card.keyword ? (Array.isArray(card.keyword) ? card.keyword : [card.keyword]) : [];
-        const kwTags = kws.map(k => `<span class="bc-kw-tag">${k}</span>`).join('');
+        const kwTags = kws.map(k => `<span class="bc-kw-tag"${KEYWORD_TEXT[k] ? ` data-tip="${esc(KEYWORD_TEXT[k])}"` : ''}>${k}</span>`).join('');
         const abilityTag = card.ability ? `<span class="bc-ability-pip" data-tip="${esc(card.ability)}">⚡</span>` : '';
         return (kwTags || abilityTag) ? `<div class="bc-keyword-row">${kwTags}${abilityTag}</div>` : '';
       })()}

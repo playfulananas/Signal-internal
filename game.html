@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <title>SIGNAL — Digital Prototype</title>
-  <link rel="stylesheet" href="css/game.css?v=1786807807">
+  <link rel="stylesheet" href="css/game.css?v=1786830557">
 </head>
 <body>
   <!-- Sets the theme before anything paints — see the matching script/comment in index.html.
@@ -148,6 +148,14 @@
     </div>
 
     <div class="debug-section">
+      <div class="debug-section-title">Remove Card from Hand</div>
+      <div class="debug-row">
+        <input class="debug-input" id="debug-card-remove-search" placeholder="Search current hand…">
+      </div>
+      <div id="debug-card-remove-results"></div>
+    </div>
+
+    <div class="debug-section">
       <div class="debug-section-title">Fuel</div>
       <div class="debug-row">
         <input class="debug-input" type="number" id="debug-fuel-value" style="flex:0 0 60px;">
@@ -194,6 +202,10 @@
           <option value="4">L4</option>
         </select>
         <button class="debug-btn" id="debug-obj-apply">Apply</button>
+      </div>
+      <div class="debug-row">
+        <select class="debug-input" id="debug-obj-card-select"></select>
+        <button class="debug-btn" id="debug-obj-card-apply">Change Card</button>
       </div>
     </div>
 
@@ -318,7 +330,7 @@
 
   </div>
 
-  <script type="module" src="./js/game.js?v=1786807807"></script>
+  <script type="module" src="./js/game.js?v=1786830557"></script>
 
 </body>
 </html>

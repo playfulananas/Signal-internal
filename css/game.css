@@ -762,7 +762,7 @@ body.viewer-p2 .stats-panel {
   font-size: 8px; font-weight: bold; color: var(--gold);
   border: 1px solid var(--gold-dim);
   border-radius: 2px; padding: 0 3px; line-height: 1.5;
-  letter-spacing: 0.3px;
+  letter-spacing: 0.3px; cursor: help;
 }
 .bc-state { position: absolute; bottom: 1px; right: 2px; font-size: 7px; color: var(--gold); font-weight: bold; }
 .bc-rotation { position: absolute; bottom: 1px; left: 2px; font-size: 7px; color: #88ccff; font-weight: bold; z-index: 2; }

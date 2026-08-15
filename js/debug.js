@@ -11,6 +11,18 @@ export function debugAddCard(state, player, cardId) {
   return { state: newState, log: [`[DEBUG] Added ${card.name} to ${player.toUpperCase()}'s hand`] };
 }
 
+// Removes one copy of cardId from player's hand — first-match by index, same convention the
+// game's own card-play logic uses (indexOf + splice) since hand entries have no per-copy id.
+export function debugRemoveCard(state, player, cardId) {
+  const card = CARD_BY_ID[cardId];
+  const hand = [...state[player].hand];
+  const idx = hand.indexOf(cardId);
+  if (idx === -1) return { state, log: [] };
+  hand.splice(idx, 1);
+  const newState = { ...state, [player]: { ...state[player], hand } };
+  return { state: newState, log: [`[DEBUG] Removed ${card?.name ?? '?'} from ${player.toUpperCase()}'s hand`] };
+}
+
 export function debugSetFuel(state, player, value) {
   const v = Math.max(0, value);
   const newState = { ...state, [player]: { ...state[player], fuel: v } };
@@ -38,6 +50,19 @@ export function debugSetObjective(state, tileKey, controller, level) {
   const newState = { ...state, objectives: { ...state.objectives, [tileKey]: newObj } };
   const name = CARD_BY_ID[obj.cardId]?.name ?? '?';
   return { state: newState, log: [`[DEBUG] ${name} set to ${controller.toUpperCase()} L${level}`] };
+}
+
+// Swaps which objective card occupies a tile — distinct from debugSetObjective (which only
+// adjusts controller/level on the card already there): a different card means resetting
+// level/controller too, since a level-4/P1-controlled Bridge inherited from whatever was
+// there before would be nonsense.
+export function debugSetObjectiveCard(state, tileKey, cardId) {
+  const obj = state.objectives[tileKey];
+  if (!obj) return { state, log: [] };
+  const card = CARD_BY_ID[cardId];
+  const newObj = { ...obj, cardId, level: 1, controller: null };
+  const newState = { ...state, objectives: { ...state.objectives, [tileKey]: newObj } };
+  return { state: newState, log: [`[DEBUG] ${tileKey} objective set to ${card?.name ?? '?'} (reset to L1, Neutral)`] };
 }
 
 export function debugSetUnitState(state, tileKey, newUnitState) {

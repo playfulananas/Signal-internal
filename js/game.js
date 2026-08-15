@@ -1,4 +1,4 @@
-import { CARD_BY_ID, CARDS } from './cards.js?v=1786807783';
+import { CARD_BY_ID, CARDS } from './cards.js?v=1786830557';
 import {
   createInitialState,
   startOfTurn,
@@ -18,14 +18,14 @@ import {
   discountFor,
   consumeDiscounts,
   addDiscount,
-} from './state.js?v=1786807783';
-import { getAttackableTargets, resolveSingleAttack, tileKey, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkUnitOnPlayAbility, checkCounteroffensiveGeneral, canStrikeHQDirectly, resolveEmptyBoardStrike } from './combat.js?v=1786807783';
-import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1786807783';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1786807783';
-import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1786807783';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn } from './debug.js?v=1786807783';
-import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1786807783';
-import { runBotTurn } from './bot_player.js?v=1786807783';
+} from './state.js?v=1786830557';
+import { getAttackableTargets, resolveSingleAttack, tileKey, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkUnitOnPlayAbility, checkCounteroffensiveGeneral, canStrikeHQDirectly, resolveEmptyBoardStrike } from './combat.js?v=1786830557';
+import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1786830557';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1786830557';
+import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1786830557';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1786830557';
+import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1786830557';
+import { runBotTurn } from './bot_player.js?v=1786830557';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
@@ -2599,6 +2599,9 @@ function setDebugPlayer(player) {
   debugTargetPlayer = player;
   document.getElementById('debug-player-p1').classList.toggle('active', player === 'p1');
   document.getElementById('debug-player-p2').classList.toggle('active', player === 'p2');
+  // Stale results from before the switch would target the wrong player's hand otherwise.
+  document.getElementById('debug-card-remove-search').value = '';
+  document.getElementById('debug-card-remove-results').innerHTML = '';
 }
 
 document.getElementById('debug-card-search').addEventListener('input', e => {
@@ -2616,6 +2619,35 @@ document.getElementById('debug-card-search').addEventListener('input', e => {
       const { state: newState, log } = debugAddCard(state, debugTargetPlayer, card.id);
       commitState(newState, log);
       document.getElementById('debug-card-search').value = '';
+      results.innerHTML = '';
+    });
+    results.appendChild(el);
+  }
+});
+
+// Sourced from the target player's actual current hand (not the full CARDS list) so nothing
+// clickable here can ever be a no-op — the point of the tool is picking something removable.
+document.getElementById('debug-card-remove-search').addEventListener('input', e => {
+  if (!state) return;
+  const query = e.target.value.trim().toLowerCase();
+  const results = document.getElementById('debug-card-remove-results');
+  results.innerHTML = '';
+  if (!query) return;
+  const hand = state[debugTargetPlayer].hand;
+  const counts = {};
+  for (const id of hand) counts[id] = (counts[id] ?? 0) + 1;
+  const matches = [...new Set(hand)]
+    .map(id => CARD_BY_ID[id])
+    .filter(c => c && c.name.toLowerCase().includes(query))
+    .slice(0, 8);
+  for (const card of matches) {
+    const el = document.createElement('div');
+    el.className = 'debug-card-result';
+    el.textContent = `${card.name} (${card.id}) ×${counts[card.id]}`;
+    el.addEventListener('click', () => {
+      const { state: newState, log } = debugRemoveCard(state, debugTargetPlayer, card.id);
+      commitState(newState, log);
+      document.getElementById('debug-card-remove-search').value = '';
       results.innerHTML = '';
     });
     results.appendChild(el);
@@ -2678,6 +2710,30 @@ document.getElementById('debug-obj-apply').addEventListener('click', () => {
   const controller = document.getElementById('debug-obj-controller').value;
   const level = Number(document.getElementById('debug-obj-level').value);
   const { state: newState, log } = debugSetObjective(state, tileKey, controller, level);
+  commitState(newState, log);
+});
+
+// Objective cards are static (unlike the tile dropdown above, which tracks live objective
+// placement) — populate once rather than refreshing every redraw(). Offers all 8 objective
+// cards, not just the 5-ID live random pool (WORKING_OBJECTIVE_IDS) — this tool exists
+// specifically so Bridge/Radar Station/Fortification can be manually tested despite being
+// excluded from normal match setup.
+(function populateDebugObjectiveCardOptions() {
+  const select = document.getElementById('debug-obj-card-select');
+  for (const c of CARDS.filter(c => c.type === 'objective')) {
+    const opt = document.createElement('option');
+    opt.value = c.id;
+    opt.textContent = `${c.id} — ${c.name}`;
+    select.appendChild(opt);
+  }
+})();
+
+document.getElementById('debug-obj-card-apply').addEventListener('click', () => {
+  if (!state) return;
+  const tileKey = document.getElementById('debug-obj-select').value;
+  if (!tileKey) return;
+  const cardId = Number(document.getElementById('debug-obj-card-select').value);
+  const { state: newState, log } = debugSetObjectiveCard(state, tileKey, cardId);
   commitState(newState, log);
 });
 
