@@ -1,5 +1,5 @@
-import { CARD_BY_ID } from './cards.js?v=1786735886';
-import { getSideValue, getKeywords, attackBeats, applyHit, oppositeDir, unsuppressOnBoard, drawCards } from './state.js?v=1786735886';
+import { CARD_BY_ID } from './cards.js?v=1786920173';
+import { getSideValue, getKeywords, attackBeats, applyHit, oppositeDir, unsuppressOnBoard, drawCards } from './state.js?v=1786920173';
 
 // Orthogonal directions and their row/col offsets.
 const DIRS = ["n", "e", "s", "w"];
@@ -182,10 +182,10 @@ export function checkUnitOnPlayAbility(s, active, col, key, card) {
   const ps = s[active];
   const log = [];
 
-  if (card.id === 119) { // Veteran Signal Corps — draw 1 if 2+ distinct Heroes activated this match
-    if ((ps.heroesActivatedEver ?? []).length >= 2) {
+  if (card.id === 119) { // Veteran Signal Corps — draw 1 if a Hero Power was activated last turn
+    if (ps.heroActivatedLastTurn) {
       s = { ...s, [active]: drawCards(ps, 1) };
-      log.push(`${card.name}: 2+ Heroes activated this match — draw 1 card`);
+      log.push(`${card.name}: activated a Hero Power last turn — draw 1 card`);
     }
   }
 

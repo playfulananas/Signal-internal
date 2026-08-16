@@ -85,19 +85,16 @@ function boardWith(entries) {
   return { ...board, ...entries };
 }
 function playerState(overrides = {}) {
-  return { heroZones: [null, null, null, null], heroesActivatedEver: [], hand: [], deck: [], ...overrides };
+  return { heroZones: [null, null, null, null], heroActivatedLastTurn: false, hand: [], deck: [], ...overrides };
 }
 
-test('Veteran Signal Corps (119) draws 1 only with 2+ distinct Heroes activated this match', () => {
+test('Veteran Signal Corps (119) draws 1 only if a Hero Power was activated last turn', () => {
   const card = CARD_BY_ID[119];
-  const zero = { p1: playerState({ deck: [5, 6] }), board: boardWith({}) };
-  assert.deepEqual(checkUnitOnPlayAbility(zero, 'p1', 0, '0,0', card).log, []);
+  const no = { p1: playerState({ deck: [5, 6] }), board: boardWith({}) };
+  assert.deepEqual(checkUnitOnPlayAbility(no, 'p1', 0, '0,0', card).log, []);
 
-  const one = { p1: playerState({ heroesActivatedEver: [87], deck: [5, 6] }), board: boardWith({}) };
-  assert.deepEqual(checkUnitOnPlayAbility(one, 'p1', 0, '0,0', card).log, []);
-
-  const two = { p1: playerState({ heroesActivatedEver: [87, 92], deck: [5, 6] }), board: boardWith({}) };
-  const { state: after, log } = checkUnitOnPlayAbility(two, 'p1', 0, '0,0', card);
+  const yes = { p1: playerState({ heroActivatedLastTurn: true, deck: [5, 6] }), board: boardWith({}) };
+  const { state: after, log } = checkUnitOnPlayAbility(yes, 'p1', 0, '0,0', card);
   assert.equal(log.length, 1);
   assert.equal(after.p1.hand.includes(5), true, 'drew the top card of the deck');
 });

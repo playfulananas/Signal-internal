@@ -60,6 +60,14 @@ async function handleRadioOperator(page) {
   await page.waitForTimeout(30);
 }
 
+// Change Formation (124) / Field Engineer (91): direction doesn't affect scoring, always CW.
+async function handleRotateDirection(page) {
+  const modal = page.locator("#rotate-direction-modal");
+  if (!(await modal.isVisible().catch(() => false))) return;
+  await page.locator("#rotate-cw-btn").click().catch(() => {});
+  await page.waitForTimeout(30);
+}
+
 // Resolves the Hero deploy modal (starting pick and later reinforcements) using the same
 // bestHeroDeployment scoring the in-page "vs AI" bot uses, falling back to first-hero/first-zone
 // if state can't be read. An unhandled modal doesn't throw — it silently swallows clicks and the
@@ -147,6 +155,7 @@ async function playTurnSmart(page) {
   for (let i = 0; i < 12; i++) {
     await handleForwardObserver(page);
     await handleRadioOperator(page);
+    await handleRotateDirection(page);
     if (await page.locator("#end-screen").isVisible().catch(() => false)) return;
 
     let debug = await readDebug(page);
@@ -204,15 +213,18 @@ async function playTurnSmart(page) {
       if (!bestCommand || score > bestCommand.score) bestCommand = { cardId: id, score };
     }
 
-    // Hero Power: one activation per turn (Coordinated Orders' extra activation isn't modeled),
-    // only implemented, powerType:"active" Heroes, and skip whichever already no-op'd this turn.
+    // Hero Power: each Hero once per turn, multiple different Heroes okay in the same turn
+    // (2026-08-17 — Coordinated Orders retired, its bonus activation is baseline now).
+    // Only implemented, powerType:"active" Heroes; skip whichever already no-op'd this turn.
     let bestHeroPower = null;
-    if (!ps.heroActivated) {
+    {
+      const activatedThisTurn = ps.heroesActivatedThisTurn ?? [];
       const heroZones = ps.heroZones ?? [null, null, null, null];
       for (let col = 0; col < 4; col++) {
         const heroId = heroZones[col];
         const hero = heroId != null ? CARD_BY_ID[heroId] : null;
         if (!hero || hero.powerType !== "active" || !hero.implemented) continue;
+        if (activatedThisTurn.includes(heroId)) continue;
         if (ps.fuel < (hero.activeCost ?? 0) || deadThisTurn.has(`hero:${heroId}`)) continue;
         const score = scoreHeroPower(state, active, heroId, col, attackedMap);
         if (!bestHeroPower || score > bestHeroPower.score) bestHeroPower = { heroId, col, score };
@@ -249,6 +261,7 @@ async function playTurnSmart(page) {
       await clickHandCard(page, choice.cardId);
       await page.waitForTimeout(30);
       await resolveTargetingSmart(page, { isDamageCommand: DAMAGE_COMMAND_IDS.has(choice.cardId) });
+      await handleRotateDirection(page); // Change Formation (124)
       const afterDebug = await readDebug(page);
       const handAfter = afterDebug?.state?.[active]?.hand?.length ?? handBefore;
       if (handAfter === handBefore) deadThisTurn.add(choice.cardId); // no-op: card never left hand
@@ -260,8 +273,10 @@ async function playTurnSmart(page) {
       await clickHeroZone(page, active, choice.col);
       await page.waitForTimeout(30);
       await resolveTargetingSmart(page, { heroPower: { heroId: choice.heroId, col: choice.col } });
+      await handleRotateDirection(page); // Field Engineer (91)
       const afterDebug = await readDebug(page);
-      if (!afterDebug?.state?.[active]?.heroActivated) deadThisTurn.add(`hero:${choice.heroId}`); // no-op: no legal target
+      const nowActivated = afterDebug?.state?.[active]?.heroesActivatedThisTurn ?? [];
+      if (!nowActivated.includes(choice.heroId)) deadThisTurn.add(`hero:${choice.heroId}`); // no-op: no legal target
       await flushPendingUiState(page, afterDebug);
     }
   }
@@ -306,6 +321,7 @@ async function playOneGame(page) {
     await playTurnSmart(page);
     await handleForwardObserver(page);
     await handleRadioOperator(page);
+    await handleRotateDirection(page);
 
     if (await page.locator("#end-screen").isVisible().catch(() => false)) break;
     const endTurnBtn = page.locator("#btn-end-turn");

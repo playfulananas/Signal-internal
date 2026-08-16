@@ -1,4 +1,4 @@
-import { CARD_BY_ID, CARDS } from './cards.js?v=1786911818';
+import { CARD_BY_ID, CARDS } from './cards.js?v=1786920173';
 import {
   createInitialState,
   startOfTurn,
@@ -18,15 +18,15 @@ import {
   discountFor,
   consumeDiscounts,
   addDiscount,
-} from './state.js?v=1786911818';
-import { getAttackableTargets, resolveSingleAttack, tileKey, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkUnitOnPlayAbility, checkCounteroffensiveGeneral, canStrikeHQDirectly, resolveEmptyBoardStrike } from './combat.js?v=1786911818';
-import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1786911818';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1786911818';
-import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1786911818';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1786911818';
-import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1786911818';
-import { runBotTurn } from './bot_player.js?v=1786911818';
-import { bestHeroDeployment } from './bot_ai.js?v=1786911818';
+} from './state.js?v=1786920173';
+import { getAttackableTargets, resolveSingleAttack, tileKey, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkUnitOnPlayAbility, checkCounteroffensiveGeneral, canStrikeHQDirectly, resolveEmptyBoardStrike } from './combat.js?v=1786920173';
+import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1786920173';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1786920173';
+import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1786920173';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1786920173';
+import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1786920173';
+import { runBotTurn } from './bot_player.js?v=1786920173';
+import { bestHeroDeployment } from './bot_ai.js?v=1786920173';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
@@ -816,7 +816,7 @@ function normalizeFirebaseState(raw) {
     missions: toArray(p.missions),
     heroRoster: toArray(p.heroRoster),
     heroZones:  fixZones(p.heroZones),
-    heroesActivatedEver: toArray(p.heroesActivatedEver),
+    heroesActivatedThisTurn: toArray(p.heroesActivatedThisTurn),
     pendingDiscounts: toArray(p.pendingDiscounts),
   } : p;
   return {
@@ -893,6 +893,8 @@ function heroTargetKeys(s, role, col, hero) {
         .map(u => u.key);
     case 100: // Recovery Officer — only a suppressed friendly unit is worth targeting
       return unitsInColumn(s, col, role).filter(({ unit }) => unit.state === 'suppressed').map(u => u.key);
+    case 91: // Field Engineer — any unsuppressed friendly unit in the column (rotates it)
+      return unitsInColumn(s, col, role).filter(({ unit }) => unit.state === 'normal').map(u => u.key);
     default:
       return null;
   }
@@ -945,15 +947,13 @@ function applyHeroPower(s, role, col, hero, targetKey) {
       log.push(`${hero.name}: power not automated yet`);
   }
 
-  const everBefore = s[role].heroesActivatedEver ?? [];
+  const activatedBefore = s[role].heroesActivatedThisTurn ?? [];
   return {
     state: {
       ...s,
       [role]: {
         ...s[role],
-        heroActivated: true,
-        heroActivatedId: hero.id,
-        heroesActivatedEver: everBefore.includes(hero.id) ? everBefore : [...everBefore, hero.id],
+        heroesActivatedThisTurn: activatedBefore.includes(hero.id) ? activatedBefore : [...activatedBefore, hero.id],
       },
     },
     log,
@@ -967,10 +967,10 @@ function tryActivateHero(role, col) {
   const hero = heroId != null ? CARD_BY_ID[heroId] : null;
   if (!hero || hero.powerType !== 'active') return false;
   if (!hero.implemented) { appendLog([`${hero.name}: power not automated yet`]); return true; }
-  // Coordinated Orders (126) lets ONE extra activation through the normal once-per-turn
-  // lock, but only for a different Hero than whichever already activated this turn.
-  const usingExtra = ps.heroActivated && ps.extraHeroActivation && heroId !== ps.heroActivatedId;
-  if (ps.heroActivated && !usingExtra) { appendLog(['Hero Power already used this turn']); return true; }
+  // Each Hero may activate once per turn; different Heroes may each activate in the same
+  // turn (locked 2026-08-17 — see state.js's heroesActivatedThisTurn).
+  const activatedThisTurn = ps.heroesActivatedThisTurn ?? [];
+  if (activatedThisTurn.includes(heroId)) { appendLog([`${hero.name}: power already used this turn`]); return true; }
 
   // Priority Orders (121) discounts, Radio Interference (123) taxes — both apply once,
   // to this one activation, then clear. min 0 per Priority Orders' own wording.
@@ -984,14 +984,12 @@ function tryActivateHero(role, col) {
   const costModLog = [];
   if (discount > 0) costModLog.push(`Priority Orders: -${discount}F`);
   if (tax > 0) costModLog.push(`Radio Interference: +${tax}F`);
-  if (usingExtra) costModLog.push(`Coordinated Orders: extra Hero Power activation`);
   const spendCostMods = playerState => {
     const { [col]: _taxed, ...restTaxed } = playerState.heroTaxedColumns ?? {};
     return {
       ...playerState,
       pendingHeroDiscount: 0,
       heroTaxedColumns: restTaxed,
-      extraHeroActivation: usingExtra ? false : playerState.extraHeroActivation,
     };
   };
 
@@ -1027,12 +1025,17 @@ function resolveHeroTargeting(clickedKey) {
   if (!pendingHeroTargets?.has(clickedKey)) return;
   const role = state.initiative;
   const hero = CARD_BY_ID[pendingHeroId];
-  const { state: next, log } = applyHeroPower(state, role, pendingHeroColumn, hero, clickedKey);
+  const col = pendingHeroColumn;
   pendingHeroId = null;
   pendingHeroColumn = null;
   pendingHeroTargets = null;
   preCommandState = null;
   uiState = 'idle';
+  if (hero.id === 91) { // Field Engineer — rotate, direction chosen via modal (see Change Formation)
+    showRotateDirectionModal({ kind: 'hero', targetKey: clickedKey, cardName: hero.name, s: state, log: [], role, heroId: hero.id });
+    return;
+  }
+  const { state: next, log } = applyHeroPower(state, role, col, hero, clickedKey);
   commitState(next, log);
 }
 
@@ -1702,11 +1705,6 @@ function playInstantCommand(cardId) {
       log.push(`${card.name}: next Hero Power this turn costs 2F less`);
       break;
     }
-    case 126: { // Coordinated Orders — one extra Hero Power activation this turn, different Hero
-      s = { ...s, [active]: { ...s[active], extraHeroActivation: true } };
-      log.push(`${card.name}: may activate one more Hero Power this turn (different Hero)`);
-      break;
-    }
     case 122: { // Command Shuffle — move/swap a Hero without spending the normal reposition.
       // Fuel/hand already deducted into `s` above; hand off to handleHeroZoneClick's
       // existing pick-up/drop flow via pendingCommandId === 122 (see that function).
@@ -2055,11 +2053,12 @@ function applyCommandEffect(commandId, targetKey) {
       log.push(`${card.name}: ${unitName} gains Guard + Armor (until your next turn)`);
       break;
     }
-    case 124: { // Change Formation — rotate 90° clockwise, persists until rotated again
-      const newRotation = ((unit.rotation || 0) + 90) % 360;
-      s = { ...s, board: { ...s.board, [targetKey]: { ...unit, rotation: newRotation } } };
-      log.push(`${card.name}: ${unitName} rotated to ${newRotation}°`);
-      break;
+    case 124: { // Change Formation — rotate 90°, direction chosen via modal (persists until rotated again)
+      pendingCommandId = null;
+      preCommandState = null;
+      uiState = 'idle';
+      showRotateDirectionModal({ kind: 'command', targetKey, cardName: card.name, s, log });
+      return;
     }
     case 79: { // Suppressing Fire — 1 hit per friendly Infantry
       const r = applyClassCountHits(s, active, targetKey, unit, 'Infantry', card.name);
@@ -2591,6 +2590,49 @@ function confirmFieldReserves(takenId) {
 }
 
 document.getElementById('field-reserves-skip').addEventListener('click', () => confirmFieldReserves(null));
+
+// ── Rotate direction modal (Change Formation 124 / Field Engineer 91) ──────────
+// Both effects rotate a unit 90° but let the player choose the direction (2026-08-17,
+// previously a fixed clockwise-only turn). `s`/`log` are the pre-rotation state/log built
+// up by the caller (Fuel already deducted); `kind` distinguishes a Command cast (nothing
+// further to record) from a Hero Power activation (needs heroesActivatedThisTurn updated).
+let pendingRotation = null;
+
+function showRotateDirectionModal(ctx) {
+  pendingRotation = ctx;
+  document.getElementById('rotate-direction-modal').style.display = 'flex';
+}
+
+function confirmRotateDirection(direction) { // direction: 1 = clockwise, -1 = counter-clockwise
+  document.getElementById('rotate-direction-modal').style.display = 'none';
+  if (!pendingRotation) return;
+  const { kind, targetKey, cardName, s, log, role, heroId } = pendingRotation;
+  pendingRotation = null;
+
+  const unit = s.board[targetKey];
+  const newRotation = (((unit.rotation || 0) + direction * 90) % 360 + 360) % 360;
+  let next = { ...s, board: { ...s.board, [targetKey]: { ...unit, rotation: newRotation } } };
+  const unitName = CARD_BY_ID[unit.cardId]?.name ?? 'unit';
+  const dirLabel = direction === 1 ? 'clockwise' : 'counter-clockwise';
+  const newLog = [...log, `${cardName}: ${unitName} rotated to ${newRotation}° (${dirLabel})`];
+
+  if (kind === 'hero') {
+    const activatedBefore = next[role].heroesActivatedThisTurn ?? [];
+    next = {
+      ...next,
+      [role]: {
+        ...next[role],
+        heroesActivatedThisTurn: activatedBefore.includes(heroId) ? activatedBefore : [...activatedBefore, heroId],
+      },
+    };
+  }
+
+  commitState(next, newLog);
+  checkWin();
+}
+
+document.getElementById('rotate-cw-btn').addEventListener('click', () => confirmRotateDirection(1));
+document.getElementById('rotate-ccw-btn').addEventListener('click', () => confirmRotateDirection(-1));
 
 // ── Theme toggle ──────────────────────────────────────────────────────────────
 // The attribute itself is already set by the inline blocking script at the top of <body>

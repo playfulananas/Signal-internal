@@ -50,6 +50,15 @@ async function handleArtyTargeting() {
   await sleep(CLICK_DELAY_MS);
 }
 
+// Change Formation (124) / Field Engineer (91): rotation direction doesn't affect the bot's
+// evaluation (scoreCommand/scoreHeroPower don't model it), so it always picks clockwise.
+async function handleRotateDirection() {
+  const modal = document.getElementById("rotate-direction-modal");
+  if (!modal || modal.style.display === "none") return;
+  document.getElementById("rotate-cw-btn")?.click();
+  await sleep(CLICK_DELAY_MS);
+}
+
 // If we reach the top of the decision loop with uiState != 'idle', it's leftover from
 // something that didn't fully resolve (see selfplay_test.mjs for the original diagnosis:
 // a stale targeting/command prompt silently swallows the next click instead of registering).
@@ -95,6 +104,7 @@ async function playBotTurnSteps() {
   for (let i = 0; i < 12; i++) {
     await handleForwardObserver();
     await handleRadioOperator();
+    await handleRotateDirection();
     if (isGameOver()) return;
 
     let debug = await flushPendingUiState(readDebug());
@@ -153,15 +163,18 @@ async function playBotTurnSteps() {
       if (!bestCommand || score > bestCommand.score) bestCommand = { cardId: id, score };
     }
 
-    // Hero Power: one activation per turn (Coordinated Orders' extra activation isn't modeled),
-    // only implemented, powerType:"active" Heroes, and skip whichever already no-op'd this turn.
+    // Hero Power: each Hero once per turn, multiple different Heroes okay in the same turn
+    // (2026-08-17 — Coordinated Orders retired, its bonus activation is baseline now).
+    // Only implemented, powerType:"active" Heroes; skip whichever already no-op'd this turn.
     let bestHeroPower = null;
-    if (!ps.heroActivated) {
+    {
+      const activatedThisTurn = ps.heroesActivatedThisTurn ?? [];
       const heroZones = ps.heroZones ?? [null, null, null, null];
       for (let col = 0; col < 4; col++) {
         const heroId = heroZones[col];
         const hero = heroId != null ? CARD_BY_ID[heroId] : null;
         if (!hero || hero.powerType !== "active" || !hero.implemented) continue;
+        if (activatedThisTurn.includes(heroId)) continue;
         if (ps.fuel < (hero.activeCost ?? 0) || deadThisTurn.has(`hero:${heroId}`)) continue;
         const score = scoreHeroPower(state, active, heroId, col, attackedMap);
         if (!bestHeroPower || score > bestHeroPower.score) bestHeroPower = { heroId, col, score };
@@ -198,6 +211,7 @@ async function playBotTurnSteps() {
       clickHandCard(choice.cardId);
       await sleep(CLICK_DELAY_MS);
       await resolveTargetingSmart({ isDamageCommand: DAMAGE_COMMAND_IDS.has(choice.cardId) });
+      await handleRotateDirection(); // Change Formation (124) — direction modal, see game.js
       const afterDebug = readDebug();
       const handAfter = afterDebug?.state?.[active]?.hand?.length ?? handBefore;
       if (handAfter === handBefore) deadThisTurn.add(choice.cardId); // no-op: card never left hand
@@ -209,8 +223,10 @@ async function playBotTurnSteps() {
       clickHeroZone(active, choice.col);
       await sleep(CLICK_DELAY_MS);
       await resolveTargetingSmart({ heroPower: { heroId: choice.heroId, col: choice.col } });
+      await handleRotateDirection(); // Field Engineer (91) — direction modal, see game.js
       const afterDebug = readDebug();
-      if (!afterDebug?.state?.[active]?.heroActivated) deadThisTurn.add(`hero:${choice.heroId}`); // no-op: no legal target
+      const nowActivated = afterDebug?.state?.[active]?.heroesActivatedThisTurn ?? [];
+      if (!nowActivated.includes(choice.heroId)) deadThisTurn.add(`hero:${choice.heroId}`); // no-op: no legal target
       await flushPendingUiState(afterDebug);
     }
   }
@@ -226,6 +242,7 @@ export async function runBotTurn() {
   await playBotTurnSteps();
   await handleForwardObserver();
   await handleRadioOperator();
+  await handleRotateDirection();
   if (isGameOver()) return;
 
   const endTurnBtn = document.getElementById("btn-end-turn");

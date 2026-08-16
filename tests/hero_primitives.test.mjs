@@ -96,8 +96,9 @@ test('every hero carries an authoritative scope and implemented flag', () => {
     assert.ok(['column', 'board'].includes(h.scope), `${h.name} has no valid scope`);
     assert.equal(typeof h.implemented, 'boolean', `${h.name} has no implemented flag`);
   }
-  // 11 implemented as of 2026-08-14 — Combined Arms General (109) retired.
-  assert.equal(heroes.filter(h => h.implemented).length, 11);
+  // 12 implemented as of 2026-08-17 — Field Engineer (91) wired up (reuses Change
+  // Formation's rotation mechanic); Combined Arms General (109) retired 2026-08-14.
+  assert.equal(heroes.filter(h => h.implemented).length, 12);
   // 14 column / 10 board as of the 2026-08 balance pass — Garrison Commander (99),
   // Counteroffensive General (101), and Armored Commander (103) moved column -> board.
   assert.equal(heroes.filter(h => h.scope === 'column').length, 14);
@@ -105,7 +106,8 @@ test('every hero carries an authoritative scope and implemented flag', () => {
 
 test('implemented heroes cover both scopes, both power types, and all 3 Commons', () => {
   const impl = CARDS.filter(c => c.type === 'hero' && c.implemented);
-  assert.equal(impl.filter(h => h.powerType === 'active').length, 6);
+  // 7 active as of 2026-08-17 — Field Engineer (91) wired up.
+  assert.equal(impl.filter(h => h.powerType === 'active').length, 7);
   // 5 passive as of 2026-08-14 — Combined Arms General (109, passive) retired.
   assert.equal(impl.filter(h => h.powerType === 'passive').length, 5);
   assert.ok(impl.some(h => h.scope === 'board') && impl.some(h => h.scope === 'column'));

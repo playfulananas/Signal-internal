@@ -435,6 +435,10 @@ body.viewer-p2 .stats-panel {
   font-size: 13px; font-weight: bold; color: var(--gold);
   font-family: 'Arial Narrow', Arial, sans-serif; line-height: 1;
 }
+/* Priority Orders (121) discount / Radio Interference (123) tax pending on this activation —
+   flags that the shown cost no longer matches the Hero's printed activeCost. */
+.hp-cost-up { text-decoration: underline; }
+.hp-cost-down { color: var(--red); }
 .hp-passive {
   font-size: 7px; font-weight: bold; color: var(--text-c);
   letter-spacing: 0.5px; font-family: 'Arial Narrow', Arial, sans-serif;
@@ -1289,7 +1293,10 @@ body[data-theme="light"] .hc-reward-text { color: #7a5500; }
 .mulligan-card .hc-reward-text { font-size: 11px !important; line-height: 1.5 !important; }
 
 /* ── Objective side bonus + fuel discount indicators ── */
-.bc-dir-buffed { color: var(--gold); font-weight: bold; }
+/* Per-side stat display vs. the card's printed value — any effect that changes stats
+   (objective bonuses, Hero bonuses, command effects, debug panel) funnels through here. */
+.bc-dir-up { color: var(--gold); font-weight: bold; }
+.bc-dir-down { color: var(--red); font-weight: bold; }
 .hc-cost-discounted { color: #44cc66; font-weight: bold; }
 .hc-tank-discounted { box-shadow: 0 0 8px rgba(68,204,102,0.5); border-color: #44cc66 !important; }
 body[data-theme="light"] .hc-tank-discounted { box-shadow: 0 0 8px rgba(0,160,60,0.3); border-color: #00a03c !important; }
@@ -1298,7 +1305,7 @@ body[data-theme="light"] .hc-cost-discounted { color: #007a2e; }
 /* ── Forward Observer / Radio Operator / Field Reserves modals — full-screen deck-look
    prompts. Same theming-bug fix as #hero-deploy-modal: was a hardcoded rgba(0,0,0,0.88)
    inline background, stayed dark regardless of the theme toggle. ── */
-#fo-modal, #radio-op-modal, #field-reserves-modal {
+#fo-modal, #radio-op-modal, #field-reserves-modal, #rotate-direction-modal {
   position: fixed;
   inset: 0;
   background: var(--bg);

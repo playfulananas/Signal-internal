@@ -31,9 +31,9 @@ test('fuelCapOf is 6 with no Heroes deployed', () => {
   assert.equal(fuelCapOf({ fuelCap: 6, heroZones: [null, null, null, null] }), 6);
 });
 
-test('fuelCapOf is 8 with Logistics Chief deployed in any zone', () => {
-  assert.equal(fuelCapOf({ fuelCap: 6, heroZones: [null, 89, null, null] }), 8);
-  assert.equal(fuelCapOf({ fuelCap: 6, heroZones: [89, null, null, null] }), 8);
+test('fuelCapOf is 11 with Logistics Chief deployed in any zone', () => {
+  assert.equal(fuelCapOf({ fuelCap: 6, heroZones: [null, 89, null, null] }), 11);
+  assert.equal(fuelCapOf({ fuelCap: 6, heroZones: [89, null, null, null] }), 11);
 });
 
 test('fuelCapOf falls back to 6 when heroZones is absent (pre-Hero saved state)', () => {

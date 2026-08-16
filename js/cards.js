@@ -9,10 +9,10 @@
 //   the rest are parked (not cut) pending mechanics that don't exist yet — see each card's note.
 //   — added 2026-07-30 (v0.4 Hero command layer, from Denis's Doc 02 handoff). Heroes are
 //   never shuffled into the 30-card deck (see getDeckPool in decks.js) — they belong to a
-//   separate 4-Hero roster per deck. No Hero Phase/activation/reinforcement logic is wired
-//   yet (data only, UI skeleton only — see the hero-zone-* elements in game.html/game.css).
-//   Ability text that references Hero Powers/Hero Zones/rotation is inert until that logic
-//   exists — flagged inline below on the specific cards affected.
+//   separate 4-Hero roster per deck. Hero Phase/activation/reinforcement logic is wired
+//   (see game.js's runHeroPhase/tryActivateHero/applyHeroPower) — `implemented:false` now
+//   means specifically "this Hero's own power has no case in applyHeroPower yet", not that
+//   the surrounding system is missing.
 // Optional `retired: true` on any card excludes it from the deck pool/validator
 // (getDeckPool/validateDeck in decks.js) without deleting its data or logic.
 
@@ -74,7 +74,7 @@ export const CARDS = [
   { id:116, name:"Fighter-Bomber",       cls:"Aircraft",  rarity:"Common", type:"unit", cost:4, ap:4, keyword:"Airborne",   n:7, e:6, s:5, w:3, ability:null },
   { id:117, name:"Heavy Artillery Battery", cls:"Artillery", rarity:"Common", type:"unit", cost:4, ap:4, keyword:"Bombard", n:8, e:3, s:7, w:3, ability:null },
   { id:118, name:"Heavy Cruiser",        cls:"Naval",     rarity:"Common", type:"unit", cost:5, ap:5, keyword:"Heavy Armor", n:7, e:6, s:6, w:2, ability:null },
-  { id:119, name:"Veteran Signal Corps", cls:"Infantry",  rarity:"Rare",   type:"unit", cost:3, ap:3, keyword:null,         n:6, e:5, s:5, w:4, ability:"On Play: If you have activated Hero Powers from at least 2 different Heroes this match, draw 1 card." },
+  { id:119, name:"Veteran Signal Corps", cls:"Infantry",  rarity:"Rare",   type:"unit", cost:3, ap:3, keyword:null,         n:6, e:5, s:5, w:4, ability:"On Play: If you activated a Hero Power last turn, draw 1 card." },
   { id:120, name:"Strategic Bomber",     cls:"Aircraft",  rarity:"Rare",   type:"unit", cost:5, ap:5, keyword:"Bombard",    n:8, e:6, s:5, w:4, ability:"The first time this Unit destroys an enemy, draw 1 card." },
 
   // ── COMMANDS ───────────────────────────────────────────────────────────
@@ -100,15 +100,16 @@ export const CARDS = [
   { id:80, name:"Entrench",            rarity:"Common", type:"command", cost:2, ap:2, effect:"Friendly Infantry you control gain +2 to all sides until your next turn." },
 
   // ── COMMANDS — v0.4 launch filler (2026-07-30, from Denis's Doc 03 handoff) ──
-  // Priority Orders/Command Shuffle/Radio Interference/Coordinated Orders reference Hero Powers,
-  // inert until Hero Phase logic exists. Change Formation references a rotation mechanic not yet
-  // implemented in the digital prototype (see cards.js header).
+  // Hero Phase logic now exists (2026-08-17) — Priority Orders/Command Shuffle/Radio
+  // Interference/Change Formation are all live. Coordinated Orders retired below: the base
+  // Hero Power Activation Economy now lets every deployed Hero activate once per turn, which
+  // is exactly what that card used to grant as a one-time bonus — its effect is baseline now.
   { id:121, name:"Priority Orders",    rarity:"Common", type:"command", cost:1, ap:1, effect:"Your next Hero Power this turn costs 2F less, minimum 0." },
   { id:122, name:"Command Shuffle",    rarity:"Common", type:"command", cost:1, ap:1, effect:"Move 1 Hero or swap 2 Heroes. This does not count as your normal Hero reposition this turn." },
   { id:123, name:"Radio Interference", rarity:"Common", type:"command", cost:2, ap:2, effect:"Choose an enemy Hero. Its Activated Hero Power costs +1F during its controller's next turn." },
-  { id:124, name:"Change Formation",   rarity:"Common", type:"command", cost:1, ap:1, effect:"Rotate one unsuppressed friendly Unit 90 degrees." },
+  { id:124, name:"Change Formation",   rarity:"Common", type:"command", cost:1, ap:1, effect:"Rotate one unsuppressed friendly Unit 90 degrees, in either direction (your choice)." },
   { id:125, name:"Field Reserves",     rarity:"Common", type:"command", cost:2, ap:2, effect:"Look at the top 4 cards of your deck. You may reveal a Unit and put it into your hand. Put the rest on the bottom." },
-  { id:126, name:"Coordinated Orders", rarity:"Rare",   type:"command", cost:3, ap:3, effect:"You may activate one additional Hero Power this turn using a different Hero. Pay that Hero Power's normal Fuel cost." },
+  { id:126, name:"Coordinated Orders", rarity:"Rare",   type:"command", cost:3, ap:3, effect:"You may activate one additional Hero Power this turn using a different Hero. Pay that Hero Power's normal Fuel cost.", retired:true }, // Retired 2026-08-17 — the Activation Economy change (multiple Heroes per turn) made this baseline behavior.
 
   // ── MISSIONS (retired 2026-07-30 — parked, not deleted; see cards.js header) ──
   { id:23, name:"Hold the Line",       rarity:"Common", type:"mission", cost:0, ap:0, req:"Control all objectives at end of your turn.",                                          reward:"Heal 5 HQ HP.", retired:true },
@@ -143,9 +144,9 @@ export const CARDS = [
   // No Hero Phase/activation/reinforcement logic wired yet; see cards.js header.
   { id:87,  name:"Quartermaster General",        rarity:"Common", type:"hero", scope:"board",  implemented:true,  powerType:"active",  activeCost:2, ability:"Draw 1 card.", direction:"Universal value; starter-readable." },
   { id:88,  name:"Operations Planner",           rarity:"Rare",   type:"hero", scope:"board",  implemented:false, powerType:"passive", activeCost:null, ability:"The first card you draw each turn may be put on the bottom of your deck. If you do, draw the next card.", direction:"Consistency without raw card advantage." },
-  { id:89,  name:"Logistics Chief",              rarity:"Rare",   type:"hero", scope:"board",  implemented:true,  powerType:"passive", activeCost:null, ability:"Your maximum stored Fuel is 8 instead of 6.", direction:"Expensive/ramp decks." },
+  { id:89,  name:"Logistics Chief",              rarity:"Rare",   type:"hero", scope:"board",  implemented:true,  powerType:"passive", activeCost:null, ability:"Your maximum stored Fuel is 11 instead of 9.", direction:"Expensive/ramp decks." },
   { id:90,  name:"Intelligence Officer",         rarity:"Rare",   type:"hero", scope:"board",  implemented:false, powerType:"active",  activeCost:1, ability:"Look at the opponent's hand.", direction:"Information/control. Needs an opponent hand-reveal UI (also blocks Radar Station)." },
-  { id:91,  name:"Field Engineer",               rarity:"Rare",   type:"hero", scope:"column", implemented:false, powerType:"active",  activeCost:1, ability:"Rotate one unsuppressed friendly Unit in this Hero's column 90 degrees.", direction:"Signature SIGNAL positioning. Needs a unit rotation mechanic, which does not exist." },
+  { id:91,  name:"Field Engineer",               rarity:"Rare",   type:"hero", scope:"column", implemented:true,  powerType:"active",  activeCost:1, ability:"Rotate one unsuppressed friendly Unit in this Hero's column 90 degrees, in either direction (your choice).", direction:"Signature SIGNAL positioning. Wired up 2026-08-17 — reuses Change Formation's (124) rotation mechanic." },
   { id:92,  name:"Tactical Commander",           rarity:"Common", type:"hero", scope:"column", implemented:true,  powerType:"active",  activeCost:1, ability:"A friendly Unit in this Hero's column gets +1 all sides this turn.", direction:"Simple positional starter Hero." },
   { id:93,  name:"Mobile Warfare Commander",     rarity:"Rare",   type:"hero", scope:"column", implemented:false, powerType:"passive", activeCost:null, ability:"After this Hero changes zones due to your Hero Phase reposition, the first Unit you play in this Hero's column this turn costs 1F less.", direction:"Rewards command movement. Wording normalised 2026-08-01 from 'its new column' — it was column-scoped in substance but read as board-scoped." },
   { id:94,  name:"Objective Marshal",            rarity:"Rare",   type:"hero", scope:"column", implemented:true,  powerType:"passive", activeCost:null, ability:"The first friendly Unit you play each turn in this Hero's column on or adjacent to an Objective gets +1 all sides until your next turn.", direction:"Objective control." },

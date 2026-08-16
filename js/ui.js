@@ -1,6 +1,6 @@
-import { CARD_BY_ID } from './cards.js?v=1786832554';
-import { getKeywords, maxArmorHits, discountFor, fuelCapOf, rotatedDir } from './state.js?v=1786832554';
-import { getTerrain } from './maps.js?v=1786832554';
+import { CARD_BY_ID } from './cards.js?v=1786920173';
+import { getKeywords, maxArmorHits, discountFor, fuelCapOf, rotatedDir } from './state.js?v=1786920173';
+import { getTerrain } from './maps.js?v=1786920173';
 
 const TERRAIN_SHORT = { plains: 'P', forest: 'F', water: 'W', desert: 'D', city: 'C' };
 
@@ -138,7 +138,6 @@ function buildBoardCard(unit, viewer = 'p1', transitionFlag = null) {
     ? `<span class="bc-ability-pip" data-tip="${esc(card.ability)}">⚡</span>`
     : '';
   const bonus = (unit.tempSideBonus || 0) + (unit.grantedSideBonus || 0) + (unit.objSideBonus || 0) + (unit.debugSideBonus || 0);
-  const objBonus = unit.objSideBonus || 0;
   const maxArmor = maxArmorHits(unit);
   const remaining = maxArmor - unit.armorHits;
   const armorPips = maxArmor > 0
@@ -148,28 +147,33 @@ function buildBoardCard(unit, viewer = 'p1', transitionFlag = null) {
     : '';
 
   const CLS_ABBR = { Infantry:'INF', Tank:'TNK', Artillery:'ART', Aircraft:'AIR', Commander:'CMD', Naval:'NAV' };
-  const dc = objBonus > 0 ? ' class="bc-dir-buffed"' : '';
   // rotatedDir only (Change Formation 124 / Field Engineer 91) — no owner/viewer swap.
   // A card's printed N/E/S/W always shows at physical N/E/S/W, matching hand and getSideValue
   // (see state.js — the matching P2_FLIP there was removed 2026-08-14 for the same reason).
   const rn = rotatedDir('n', unit.rotation), re = rotatedDir('e', unit.rotation);
   const rs = rotatedDir('s', unit.rotation), rw = rotatedDir('w', unit.rotation);
-  const dn = card[rn] + bonus;
-  const ds = card[rs] + bonus;
-  const de = card[re] + bonus;
-  const dw = card[rw] + bonus;
+  const baseN = card[rn], baseE = card[re], baseS = card[rs], baseW = card[rw];
+  const dn = baseN + bonus;
+  const ds = baseS + bonus;
+  const de = baseE + bonus;
+  const dw = baseW + bonus;
+  // Any side no longer matching its printed value is flagged gold (increased) or red
+  // (decreased) — every stat-changing effect (objective bonuses, Hero bonuses, command
+  // effects, the debug panel) funnels through the same tempSideBonus/grantedSideBonus/
+  // objSideBonus/debugSideBonus fields, so one comparison per side covers all of them.
+  const dirClass = (val, base) => val > base ? ' class="bc-dir-up"' : val < base ? ' class="bc-dir-down"' : '';
   if (card && card.type === 'unit') {
     el.innerHTML = `
       <div class="bc-name">${card.name}</div>
       <div class="bc-dirs">
         <div></div>
-        <div${dc}>${dn}</div>
+        <div${dirClass(dn, baseN)}>${dn}</div>
         <div></div>
-        <div${dc}>${dw}</div>
+        <div${dirClass(dw, baseW)}>${dw}</div>
         <div class="bc-cls">${CLS_ABBR[card.cls] ?? card.cls}</div>
-        <div${dc}>${de}</div>
+        <div${dirClass(de, baseE)}>${de}</div>
         <div></div>
-        <div${dc}>${ds}</div>
+        <div${dirClass(ds, baseS)}>${ds}</div>
         <div></div>
       </div>
       ${(kwHtml || abilityHtml) ? `<div class="bc-keyword-row">${kwHtml}${abilityHtml}</div>` : ''}
@@ -289,9 +293,13 @@ export function heroCardHtml(card) {
   </div>`;
 }
 
-export function heroPlacedHtml(card, owner, { ready = false, spent = false, picked = false } = {}) {
+export function heroPlacedHtml(card, owner, { ready = false, spent = false, picked = false, effectiveCost = null } = {}) {
+  // effectiveCost reflects Priority Orders' discount / Radio Interference's tax on THIS
+  // player's THIS column, when known (see renderHeroZones) — falls back to the printed cost.
+  const shownCost = effectiveCost ?? card.activeCost;
+  const costChanged = effectiveCost != null && effectiveCost !== card.activeCost;
   const cost = card.powerType === 'active'
-    ? `<span class="hp-cost">${card.activeCost}⛽</span>`
+    ? `<span class="hp-cost${costChanged ? (shownCost < card.activeCost ? ' hp-cost-down' : ' hp-cost-up') : ''}">${shownCost}⛽</span>`
     : `<span class="hp-passive">PASSIVE</span>`;
   const cls = `${owner}${ready ? ' ready' : ''}${spent ? ' spent' : ''}${picked ? ' picked' : ''}`;
   return `<div class="hero-placed ${cls}" data-hero-id="${card.id}">
@@ -308,7 +316,8 @@ export function renderHeroZones(state, selectedZone = null) {
   for (const role of ['p1', 'p2']) {
     const strip = document.getElementById(`hero-zone-${role}`);
     if (!strip) continue;
-    const zones = state[role]?.heroZones ?? [null, null, null, null];
+    const ps = state[role];
+    const zones = ps?.heroZones ?? [null, null, null, null];
     const isTheirTurn = state.initiative === role;
     strip.innerHTML = zones.map((heroId, col) => {
       const card = heroId != null ? CARD_BY_ID[heroId] : null;
@@ -317,11 +326,20 @@ export function renderHeroZones(state, selectedZone = null) {
       if (!card) {
         return `<div class="hero-zone-slot${isDropTarget ? ' drop-target' : ''}" data-hero-zone="${role}-${col}">HERO</div>`;
       }
-      // Gold glow marks an activated power still available — only meaningful on your turn.
-      const ready = isTheirTurn && card.powerType === 'active' && !state[role].heroActivated;
-      const spent = isTheirTurn && card.powerType === 'active' && state[role].heroActivated;
+      // Gold glow marks an activated power still available — per-Hero now (2026-08-17): each
+      // deployed Hero tracks its own activation, so a spent Hero no longer dims its column-mates.
+      const activatedThisTurn = ps.heroesActivatedThisTurn ?? [];
+      const alreadyUsed = activatedThisTurn.includes(heroId);
+      const ready = isTheirTurn && card.powerType === 'active' && !alreadyUsed;
+      const spent = isTheirTurn && card.powerType === 'active' && alreadyUsed;
       const picked = isTheirTurn && selectedZone === col;
-      return `<div class="hero-zone-slot filled${isDropTarget ? ' drop-target' : ''}" data-hero-zone="${role}-${col}">${heroPlacedHtml(card, role, { ready, spent, picked })}</div>`;
+      // Effective cost accounts for Priority Orders (121)/Radio Interference (123), so the
+      // number shown before activating matches what actually gets charged — previously always
+      // showed the flat printed cost, which read as "broken" when a discount/tax was pending.
+      const discount = ps.pendingHeroDiscount ?? 0;
+      const tax = (ps.heroTaxedColumns ?? {})[col] ?? 0;
+      const effectiveCost = card.powerType === 'active' ? Math.max(0, (card.activeCost ?? 0) - discount + tax) : null;
+      return `<div class="hero-zone-slot filled${isDropTarget ? ' drop-target' : ''}" data-hero-zone="${role}-${col}">${heroPlacedHtml(card, role, { ready, spent, picked, effectiveCost })}</div>`;
     }).join('');
   }
 }
