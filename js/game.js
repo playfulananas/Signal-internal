@@ -1,4 +1,4 @@
-import { CARD_BY_ID, CARDS } from './cards.js?v=1786832554';
+import { CARD_BY_ID, CARDS } from './cards.js?v=1786911818';
 import {
   createInitialState,
   startOfTurn,
@@ -18,14 +18,15 @@ import {
   discountFor,
   consumeDiscounts,
   addDiscount,
-} from './state.js?v=1786832554';
-import { getAttackableTargets, resolveSingleAttack, tileKey, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkUnitOnPlayAbility, checkCounteroffensiveGeneral, canStrikeHQDirectly, resolveEmptyBoardStrike } from './combat.js?v=1786832554';
-import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1786832554';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1786832554';
-import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1786832554';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1786832554';
-import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1786832554';
-import { runBotTurn } from './bot_player.js?v=1786832554';
+} from './state.js?v=1786911818';
+import { getAttackableTargets, resolveSingleAttack, tileKey, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkUnitOnPlayAbility, checkCounteroffensiveGeneral, canStrikeHQDirectly, resolveEmptyBoardStrike } from './combat.js?v=1786911818';
+import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1786911818';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1786911818';
+import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1786911818';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1786911818';
+import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1786911818';
+import { runBotTurn } from './bot_player.js?v=1786911818';
+import { bestHeroDeployment } from './bot_ai.js?v=1786911818';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
@@ -463,7 +464,10 @@ function runHeroPhase(role) {
   };
 
   if (isAiMode && role === 'p2') {
-    finish(roster[0], (ps.heroZones ?? []).findIndex(z => z == null));
+    const choice = bestHeroDeployment(state, role, roster, ps.heroZones ?? [null, null, null, null]);
+    const heroId = choice?.heroId ?? roster[0];
+    const col = choice?.col ?? (ps.heroZones ?? []).findIndex(z => z == null);
+    finish(heroId, col);
     return;
   }
 
