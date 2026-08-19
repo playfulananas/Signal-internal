@@ -1,5 +1,5 @@
-import { CARD_BY_ID } from './cards.js?v=1787173232';
-import { getSideValue, getKeywords, attackBeats, applyHit, oppositeDir, unsuppressOnBoard, drawCards, addDiscount } from './state.js?v=1787173232';
+import { CARD_BY_ID } from './cards.js?v=1787179497';
+import { getSideValue, getKeywords, attackBeats, applyHit, oppositeDir, unsuppressOnBoard, drawCards, addDiscount } from './state.js?v=1787179497';
 
 // Orthogonal directions and their row/col offsets.
 const DIRS = ["n", "e", "s", "w"];
@@ -157,8 +157,12 @@ export function checkHeroPassivesOnPlace(s, active, col, key, card) {
 // a doubled Deathrattle (Graves Registration Officer, 147, on Convoy Escort 138) stack onto
 // a single next Naval Unit (+2) rather than spreading across the next two (+1 each) — per
 // Filip 2026-08-19. Mirrors discountFor's own "sum every matching entry" behavior, just for
-// a stat bonus instead of a Fuel discount. Never expires on its own (still valid however many
-// turns pass) but is fully consumed by the FIRST matching Unit played, never split further.
+// a stat bonus instead of a Fuel discount. The QUEUED buff never expires on its own (still
+// valid however many turns pass) but is fully consumed by the FIRST matching Unit played,
+// never split further. The bonus, once APPLIED to that Unit, is PERMANENT — sideBonusTurns:99
+// (same "effectively never expires in a real match" convention as Field Marshal 144), not
+// "until your next turn" — corrected 2026-08-20, per Filip: was wrongly given a 1-turn limit
+// like Veteran Battery (134), which is meant to be temporary; Convoy Escort's isn't.
 export function checkPendingUnitBuff(s, active, key, card) {
   const ps = s[active];
   const pending = ps.pendingUnitBuffs ?? [];
@@ -169,10 +173,10 @@ export function checkPendingUnitBuff(s, active, key, card) {
   const u = s.board[key];
   const newState = {
     ...s,
-    board: { ...s.board, [key]: { ...u, grantedSideBonus: (u.grantedSideBonus || 0) + total, sideBonusTurns: 1 } },
+    board: { ...s.board, [key]: { ...u, grantedSideBonus: (u.grantedSideBonus || 0) + total, sideBonusTurns: 99 } },
     [active]: { ...ps, pendingUnitBuffs: remaining },
   };
-  return { state: newState, log: [`${card.name} +${total} all sides (until your next turn) — queued bonus`] };
+  return { state: newState, log: [`${card.name} +${total} all sides (permanent) — queued bonus`] };
 }
 
 // ── Hero passive — Counteroffensive General (101) ───────────────────────────
@@ -377,9 +381,9 @@ function runDeathrattleEffect(s, key, dyingUnit, card, owner, excludeKeys = new 
       log.push(r.log.length ? `${tag} ${r.log[0]}` : `${tag} no 2-cost Aircraft in deck`);
       break;
     }
-    case 138: { // Convoy Escort — next Naval Unit played gets +1 all sides
+    case 138: { // Convoy Escort — next Naval Unit played gets +1 all sides, permanently
       s = { ...s, [owner]: { ...s[owner], pendingUnitBuffs: [...(s[owner].pendingUnitBuffs || []), { appliesTo: 'Naval', amount: 1 }] } };
-      log.push(`${tag} next Naval Unit played gets +1 all sides`);
+      log.push(`${tag} next Naval Unit played gets +1 all sides (permanent)`);
       break;
     }
     default:

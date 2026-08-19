@@ -1,6 +1,6 @@
-import { CARD_BY_ID } from './cards.js?v=1787173232';
-import { getKeywords, maxArmorHits, discountFor, fuelCapOf, rotatedDir } from './state.js?v=1787173232';
-import { getTerrain } from './maps.js?v=1787173232';
+import { CARD_BY_ID } from './cards.js?v=1787179497';
+import { getKeywords, maxArmorHits, discountFor, fuelCapOf, rotatedDir } from './state.js?v=1787179497';
+import { getTerrain } from './maps.js?v=1787179497';
 
 const TERRAIN_SHORT = { plains: 'P', forest: 'F', water: 'W', desert: 'D', city: 'C' };
 
@@ -217,25 +217,26 @@ export function renderHand(handCardIds, containerId, selectedCardId, extras = {}
         : `${displayCost} ⛽`;
       if (discount > 0) div.classList.add('hc-tank-discounted');
       // Pending stat buff (Deathrattle: Convoy Escort 138) — queued for the next matching
-      // class played. Sums every matching entry (checkPendingUnitBuff in combat.js does the
-      // same when it's actually consumed) so a doubled trigger shows the full stacked amount
-      // here too, not just the first entry. Per Filip 2026-08-19: "mark it in hand also."
+      // class played, ANY copy in hand (not just one arbitrarily marked). Sums every matching
+      // entry (checkPendingUnitBuff in combat.js does the same when it's actually consumed) so
+      // a doubled trigger shows the full stacked amount. Shown as boosted N/E/S/W numbers in
+      // gold, same convention as buildBoardCard's bc-dir-up — not a separate badge (2026-08-20
+      // correction, per Filip: "in hand all navals should have increased stats... not like now").
       const pendingBuff = (extras.playerState?.pendingUnitBuffs ?? [])
         .filter(b => b.appliesTo === card.cls)
         .reduce((sum, b) => sum + b.amount, 0);
       if (pendingBuff > 0) div.classList.add('hc-buff-pending');
-      const buffBadge = pendingBuff > 0
-        ? `<div class="hc-buff-badge" data-tip="Queued bonus: +${pendingBuff} all sides when this is played">+${pendingBuff} ⚔</div>`
-        : '';
+      const dn = card.n + pendingBuff, de = card.e + pendingBuff, ds = card.s + pendingBuff, dw = card.w + pendingBuff;
+      const dirClass = pendingBuff > 0 ? ' class="bc-dir-up"' : '';
+      const dirTip = pendingBuff > 0 ? ` data-tip="Queued bonus: +${pendingBuff} all sides when this is played"` : '';
       div.innerHTML = `
         <div class="hc-header">${card.name}</div>
         <div class="hc-cost">${costHtml}</div>
         <div class="hc-type">${card.cls}</div>
-        ${buffBadge}
-        <div class="hc-dirs">
-          <div></div><div>${card.n}</div><div></div>
-          <div>${card.w}</div><div style="color:#444">·</div><div>${card.e}</div>
-          <div></div><div>${card.s}</div><div></div>
+        <div class="hc-dirs"${dirTip}>
+          <div></div><div${dirClass}>${dn}</div><div></div>
+          <div${dirClass}>${dw}</div><div style="color:#444">·</div><div${dirClass}>${de}</div>
+          <div></div><div${dirClass}>${ds}</div><div></div>
         </div>
         ${(() => {
         const kws = card.keyword ? (Array.isArray(card.keyword) ? card.keyword : [card.keyword]) : [];

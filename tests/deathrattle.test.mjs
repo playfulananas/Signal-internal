@@ -198,6 +198,7 @@ test('Convoy Escort (138) doubled: queues two +1 entries, which checkPendingUnit
   const placed = { p1: after.p1, board: boardWith({ '0,0': unit(15, 'p1') }) };
   const { state: final, log } = checkPendingUnitBuff(placed, 'p1', '0,0', naval);
   assert.equal(final.board['0,0'].grantedSideBonus, 2, 'both queued +1s land on the same Unit, not spread across two');
+  assert.equal(final.board['0,0'].sideBonusTurns, 99, 'permanent, not the 1-turn Veteran Battery style limit');
   assert.deepEqual(final.p1.pendingUnitBuffs, [], 'both entries consumed at once');
   assert.ok(log[0].includes('+2'));
 });
@@ -233,6 +234,10 @@ test('checkPendingUnitBuff applies a queued buff to a matching Unit and consumes
   const { state: after, log } = checkPendingUnitBuff(s, 'p1', '0,0', naval);
   assert.equal(log.length, 1);
   assert.equal(after.board['0,0'].grantedSideBonus, 1);
+  // Permanent (sideBonusTurns:99, same convention as Field Marshal 144) — corrected 2026-08-20,
+  // per Filip: was wrongly given a 1-turn limit like Veteran Battery (134), which IS meant to
+  // be temporary; Convoy Escort's bonus isn't.
+  assert.equal(after.board['0,0'].sideBonusTurns, 99);
   assert.deepEqual(after.p1.pendingUnitBuffs, [], 'the buff is consumed, not left queued');
 });
 

@@ -98,7 +98,7 @@ export const CARDS = [
   { id:135, name:"Rearguard Squad",    cls:"Infantry",  rarity:"Common", type:"unit", cost:2, ap:2, keyword:"Deathrattle", n:3, e:4, s:3, w:4,   ability:"Deathrattle: Give an adjacent friendly Unit +1 all sides (until your next turn)." },
   { id:136, name:"Salvage Crew",       cls:"Tank",      rarity:"Common", type:"unit", cost:2, ap:2, keyword:"Deathrattle", n:4, e:5, s:5, w:4,   ability:"Deathrattle: Your next Tank costs 1 less Fuel." },
   { id:137, name:"Squadron Reserve",   cls:"Aircraft",  rarity:"Common", type:"unit", cost:4, ap:4, keyword:"Deathrattle", n:6, e:2, s:3, w:4,   ability:"Deathrattle: Summon a random 2-cost friendly Aircraft from your deck onto this tile." },
-  { id:138, name:"Convoy Escort",      cls:"Naval",     rarity:"Common", type:"unit", cost:2, ap:2, keyword:"Deathrattle", n:2, e:2, s:5, w:5,   ability:"Deathrattle: Your next Naval Unit played gets +1 all sides (until your next turn)." },
+  { id:138, name:"Convoy Escort",      cls:"Naval",     rarity:"Common", type:"unit", cost:2, ap:2, keyword:"Deathrattle", n:2, e:2, s:5, w:5,   ability:"Deathrattle: Your next Naval Unit played gets +1 all sides, permanently." },
 
   // ── COMMANDS ───────────────────────────────────────────────────────────
   { id:16, name:"Artillery Barrage",   rarity:"Common", type:"command", cost:2, ap:1, effect:"Remove Armor from 1 enemy unit and Suppress it." },

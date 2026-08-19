@@ -1302,10 +1302,9 @@ body[data-theme="light"] .hc-reward-text { color: #7a5500; }
 body[data-theme="light"] .hc-tank-discounted { box-shadow: 0 0 8px rgba(0,160,60,0.3); border-color: #00a03c !important; }
 body[data-theme="light"] .hc-cost-discounted { color: #007a2e; }
 
-/* Pending stat buff badge (Deathrattle: Convoy Escort 138) — mirrors the Fuel-discount
-   glow/color pattern above, using the gold "stat increase" convention (see .bc-dir-up)
-   instead of green, so it reads as a combat-stat bonus rather than a cost saving. */
-.hc-buff-badge { color: var(--gold); font-weight: bold; font-size: 11px; }
+/* Pending stat buff glow (Deathrattle: Convoy Escort 138) — the boosted N/E/S/W numbers
+   themselves use .bc-dir-up (gold, see above); this just highlights the card's border so
+   the buffed card stands out in the hand at a glance, mirroring the Fuel-discount glow. */
 .hc-buff-pending { box-shadow: 0 0 8px rgba(230,180,40,0.5); border-color: var(--gold) !important; }
 
 /* ── Forward Observer / Radio Operator / Field Reserves modals — full-screen deck-look
