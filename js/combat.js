@@ -1,5 +1,5 @@
-import { CARD_BY_ID } from './cards.js?v=1787179497';
-import { getSideValue, getKeywords, attackBeats, applyHit, oppositeDir, unsuppressOnBoard, drawCards, addDiscount } from './state.js?v=1787179497';
+import { CARD_BY_ID } from './cards.js?v=1787180674';
+import { getSideValue, getKeywords, attackBeats, applyHit, oppositeDir, unsuppressOnBoard, drawCards, addDiscount } from './state.js?v=1787180674';
 
 // Orthogonal directions and their row/col offsets.
 const DIRS = ["n", "e", "s", "w"];
@@ -354,12 +354,15 @@ function runDeathrattleEffect(s, key, dyingUnit, card, owner, excludeKeys = new 
       log.push(`${tag} ${CARD_BY_ID[u.cardId].name} gains Bombard (until your next turn)`);
       return { state: s, log, targetKey: pick.key };
     }
-    case 134: { // Veteran Battery — give a random friendly Artillery +1 all sides
+    case 134: { // Veteran Battery — give a random friendly Artillery +3 all sides, until
+      // END of your next turn (sideBonusTurns:2 — same "2 turns" convention as Rally Cry 51,
+      // NOT the sideBonusTurns:1 "clears right as your next turn starts" convention most other
+      // grants use). Corrected 2026-08-20, per Filip — was +1, sideBonusTurns:1.
       const pick = randomFriendlyOfClass(s, owner, 'Artillery', { excludeKeys });
       if (!pick) { log.push(`${tag} no friendly Artillery to target`); break; }
       const u = s.board[pick.key];
-      s = { ...s, board: { ...s.board, [pick.key]: { ...u, grantedSideBonus: (u.grantedSideBonus || 0) + 1, sideBonusTurns: 1 } } };
-      log.push(`${tag} ${CARD_BY_ID[u.cardId].name} +1 all sides (until your next turn)`);
+      s = { ...s, board: { ...s.board, [pick.key]: { ...u, grantedSideBonus: (u.grantedSideBonus || 0) + 3, sideBonusTurns: 2 } } };
+      log.push(`${tag} ${CARD_BY_ID[u.cardId].name} +3 all sides (until end of your next turn)`);
       return { state: s, log, targetKey: pick.key };
     }
     case 135: { // Rearguard Squad — adjacent friendly unit +1 all sides

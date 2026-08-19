@@ -123,13 +123,15 @@ test('Ranging Section (133) doubled with only ONE eligible Artillery: second app
   assert.deepEqual(after.board['1,1'].grantedKeywords, ['Bombard'], 'only granted once, not twice');
 });
 
-test('Veteran Battery (134): gives a friendly Artillery +1 all sides until your next turn', () => {
+test('Veteran Battery (134): gives a friendly Artillery +3 all sides until end of your next turn', () => {
   const artillery = unit(10, 'p1');
   const s = { p1: playerState(), board: boardWith({ '1,1': artillery }) };
   const { state: after, log } = checkDeathrattle(s, '0,0', unit(134, 'p1'));
   assert.equal(log.length, 1);
-  assert.equal(after.board['1,1'].grantedSideBonus, 1);
-  assert.equal(after.board['1,1'].sideBonusTurns, 1);
+  assert.equal(after.board['1,1'].grantedSideBonus, 3);
+  // sideBonusTurns:2 — the Rally Cry (51) "2 turns" convention, lasting through the OWNER's
+  // entire next turn (not just up to it) — corrected 2026-08-20, per Filip (was +1, 1 turn).
+  assert.equal(after.board['1,1'].sideBonusTurns, 2);
 });
 
 test('Veteran Battery (134) doubled: hits two different Artillery, not the same one twice', () => {
@@ -137,8 +139,8 @@ test('Veteran Battery (134) doubled: hits two different Artillery, not the same 
   const b = unit(11, 'p1');
   const s = { p1: playerState({ heroZones: [147, null, null, null] }), board: boardWith({ '1,1': a, '2,2': b }) };
   const { state: after } = checkDeathrattle(s, '0,0', unit(134, 'p1'));
-  assert.equal(after.board['1,1'].grantedSideBonus, 1);
-  assert.equal(after.board['2,2'].grantedSideBonus, 1);
+  assert.equal(after.board['1,1'].grantedSideBonus, 3);
+  assert.equal(after.board['2,2'].grantedSideBonus, 3);
 });
 
 test('Rearguard Squad (135): gives the (deterministic) first adjacent friendly Unit +1 all sides', () => {
