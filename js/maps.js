@@ -67,7 +67,10 @@ export const MAPS = {
       [P, P, P, P],
       [F, P, P, F],
     ],
-    objectiveSlots: ["0,1", "1,2", "3,2"],
+    // Columns 1 & 4, rows 2 & 3 in 1-indexed map terms (= cols 0/3, rows 1/2 here) — the 4
+    // combinations all land on open plains, spread wide left-right through the tank-battle
+    // center, clear of the forest corners. Per Filip 2026-08-19.
+    objectiveSlots: ["1,0", "1,3", "2,0", "2,3"],
   },
   midway: {
     name: "Midway",
