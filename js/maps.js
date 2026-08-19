@@ -30,7 +30,7 @@ export const MAPS = {
       [P, C, C, W],
       [P, P, C, W],
     ],
-    objectiveSlots: ["0,0", "0,2", "1,1", "3,2"],
+    objectiveSlots: ["0,0", "3,2"],
   },
   el_alamein: {
     name: "El Alamein",
@@ -52,7 +52,11 @@ export const MAPS = {
       [F, F, P, F],
       [F, F, P, F],
     ],
-    objectiveSlots: ["2,2"],
+    // "1,2" and "2,1" sit in the central forest, each touching BOTH plains corridors
+    // (1,2 is adjacent to 1,1 and 2,2; 2,1 is adjacent to 1,1 and 2,2) — contestable from
+    // either corridor without an objective tile ever sitting ON the path itself and
+    // narrowing it further. Per Filip 2026-08-19.
+    objectiveSlots: ["1,2", "2,1"],
   },
   kursk: {
     name: "Kursk",
@@ -74,7 +78,8 @@ export const MAPS = {
       [W, W, W, W],
       [W, W, W, W],
     ],
-    objectiveSlots: ["1,0", "2,3"],
+    // 4, dead center (the 2x2 middle block) — the carrier task forces converging. Per Filip 2026-08-19.
+    objectiveSlots: ["1,1", "1,2", "2,1", "2,2"],
   },
 };
 
