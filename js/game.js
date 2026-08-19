@@ -1,4 +1,4 @@
-import { CARD_BY_ID, CARDS } from './cards.js?v=1787148530';
+import { CARD_BY_ID, CARDS } from './cards.js?v=1787155429';
 import {
   createInitialState,
   startOfTurn,
@@ -18,15 +18,15 @@ import {
   discountFor,
   consumeDiscounts,
   addDiscount,
-} from './state.js?v=1787148530';
-import { getAttackableTargets, resolveSingleAttack, tileKey, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkUnitOnPlayAbility, checkCounteroffensiveGeneral, canStrikeHQDirectly, resolveEmptyBoardStrike, checkDeathrattle, checkPendingUnitBuff, hasColumnFreedom } from './combat.js?v=1787148530';
-import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1787148530';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1787148530';
-import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1787148530';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1787148530';
-import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1787148530';
-import { runBotTurn } from './bot_player.js?v=1787148530';
-import { bestHeroDeployment } from './bot_ai.js?v=1787148530';
+} from './state.js?v=1787155429';
+import { getAttackableTargets, resolveSingleAttack, tileKey, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkUnitOnPlayAbility, checkCounteroffensiveGeneral, canStrikeHQDirectly, resolveEmptyBoardStrike, checkDeathrattle, checkPendingUnitBuff, hasColumnFreedom } from './combat.js?v=1787155429';
+import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1787155429';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1787155429';
+import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1787155429';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1787155429';
+import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1787155429';
+import { runBotTurn } from './bot_player.js?v=1787155429';
+import { bestHeroDeployment } from './bot_ai.js?v=1787155429';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
@@ -86,12 +86,17 @@ const WORKING_OBJECTIVE_IDS = [26, 27, 28, 31, 32];
 // start. Was previously hardcoded to always 2 slots at a random symmetric position
 // regardless of map (`_mapId` was unused) — maps.js's per-map objectiveSlots existed but
 // were dead data until 2026-08-19, when map-specific counts (1-4, varies by map) were wired
-// up for real. `% shuffled.length` guards a map with more slots than the working pool
-// (currently 5) — none do yet, but this keeps a future 5+-slot map from ever assigning
-// undefined instead of silently reusing an id.
+// up for real. A map may also set `objectiveExclude: [id, ...]` (e.g. Midway excludes
+// Factory/City — their Tank/Infantry bonuses are dead weight on an all-water board) to draw
+// from a narrower pool than the other maps. `% shuffled.length` guards a map whose slot
+// count exceeds its (possibly narrowed) pool size, reusing an id rather than assigning
+// undefined — Midway needs exactly this, 4 slots drawing from only 3 valid objectives.
 function pickObjectives(mapId) {
-  const slots = MAPS[mapId]?.objectiveSlots ?? [];
-  const shuffled = [...WORKING_OBJECTIVE_IDS].sort(() => Math.random() - 0.5);
+  const map = MAPS[mapId];
+  const slots = map?.objectiveSlots ?? [];
+  const exclude = map?.objectiveExclude ?? [];
+  const pool = exclude.length ? WORKING_OBJECTIVE_IDS.filter(id => !exclude.includes(id)) : WORKING_OBJECTIVE_IDS;
+  const shuffled = [...pool].sort(() => Math.random() - 0.5);
   const objectives = {};
   slots.forEach((slot, i) => {
     objectives[slot] = { cardId: shuffled[i % shuffled.length], level: 1 };

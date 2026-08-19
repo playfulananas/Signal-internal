@@ -80,6 +80,12 @@ export const MAPS = {
     ],
     // 4, dead center (the 2x2 middle block) — the carrier task forces converging. Per Filip 2026-08-19.
     objectiveSlots: ["1,1", "1,2", "2,1", "2,2"],
+    // Factory (26, category "Economy/Vehicle") buffs Tanks; City (31, "Infantry/Defense") buffs
+    // Infantry — both dead weight here since neither class can ever be placed on 100% water.
+    // Per Filip 2026-08-19. Only 3 of the 5 working objectives remain valid for 4 slots, so one
+    // objective type repeats among Midway's slots — see the % in pickObjectives (game.js),
+    // already built to handle a map needing more slots than its available pool.
+    objectiveExclude: [26, 31],
   },
 };
 

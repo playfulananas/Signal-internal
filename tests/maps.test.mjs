@@ -5,6 +5,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { MAPS, getTerrain, canPlaceOnTerrain } from '../js/maps.js';
+import { CARD_BY_ID } from '../js/cards.js';
 
 test('every map has a full 4x4 grid', () => {
   for (const [id, map] of Object.entries(MAPS)) {
@@ -36,6 +37,19 @@ test('every objectiveSlot is a valid, in-bounds, non-duplicated tile key', () =>
       seen.add(key);
     }
   }
+});
+
+test('objectiveExclude, where present, only lists real objective card ids', () => {
+  for (const [id, map] of Object.entries(MAPS)) {
+    for (const cardId of map.objectiveExclude ?? []) {
+      const card = CARD_BY_ID[cardId];
+      assert.ok(card && card.type === 'objective', `${id}: objectiveExclude entry ${cardId} is not a valid objective card`);
+    }
+  }
+});
+
+test('Midway excludes Factory (Tank-themed) and City (Infantry-themed) — dead weight on an all-water map', () => {
+  assert.deepEqual(MAPS.midway.objectiveExclude, [26, 31]);
 });
 
 test('Midway is all water — no land tiles anywhere', () => {
