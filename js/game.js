@@ -1,4 +1,4 @@
-import { CARD_BY_ID, CARDS } from './cards.js?v=1787103166';
+import { CARD_BY_ID, CARDS } from './cards.js?v=1787148530';
 import {
   createInitialState,
   startOfTurn,
@@ -18,15 +18,15 @@ import {
   discountFor,
   consumeDiscounts,
   addDiscount,
-} from './state.js?v=1787103166';
-import { getAttackableTargets, resolveSingleAttack, tileKey, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkUnitOnPlayAbility, checkCounteroffensiveGeneral, canStrikeHQDirectly, resolveEmptyBoardStrike, checkDeathrattle, checkPendingUnitBuff, hasColumnFreedom } from './combat.js?v=1787103166';
-import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1787103166';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1787103166';
-import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1787103166';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1787103166';
-import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1787103166';
-import { runBotTurn } from './bot_player.js?v=1787103166';
-import { bestHeroDeployment } from './bot_ai.js?v=1787103166';
+} from './state.js?v=1787148530';
+import { getAttackableTargets, resolveSingleAttack, tileKey, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkUnitOnPlayAbility, checkCounteroffensiveGeneral, canStrikeHQDirectly, resolveEmptyBoardStrike, checkDeathrattle, checkPendingUnitBuff, hasColumnFreedom } from './combat.js?v=1787148530';
+import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1787148530';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1787148530';
+import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1787148530';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1787148530';
+import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1787148530';
+import { runBotTurn } from './bot_player.js?v=1787148530';
+import { bestHeroDeployment } from './bot_ai.js?v=1787148530';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
@@ -81,14 +81,20 @@ renderDeckGrid();
 // Bridge (29), Radar Station (30), Fortification (33) excluded — effects not automated yet.
 const WORKING_OBJECTIVE_IDS = [26, 27, 28, 31, 32];
 
-function pickObjectives(_mapId) {
-  const leftRow = Math.random() < 0.5 ? 1 : 2;
-  const rightRow = leftRow === 1 ? 2 : 1;
-  const slots = [`${leftRow},0`, `${rightRow},3`];
+// Objective tile positions are fixed per map (MAPS[mapId].objectiveSlots — see maps.js);
+// the CARD assigned to each position is randomized from the auto-resolving pool at match
+// start. Was previously hardcoded to always 2 slots at a random symmetric position
+// regardless of map (`_mapId` was unused) — maps.js's per-map objectiveSlots existed but
+// were dead data until 2026-08-19, when map-specific counts (1-4, varies by map) were wired
+// up for real. `% shuffled.length` guards a map with more slots than the working pool
+// (currently 5) — none do yet, but this keeps a future 5+-slot map from ever assigning
+// undefined instead of silently reusing an id.
+function pickObjectives(mapId) {
+  const slots = MAPS[mapId]?.objectiveSlots ?? [];
   const shuffled = [...WORKING_OBJECTIVE_IDS].sort(() => Math.random() - 0.5);
   const objectives = {};
   slots.forEach((slot, i) => {
-    objectives[slot] = { cardId: shuffled[i], level: 1 };
+    objectives[slot] = { cardId: shuffled[i % shuffled.length], level: 1 };
   });
   return objectives;
 }
@@ -2248,14 +2254,18 @@ document.getElementById('btn-end-turn').addEventListener('click', () => {
     }
   }
 
-  // Quartermaster ability: at start of turn, if you control both objectives on the map → draw 1
+  // Quartermaster ability: at start of turn, if you control every objective on the map → draw 1.
+  // Wording was "both objectives" until 2026-08-19 — accurate back when every map had exactly
+  // 2 slots; now objectiveSlots varies 1-4 per map (see maps.js), so this checks ALL objectives
+  // currently placed, whatever the count, same as it always has (objs.every(...) was never
+  // hardcoded to 2 — only the card text and this log line's wording were).
   for (const { unit: u } of unitsOnBoard(newState, newActive)) {
     if (CARD_BY_ID[u.cardId]?.id !== 69) continue;
     const objs = Object.values(newState.objectives);
-    const controlsBoth = objs.length > 0 && objs.every(o => o.controller === newActive);
-    if (controlsBoth) {
+    const controlsAll = objs.length > 0 && objs.every(o => o.controller === newActive);
+    if (controlsAll) {
       newState = { ...newState, [newActive]: drawCards(newState[newActive], 1) };
-      supplyLog.push(`Quartermaster: controls both objectives → draw 1`);
+      supplyLog.push(`Quartermaster: controls every objective on the map → draw 1`);
     }
   }
 

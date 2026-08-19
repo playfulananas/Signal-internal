@@ -15,7 +15,7 @@ const BASE_URL = "http://localhost:3000";
 const DAMAGE_COMMAND_IDS = new Set([16, 20, 79]);
 
 const DECKS = ["aggro", "control", "counter", "power"];
-const MAPS = ["normandy", "stalingrad", "el_alamein", "ardennes", "kursk"];
+const MAPS = ["normandy", "stalingrad", "el_alamein", "ardennes", "kursk", "midway"];
 
 function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 

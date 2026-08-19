@@ -30,7 +30,7 @@ export const MAPS = {
       [P, C, C, W],
       [P, P, C, W],
     ],
-    objectiveSlots: ["0,0", "1,1", "3,2"],
+    objectiveSlots: ["0,0", "0,2", "1,1", "3,2"],
   },
   el_alamein: {
     name: "El Alamein",
@@ -41,7 +41,7 @@ export const MAPS = {
       [D, D, D, D],
       [D, D, D, D],
     ],
-    objectiveSlots: ["0,1", "1,3", "3,1"],
+    objectiveSlots: ["0,0", "0,3", "3,0", "3,3"],
   },
   ardennes: {
     name: "Ardennes",
@@ -52,7 +52,7 @@ export const MAPS = {
       [F, F, P, F],
       [F, F, P, F],
     ],
-    objectiveSlots: ["0,1", "2,2", "3,2"],
+    objectiveSlots: ["2,2"],
   },
   kursk: {
     name: "Kursk",
@@ -64,6 +64,17 @@ export const MAPS = {
       [F, P, P, F],
     ],
     objectiveSlots: ["0,1", "1,2", "3,2"],
+  },
+  midway: {
+    name: "Midway",
+    flavor: "Open ocean. No land at all — Naval, Aircraft, and Airborne units only.",
+    grid: [
+      [W, W, W, W],
+      [W, W, W, W],
+      [W, W, W, W],
+      [W, W, W, W],
+    ],
+    objectiveSlots: ["1,0", "2,3"],
   },
 };
 
