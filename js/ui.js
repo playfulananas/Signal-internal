@@ -1,6 +1,6 @@
-import { CARD_BY_ID } from './cards.js?v=1786920173';
-import { getKeywords, maxArmorHits, discountFor, fuelCapOf, rotatedDir } from './state.js?v=1786920173';
-import { getTerrain } from './maps.js?v=1786920173';
+import { CARD_BY_ID } from './cards.js?v=1787103166';
+import { getKeywords, maxArmorHits, discountFor, fuelCapOf, rotatedDir } from './state.js?v=1787103166';
+import { getTerrain } from './maps.js?v=1787103166';
 
 const TERRAIN_SHORT = { plains: 'P', forest: 'F', water: 'W', desert: 'D', city: 'C' };
 
@@ -14,6 +14,7 @@ const KEYWORD_TEXT = {
   'Double Attack': 'This unit resolves two attacks per activation.',
   'Bombard': 'Can attack any enemy in its row or column, not just adjacent tiles.',
   'Airborne': 'Ignores terrain placement restrictions.',
+  'Deathrattle': 'When this Unit is Destroyed, its effect triggers immediately.',
 };
 
 // ── Board rendering ───────────────────────────────────────────────────────────

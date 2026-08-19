@@ -25,6 +25,8 @@
 //   deck: number[],             — cardIds remaining (top = index 0)
 //   missions: ActiveMission[],
 //   pendingDiscounts: [{ appliesTo, column, amount, min }],  — unspent Fuel discounts
+//   pendingUnitBuffs: [{ appliesTo, amount }],  — unspent stat buffs (Deathrattle: Convoy Escort)
+//   fieldMarshalUses: number,   — Field Marshal (144) activation count this match, never reset
 // }
 //
 // ActiveMission: { cardId, killsAtDeploy? } — no turn limit; stays active until its reward fires.
@@ -49,7 +51,7 @@
 //                                 Persists until explicitly rotated again; never auto-clears.
 // }
 
-import { CARD_BY_ID } from './cards.js?v=1786920173';
+import { CARD_BY_ID } from './cards.js?v=1787103166';
 
 // ── State factory ────────────────────────────────────────────────────────────
 
@@ -120,6 +122,15 @@ function createPlayerState(deckCardIds, heroIds = []) {
     // column's Activated Hero Power during the controller's next turn. { [col]: amount }.
     // Cleared at startOfTurn alongside the other per-cycle Hero fields.
     heroTaxedColumns: {},
+    // Field Marshal (144): number of times this player has activated it this match. The
+    // Hero's own bonus is (this + 1) each activation — never reset, by design (escalating
+    // Active power, not a per-turn passive). See cards.js's note on 144 for the interpretation.
+    fieldMarshalUses: 0,
+    // One-shot stat buffs queued for the next matching Unit played (Deathrattle: Convoy Escort
+    // 138). Entries: { appliesTo: className, amount }. Consumed (removed) by
+    // checkPendingUnitBuff in combat.js the moment a matching Unit is placed — unlike
+    // pendingDiscounts, this is a stat bonus, not a Fuel discount, so it needs its own list.
+    pendingUnitBuffs: [],
   };
 }
 

@@ -91,25 +91,26 @@ test('every hero carries an authoritative scope and implemented flag', () => {
   // Scope must never be inferred from ability wording — hero 93 reads "this Hero's column"
   // only after a 2026-08-01 rewording, and text matching had misread it as board-scoped.
   const heroes = CARDS.filter(c => c.type === 'hero');
-  assert.equal(heroes.length, 24);
+  // 30 as of 2026-08-19 — Week 3 batch added 6 (142-147); Weird AirCraft (250) deliberately
+  // not added — parked, see cards.js header.
+  assert.equal(heroes.length, 30);
   for (const h of heroes) {
     assert.ok(['column', 'board'].includes(h.scope), `${h.name} has no valid scope`);
     assert.equal(typeof h.implemented, 'boolean', `${h.name} has no implemented flag`);
   }
-  // 12 implemented as of 2026-08-17 — Field Engineer (91) wired up (reuses Change
-  // Formation's rotation mechanic); Combined Arms General (109) retired 2026-08-14.
-  assert.equal(heroes.filter(h => h.implemented).length, 12);
-  // 14 column / 10 board as of the 2026-08 balance pass — Garrison Commander (99),
-  // Counteroffensive General (101), and Armored Commander (103) moved column -> board.
-  assert.equal(heroes.filter(h => h.scope === 'column').length, 14);
+  // 18 implemented as of 2026-08-19 — all 6 Week 3 heroes shipped implemented.
+  assert.equal(heroes.filter(h => h.implemented).length, 18);
+  // 16 column / 14 board as of 2026-08-19 — Week 3 added 2 column (142, 145) + 4 board
+  // (143, 144, 146, 147).
+  assert.equal(heroes.filter(h => h.scope === 'column').length, 16);
 });
 
 test('implemented heroes cover both scopes, both power types, and all 3 Commons', () => {
   const impl = CARDS.filter(c => c.type === 'hero' && c.implemented);
-  // 7 active as of 2026-08-17 — Field Engineer (91) wired up.
-  assert.equal(impl.filter(h => h.powerType === 'active').length, 7);
-  // 5 passive as of 2026-08-14 — Combined Arms General (109, passive) retired.
-  assert.equal(impl.filter(h => h.powerType === 'passive').length, 5);
+  // 10 active as of 2026-08-19 — Week 3 added 3 active (142, 144, 145).
+  assert.equal(impl.filter(h => h.powerType === 'active').length, 10);
+  // 8 passive as of 2026-08-19 — Week 3 added 3 passive (143, 146, 147).
+  assert.equal(impl.filter(h => h.powerType === 'passive').length, 8);
   assert.ok(impl.some(h => h.scope === 'board') && impl.some(h => h.scope === 'column'));
   assert.equal(impl.filter(h => h.rarity === 'Common').length, 3);
 });

@@ -1,4 +1,4 @@
-import { CARD_BY_ID, CARDS } from './cards.js?v=1786920173';
+import { CARD_BY_ID, CARDS } from './cards.js?v=1787103166';
 import {
   createInitialState,
   startOfTurn,
@@ -18,15 +18,15 @@ import {
   discountFor,
   consumeDiscounts,
   addDiscount,
-} from './state.js?v=1786920173';
-import { getAttackableTargets, resolveSingleAttack, tileKey, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkUnitOnPlayAbility, checkCounteroffensiveGeneral, canStrikeHQDirectly, resolveEmptyBoardStrike } from './combat.js?v=1786920173';
-import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1786920173';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1786920173';
-import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1786920173';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1786920173';
-import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1786920173';
-import { runBotTurn } from './bot_player.js?v=1786920173';
-import { bestHeroDeployment } from './bot_ai.js?v=1786920173';
+} from './state.js?v=1787103166';
+import { getAttackableTargets, resolveSingleAttack, tileKey, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkUnitOnPlayAbility, checkCounteroffensiveGeneral, canStrikeHQDirectly, resolveEmptyBoardStrike, checkDeathrattle, checkPendingUnitBuff, hasColumnFreedom } from './combat.js?v=1787103166';
+import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1787103166';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1787103166';
+import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1787103166';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1787103166';
+import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1787103166';
+import { runBotTurn } from './bot_player.js?v=1787103166';
+import { bestHeroDeployment } from './bot_ai.js?v=1787103166';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
@@ -818,6 +818,7 @@ function normalizeFirebaseState(raw) {
     heroZones:  fixZones(p.heroZones),
     heroesActivatedThisTurn: toArray(p.heroesActivatedThisTurn),
     pendingDiscounts: toArray(p.pendingDiscounts),
+    pendingUnitBuffs: toArray(p.pendingUnitBuffs),
   } : p;
   return {
     ...raw,
@@ -881,20 +882,30 @@ function checkWin() {
 }
 
 // ── Hero powers ───────────────────────────────────────────────────────────────
+// Column-scoped candidate list for a Hero's own column, OR the whole board if Supreme
+// Commander (143) is deployed — see hasColumnFreedom in combat.js. Shared by every
+// column-scoped active Hero below (91/92/100/142) so "column freedom" has one definition.
+function scopedUnits(s, role, col, filterFn) {
+  const list = hasColumnFreedom(s[role]) ? unitsOnBoard(s, role) : unitsInColumn(s, col, role);
+  return filterFn ? list.filter(filterFn) : list;
+}
+
 // Tile keys a column-scoped active power can legally target. null = no target needed
 // (an instant), [] = needs a target but none exists right now.
 function heroTargetKeys(s, role, col, hero) {
   switch (hero.id) {
     case 92: // Tactical Commander — any friendly unit in the column
-      return unitsInColumn(s, col, role).map(u => u.key);
+      return scopedUnits(s, role, col).map(u => u.key);
     case 99: // Garrison Commander — friendly unit adjacent to (not on) an Objective, board-wide
       return unitsOnBoard(s, role)
         .filter(({ key }) => getAdjacentKeys(key).some(k => s.objectives[k]))
         .map(u => u.key);
     case 100: // Recovery Officer — only a suppressed friendly unit is worth targeting
-      return unitsInColumn(s, col, role).filter(({ unit }) => unit.state === 'suppressed').map(u => u.key);
+      return scopedUnits(s, role, col, ({ unit }) => unit.state === 'suppressed').map(u => u.key);
     case 91: // Field Engineer — any unsuppressed friendly unit in the column (rotates it)
-      return unitsInColumn(s, col, role).filter(({ unit }) => unit.state === 'normal').map(u => u.key);
+      return scopedUnits(s, role, col, ({ unit }) => unit.state === 'normal').map(u => u.key);
+    case 142: // Fire Support Officer — any friendly unit in the column (grants Bombard)
+      return scopedUnits(s, role, col).map(u => u.key);
     default:
       return null;
   }
@@ -940,6 +951,42 @@ function applyHeroPower(s, role, col, hero, targetKey) {
       const result = removeSuppression(s, targetKey);
       s = result.state;
       log.push(...result.log);
+      break;
+    }
+
+    case 142: { // Fire Support Officer — grant Bombard until end of turn
+      const u = s.board[targetKey];
+      log.push(`${hero.name}: ${nameOf(targetKey)} gains Bombard (until end of turn)`);
+      s = { ...s, board: { ...s.board, [targetKey]: { ...u, tempKeywords: [...(u.tempKeywords || []), 'Bombard'] } } };
+      break;
+    }
+
+    case 144: { // Field Marshal — all friendly units +N all sides (permanent), N escalates
+      // per activation; doubled if Grand Marshal (146) is also deployed.
+      const usesBefore = s[role].fieldMarshalUses ?? 0;
+      const baseAmount = usesBefore + 1;
+      const doubled = (s[role].heroZones ?? []).includes(146);
+      const amount = doubled ? baseAmount * 2 : baseAmount;
+      const newBoard = { ...s.board };
+      let count = 0;
+      for (const [k, u] of Object.entries(newBoard)) {
+        if (!u || u.owner !== role || u.state === 'destroyed') continue;
+        newBoard[k] = { ...u, grantedSideBonus: (u.grantedSideBonus || 0) + amount, sideBonusTurns: 99 };
+        count++;
+      }
+      s = { ...s, board: newBoard, [role]: { ...s[role], fieldMarshalUses: baseAmount } };
+      log.push(`${hero.name}: ${count} friendly unit(s) +${amount} all sides (permanent)${doubled ? ' — doubled by Grand Marshal' : ''}`);
+      break;
+    }
+
+    case 145: { // Sector Commander — all friendly units in this column +2 all sides
+      const cols = scopedUnits(s, role, col);
+      const newBoard = { ...s.board };
+      for (const { key: k, unit: u } of cols) {
+        newBoard[k] = { ...u, grantedSideBonus: (u.grantedSideBonus || 0) + 2, sideBonusTurns: 1 };
+      }
+      s = { ...s, board: newBoard };
+      log.push(`${hero.name}: ${cols.length} friendly unit(s) +2 all sides (until your next turn)`);
       break;
     }
 
@@ -1246,6 +1293,10 @@ document.getElementById('board').addEventListener('click', e => {
       const coGen = checkCounteroffensiveGeneral(newS, clickedKey);
       newS = coGen.state;
       log.push(...coGen.log);
+    } else if (finalUnit === null) {
+      const dr = checkDeathrattle(newS, clickedKey, unit);
+      newS = dr.state;
+      log.push(...dr.log);
     }
     const artyTransitionFlags = new Map();
     if (finalUnit === null) artyTransitionFlags.set(clickedKey, 'destroyed');
@@ -1326,6 +1377,15 @@ document.getElementById('board').addEventListener('click', e => {
       appendLog(onPlayLog);
     } else {
       state = afterOnPlay;
+    }
+
+    // Deathrattle: Convoy Escort (138) — a queued "next Naval Unit +1 all sides" bonus.
+    const { state: afterUnitBuff, log: unitBuffLog } = checkPendingUnitBuff(state, active, clickedKey, card);
+    if (unitBuffLog.length > 0) {
+      state = { ...afterUnitBuff, log: [...(afterUnitBuff.log ?? []), ...unitBuffLog] };
+      appendLog(unitBuffLog);
+    } else {
+      state = afterUnitBuff;
     }
 
     // Mobile Command Halftrack (114) — on-play, offers to move a Hero into this (empty)
@@ -1453,6 +1513,18 @@ document.getElementById('board').addEventListener('click', e => {
       }
     }
 
+    // Deathrattle — the destroyed unit (if any) gets its on-death effect. `state` (the outer
+    // module var) is still the PRE-mutation snapshot here — commitState() hasn't run yet.
+    let deathrattleLog = [];
+    if (wasDestroyed) {
+      const dyingKey = result.boardMutations.find(m => m.newUnit === null)?.key;
+      if (dyingKey) {
+        const dr = checkDeathrattle(newState, dyingKey, state.board[dyingKey]);
+        newState = dr.state;
+        deathrattleLog = dr.log;
+      }
+    }
+
     // Counteroffensive General (101) — first friendly unit to get Suppressed this turn
     let coGenLog = [];
     if (newState.board[clickedKey]?.state === 'suppressed') {
@@ -1498,7 +1570,7 @@ document.getElementById('board').addEventListener('click', e => {
       else if (newUnit.state === 'suppressed') transitionFlags.set(clickedKey, 'suppressed');
     }
 
-    commitState(newState, [...result.logEntries, ...overrunLog, ...bonusLog, ...coGenLog, ...hqStrikeLog], transitionFlags);
+    commitState(newState, [...result.logEntries, ...overrunLog, ...bonusLog, ...deathrattleLog, ...coGenLog, ...hqStrikeLog], transitionFlags);
     checkWin();
     return;
   }
@@ -1700,6 +1772,22 @@ function playInstantCommand(cardId) {
       log.push(`${card.name}: Draw 3 cards`);
       break;
     }
+    case 139: { // Grim Requisition — draw a random Deathrattle Unit from deck
+      const deck = s[active].deck;
+      const candidates = deck.map((id, i) => ({ id, i })).filter(({ id }) => {
+        const c = CARD_BY_ID[id];
+        return c?.type === 'unit' && (Array.isArray(c.keyword) ? c.keyword.includes('Deathrattle') : c.keyword === 'Deathrattle');
+      });
+      if (candidates.length === 0) {
+        log.push(`${card.name}: no Deathrattle Unit in deck`);
+        break;
+      }
+      const pick = candidates[Math.floor(Math.random() * candidates.length)];
+      const newDeck = [...deck.slice(0, pick.i), ...deck.slice(pick.i + 1)];
+      s = { ...s, [active]: { ...s[active], deck: newDeck, hand: [...s[active].hand, pick.id] } };
+      log.push(`${card.name}: drew ${CARD_BY_ID[pick.id].name} from deck`);
+      break;
+    }
     case 121: { // Priority Orders — next Hero Power this turn costs 2F less, min 0
       s = { ...s, [active]: { ...s[active], pendingHeroDiscount: s[active].pendingHeroDiscount + 2 } };
       log.push(`${card.name}: next Hero Power this turn costs 2F less`);
@@ -1851,6 +1939,10 @@ function getCommandTargets(commandId) {
     case 124: // Change Formation — any unsuppressed friendly unit
       return new Set(friendlies.filter(([, u]) => u.state === 'normal').map(([k]) => k));
 
+    case 140: // Sacrifice Play — any friendly unit
+    case 141: // Scorched Earth Rally — any friendly unit
+      return new Set(friendlies.map(([k]) => k));
+
     default: return null; // unknown / not a targeted command
   }
 }
@@ -1946,6 +2038,11 @@ function applyClassCountHits(s, active, targetKey, unit, cls, cardName) {
   s = { ...s, board: { ...s.board, [targetKey]: tgt },
         [unit.owner]: { ...s[unit.owner], hq: s[unit.owner].hq - dmg } };
   log.push(`${cardName}: ${count} hit(s) on ${unitName} — ${dmg} HQ damage`);
+  if (tgt === null) {
+    const dr = checkDeathrattle(s, targetKey, unit);
+    s = dr.state;
+    log.push(...dr.log);
+  }
   return { state: s, log, becameSuppressed };
 }
 
@@ -2071,12 +2168,40 @@ function applyCommandEffect(commandId, targetKey) {
       }
       break;
     }
+    case 140: { // Sacrifice Play — destroy own unit; 2 HQ damage to opponent instead of self
+      s = { ...s, board: { ...s.board, [targetKey]: null } };
+      const dr = checkDeathrattle(s, targetKey, unit);
+      s = dr.state;
+      s = { ...s, [opp]: { ...s[opp], hq: s[opp].hq - 2 } };
+      log.push(`${card.name}: ${unitName} destroyed — 2 HQ damage to ${opp.toUpperCase()}`);
+      log.push(...dr.log);
+      break;
+    }
+    case 141: { // Scorched Earth Rally — destroy own unit (2 HQ self-damage, as if lost in
+      // combat); every OTHER friendly unit gets +1 all sides until your next turn
+      s = { ...s, board: { ...s.board, [targetKey]: null } };
+      const dr = checkDeathrattle(s, targetKey, unit);
+      s = dr.state;
+      s = { ...s, [active]: { ...s[active], hq: s[active].hq - 2 } };
+      const newBoard = { ...s.board };
+      let count = 0;
+      for (const [k, u] of Object.entries(newBoard)) {
+        if (!u || u.owner !== active || u.state === 'destroyed' || k === targetKey) continue;
+        newBoard[k] = { ...u, grantedSideBonus: (u.grantedSideBonus || 0) + 1, sideBonusTurns: 1 };
+        count++;
+      }
+      s = { ...s, board: newBoard };
+      log.push(`${card.name}: ${unitName} destroyed (2 HQ damage) — ${count} other friendly unit(s) +1 all sides (until your next turn)`);
+      log.push(...dr.log);
+      break;
+    }
     default: break;
   }
 
-  // Only cases 16/20/79 (Artillery Barrage/Air Strike/Suppressing Fire) can transition
-  // targetKey's unit — the other ~9 cases leave it alone, so a before/after diff against
-  // `unit` (captured at function entry) covers all 3 for free without touching each case.
+  // Cases 16/20/79 (Artillery Barrage/Air Strike/Suppressing Fire) and 140/141 (Sacrifice
+  // Play/Scorched Earth Rally) can transition targetKey's unit — the other cases leave it
+  // alone, so a before/after diff against `unit` (captured at function entry) covers all 5
+  // for free without touching each case.
   const cmdTransitionFlags = new Map();
   const afterUnit = s.board[targetKey];
   if (unit && !afterUnit) cmdTransitionFlags.set(targetKey, 'destroyed');
@@ -2819,11 +2944,19 @@ function applyDebugUnitState(newUnitState) {
     appendLog(['[DEBUG] No unit selected — click "Select Unit" first.']);
     return;
   }
+  const dyingUnit = state.board[debugSelectedUnitKey];
   const { state: newState, log } = debugSetUnitState(state, debugSelectedUnitKey, newUnitState);
+  let finalState = newState;
+  let finalLog = log;
+  if (newUnitState === 'destroyed' && dyingUnit) {
+    const dr = checkDeathrattle(finalState, debugSelectedUnitKey, dyingUnit);
+    finalState = dr.state;
+    finalLog = [...log, ...dr.log];
+  }
   const debugTransitionFlags = newUnitState !== 'normal'
     ? new Map([[debugSelectedUnitKey, newUnitState]]) // 'suppressed' or 'destroyed'; Reset shouldn't animate
     : new Map();
-  commitState(newState, log, debugTransitionFlags);
+  commitState(finalState, finalLog, debugTransitionFlags);
   if (newUnitState === 'destroyed') {
     debugSelectedUnitKey = null;
     document.getElementById('debug-unit-hint').textContent = 'Click "Select Unit", then click a unit on the board.';

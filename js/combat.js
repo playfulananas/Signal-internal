@@ -1,5 +1,5 @@
-import { CARD_BY_ID } from './cards.js?v=1786920173';
-import { getSideValue, getKeywords, attackBeats, applyHit, oppositeDir, unsuppressOnBoard, drawCards } from './state.js?v=1786920173';
+import { CARD_BY_ID } from './cards.js?v=1787103166';
+import { getSideValue, getKeywords, attackBeats, applyHit, oppositeDir, unsuppressOnBoard, drawCards, addDiscount } from './state.js?v=1787103166';
 
 // Orthogonal directions and their row/col offsets.
 const DIRS = ["n", "e", "s", "w"];
@@ -103,10 +103,20 @@ export function resolveEmptyBoardStrike(state, attackerKey, hits) {
 // played. grantedSideBonus/sideBonusTurns:1 clears at the owner's next startOfTurn — see
 // the field comment in state.js.
 // Pure: takes/returns state, does no DOM or CARD_BY_ID lookups beyond names for the log.
+// hasColumnFreedom / inHeroScope: Supreme Commander (143) — "your other Heroes' column-scoped
+// powers affect your whole board instead of just their own column." Shared by every
+// column-scoped Hero check (here and heroTargetKeys/applyHeroPower's 91/92/100/142/145 cases in
+// game.js) so there's one definition of what "column freedom" means, not one per Hero.
+export function hasColumnFreedom(playerState) {
+  return (playerState.heroZones ?? []).includes(143);
+}
+
 export function checkHeroPassivesOnPlace(s, active, col, key, card) {
   const ps = s[active];
   const zones = ps.heroZones ?? [null, null, null, null];
   const triggered = ps.heroTriggeredThisTurn ?? {};
+  const freedom = hasColumnFreedom(ps);
+  const inScope = heroId => freedom ? zones.includes(heroId) : zones[col] === heroId;
   const log = [];
 
   const fire = (heroId, heroName, reason) => {
@@ -119,15 +129,15 @@ export function checkHeroPassivesOnPlace(s, active, col, key, card) {
     log.push(`${heroName}: ${card.name} +1 all sides (until your next turn) — ${reason}`);
   };
 
-  if (zones[col] === 94 && !triggered[94]) { // Objective Marshal — on/adjacent to an Objective
+  if (inScope(94) && !triggered[94]) { // Objective Marshal — on/adjacent to an Objective
     const [row, colNum] = tileCoords(key);
     const onOrAdjacent = s.objectives[key] || adjacentTiles(row, colNum).some(({ key: k }) => s.objectives[k]);
     if (onOrAdjacent) fire(94, CARD_BY_ID[94].name, 'on/adjacent to Objective');
   }
-  if (zones[col] === 104 && !triggered[104] && card.cls === 'Infantry') { // Infantry Commander
+  if (inScope(104) && !triggered[104] && card.cls === 'Infantry') { // Infantry Commander
     fire(104, CARD_BY_ID[104].name, 'first Infantry this turn');
   }
-  if (zones[col] === 110 && !triggered[110] && !card.keyword) { // Conventional Warfare Commander
+  if (inScope(110) && !triggered[110] && !card.keyword) { // Conventional Warfare Commander
     fire(110, CARD_BY_ID[110].name, 'first vanilla Unit this turn');
   }
   if (zones.includes(109) && !triggered[109] && ps.lastUnitClass != null && ps.lastUnitClass !== card.cls) {
@@ -136,6 +146,25 @@ export function checkHeroPassivesOnPlace(s, active, col, key, card) {
 
   s = { ...s, [active]: { ...s[active], lastUnitClass: card.cls } };
   return { state: s, log };
+}
+
+// Pending stat buffs queued by Deathrattle: Convoy Escort (138) — "your next Naval Unit played
+// gets +1 all sides." Mirrors discountFor/consumeDiscounts' one-shot-list shape but for a stat
+// bonus rather than a Fuel discount (see pendingUnitBuffs in state.js). Call at the same
+// placement site as checkHeroPassivesOnPlace/checkUnitOnPlayAbility.
+export function checkPendingUnitBuff(s, active, key, card) {
+  const ps = s[active];
+  const pending = ps.pendingUnitBuffs ?? [];
+  const idx = pending.findIndex(b => b.appliesTo === card.cls);
+  if (idx === -1) return { state: s, log: [] };
+  const buff = pending[idx];
+  const u = s.board[key];
+  const newState = {
+    ...s,
+    board: { ...s.board, [key]: { ...u, grantedSideBonus: (u.grantedSideBonus || 0) + buff.amount, sideBonusTurns: 1 } },
+    [active]: { ...ps, pendingUnitBuffs: pending.filter((_, i) => i !== idx) },
+  };
+  return { state: newState, log: [`${card.name} +${buff.amount} all sides (until your next turn) — queued bonus`] };
 }
 
 // ── Hero passive — Counteroffensive General (101) ───────────────────────────
@@ -200,6 +229,128 @@ export function checkUnitOnPlayAbility(s, active, col, key, card) {
         log.push(`${card.name}: ${healedName} un-suppressed`, ...result.log);
       }
     }
+  }
+
+  return { state: s, log };
+}
+
+// ── Deathrattle ──────────────────────────────────────────────────────────────
+// Fires whenever a Unit carrying the Deathrattle keyword transitions to state:"destroyed" —
+// by combat (resolveSingleAttack, Artillery Position, Air Strike/Suppressing Fire) or by a
+// self-destroy Command (Sacrifice Play 140, Scorched Earth Rally 141). NOT triggered by
+// Suppression alone, and not by leaving the board un-destroyed (Tactical Withdrawal).
+// Callers must call this AFTER the destroy mutation is already committed to `s` — `key`'s
+// tile should be empty (or about to be overwritten by a summon effect) when this runs, and
+// `dyingUnit` is a snapshot of the unit taken BEFORE the mutation (for cardId/owner).
+// Graves Registration Officer (147) doubles the effect — runs runDeathrattleEffect twice.
+export function checkDeathrattle(s, key, dyingUnit) {
+  if (!dyingUnit) return { state: s, log: [] };
+  const card = CARD_BY_ID[dyingUnit.cardId];
+  if (!card || !getKeywords(dyingUnit).includes('Deathrattle')) return { state: s, log: [] };
+  const owner = dyingUnit.owner;
+  const doubled = (s[owner]?.heroZones ?? []).includes(147);
+  const log = [];
+  for (let i = 0; i < (doubled ? 2 : 1); i++) {
+    const result = runDeathrattleEffect(s, key, dyingUnit, card, owner);
+    s = result.state;
+    log.push(...result.log);
+  }
+  return { state: s, log };
+}
+
+// Picks the first LIVE friendly unit adjacent to `key` (deterministic — the brainstorm text
+// for this effect (135) didn't say "random", unlike 132/133/134/137 which explicitly do).
+function firstAdjacentFriendly(s, key, owner) {
+  const [row, col] = tileCoords(key);
+  return adjacentTiles(row, col)
+    .map(({ key: k }) => k)
+    .find(k => { const u = s.board[k]; return u && u.owner === owner && u.state !== 'destroyed'; }) ?? null;
+}
+
+// Picks a RANDOM live friendly unit of the given class (132/133/134/137 all say "random").
+function randomFriendlyOfClass(s, owner, cls) {
+  const list = unitsOnBoard(s, owner).filter(({ unit }) => CARD_BY_ID[unit.cardId]?.cls === cls);
+  if (!list.length) return null;
+  return list[Math.floor(Math.random() * list.length)];
+}
+
+// Removes one random matching card from `owner`'s deck and places it as a fresh Unit on `key`
+// (132/137: "summon ... from the deck onto this tile"). The summoned unit does NOT get a
+// placement attack or trigger on-play/Hero-passive checks — it enters via a Deathrattle, not
+// by being played from hand, so justPlaced stays false.
+function summonRandomFromDeck(s, owner, key, predicate) {
+  const deck = s[owner].deck;
+  const candidates = deck.map((id, i) => ({ id, i })).filter(({ id }) => predicate(CARD_BY_ID[id]));
+  if (!candidates.length) return { state: s, log: [] };
+  const pick = candidates[Math.floor(Math.random() * candidates.length)];
+  const newDeck = [...deck.slice(0, pick.i), ...deck.slice(pick.i + 1)];
+  const newUnit = {
+    cardId: pick.id, owner, state: 'normal', armorHits: 0,
+    tempKeywords: [], grantedKeywords: [], tempSideBonus: 0, justPlaced: false, rotation: 0,
+  };
+  const newState = { ...s, board: { ...s.board, [key]: newUnit }, [owner]: { ...s[owner], deck: newDeck } };
+  return { state: newState, log: [`Summoned ${CARD_BY_ID[pick.id].name} from deck`] };
+}
+
+// Per-card Deathrattle effect dispatch — mirrors applyHeroPower's switch-by-id pattern in game.js.
+function runDeathrattleEffect(s, key, dyingUnit, card, owner) {
+  const log = [];
+  const tag = `${card.name} (Deathrattle):`;
+
+  switch (card.id) {
+    case 131: { // Forward Gun Crew — draw 1
+      s = { ...s, [owner]: drawCards(s[owner], 1) };
+      log.push(`${tag} draw 1 card`);
+      break;
+    }
+    case 132: { // Salvage Battery — summon a random 1-cost friendly Artillery from deck
+      const r = summonRandomFromDeck(s, owner, key, c => c?.type === 'unit' && c.cls === 'Artillery' && c.cost === 1);
+      s = r.state;
+      log.push(r.log.length ? `${tag} ${r.log[0]}` : `${tag} no 1-cost Artillery in deck`);
+      break;
+    }
+    case 133: { // Ranging Section — give a random friendly Artillery Bombard until end of turn
+      const pick = randomFriendlyOfClass(s, owner, 'Artillery');
+      if (!pick) { log.push(`${tag} no friendly Artillery to target`); break; }
+      const u = s.board[pick.key];
+      s = { ...s, board: { ...s.board, [pick.key]: { ...u, tempKeywords: [...(u.tempKeywords || []), 'Bombard'] } } };
+      log.push(`${tag} ${CARD_BY_ID[u.cardId].name} gains Bombard (until end of turn)`);
+      break;
+    }
+    case 134: { // Veteran Battery — give a random friendly Artillery +1 all sides
+      const pick = randomFriendlyOfClass(s, owner, 'Artillery');
+      if (!pick) { log.push(`${tag} no friendly Artillery to target`); break; }
+      const u = s.board[pick.key];
+      s = { ...s, board: { ...s.board, [pick.key]: { ...u, grantedSideBonus: (u.grantedSideBonus || 0) + 1, sideBonusTurns: 1 } } };
+      log.push(`${tag} ${CARD_BY_ID[u.cardId].name} +1 all sides (until your next turn)`);
+      break;
+    }
+    case 135: { // Rearguard Squad — adjacent friendly unit +1 all sides
+      const adjKey = firstAdjacentFriendly(s, key, owner);
+      if (!adjKey) { log.push(`${tag} no adjacent friendly Unit`); break; }
+      const u = s.board[adjKey];
+      s = { ...s, board: { ...s.board, [adjKey]: { ...u, grantedSideBonus: (u.grantedSideBonus || 0) + 1, sideBonusTurns: 1 } } };
+      log.push(`${tag} ${CARD_BY_ID[u.cardId].name} +1 all sides (until your next turn)`);
+      break;
+    }
+    case 136: { // Salvage Crew — next Tank costs 1 less Fuel
+      s = { ...s, [owner]: addDiscount(s[owner], { appliesTo: 'Tank', column: null, amount: 1, min: 0 }) };
+      log.push(`${tag} next Tank costs 1 less Fuel`);
+      break;
+    }
+    case 137: { // Squadron Reserve — summon a random 2-cost friendly Aircraft from deck
+      const r = summonRandomFromDeck(s, owner, key, c => c?.type === 'unit' && c.cls === 'Aircraft' && c.cost === 2);
+      s = r.state;
+      log.push(r.log.length ? `${tag} ${r.log[0]}` : `${tag} no 2-cost Aircraft in deck`);
+      break;
+    }
+    case 138: { // Convoy Escort — next Naval Unit played gets +1 all sides
+      s = { ...s, [owner]: { ...s[owner], pendingUnitBuffs: [...(s[owner].pendingUnitBuffs || []), { appliesTo: 'Naval', amount: 1 }] } };
+      log.push(`${tag} next Naval Unit played gets +1 all sides`);
+      break;
+    }
+    default:
+      log.push(`${tag} not automated yet`);
   }
 
   return { state: s, log };

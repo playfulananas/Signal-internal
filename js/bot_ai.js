@@ -309,6 +309,9 @@ const COMMAND_UTILITY_VALUE = {
   124: 1,  // Change Formation — rotate a unit
   125: 2,  // Field Reserves — selective draw
   126: 2,  // Coordinated Orders — extra Hero Power
+  139: 2,  // Grim Requisition — draw a Deathrattle Unit
+  140: 1,  // Sacrifice Play — situational (redirect 2 HQ damage), costs a unit
+  141: 1.5, // Scorched Earth Rally — board-wide buff, but costs a unit + 2 HQ
 };
 
 // Direct-damage commands: Artillery Barrage (16, guaranteed armor-strip + suppress on 1 enemy),
@@ -435,7 +438,9 @@ export function scoreCommand(state, active, cardId, attackedMap = new Map()) {
 // Static value for Powers not worth simulating precisely (87's draw and the two discount
 // enablers get a lighter dynamic nudge below); 92/99/100 are fully dynamic.
 const HERO_POWER_UTILITY_VALUE = {
-  87: 2, // Quartermaster General — draw 1 card, instant, no target
+  87: 2,   // Quartermaster General — draw 1 card, instant, no target
+  144: 1.5, // Field Marshal — permanent escalating board-wide buff, instant, no target
+  145: 2,  // Sector Commander — +2 all sides to a whole column, instant, no per-unit target
 };
 
 // Garrison Commander (99): friendly units adjacent to (not on) an Objective, board-wide — same
