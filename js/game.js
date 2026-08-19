@@ -1,4 +1,4 @@
-import { CARD_BY_ID, CARDS } from './cards.js?v=1787155429';
+import { CARD_BY_ID, CARDS } from './cards.js?v=1787173232';
 import {
   createInitialState,
   startOfTurn,
@@ -18,15 +18,16 @@ import {
   discountFor,
   consumeDiscounts,
   addDiscount,
-} from './state.js?v=1787155429';
-import { getAttackableTargets, resolveSingleAttack, tileKey, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkUnitOnPlayAbility, checkCounteroffensiveGeneral, canStrikeHQDirectly, resolveEmptyBoardStrike, checkDeathrattle, checkPendingUnitBuff, hasColumnFreedom } from './combat.js?v=1787155429';
-import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1787155429';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1787155429';
-import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1787155429';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1787155429';
-import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1787155429';
-import { runBotTurn } from './bot_player.js?v=1787155429';
-import { bestHeroDeployment } from './bot_ai.js?v=1787155429';
+  shuffle,
+} from './state.js?v=1787173232';
+import { getAttackableTargets, resolveSingleAttack, tileKey, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkUnitOnPlayAbility, checkCounteroffensiveGeneral, canStrikeHQDirectly, resolveEmptyBoardStrike, checkDeathrattle, checkPendingUnitBuff, hasColumnFreedom } from './combat.js?v=1787173232';
+import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1787173232';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1787173232';
+import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1787173232';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1787173232';
+import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1787173232';
+import { runBotTurn } from './bot_player.js?v=1787173232';
+import { bestHeroDeployment } from './bot_ai.js?v=1787173232';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
@@ -96,7 +97,7 @@ function pickObjectives(mapId) {
   const slots = map?.objectiveSlots ?? [];
   const exclude = map?.objectiveExclude ?? [];
   const pool = exclude.length ? WORKING_OBJECTIVE_IDS.filter(id => !exclude.includes(id)) : WORKING_OBJECTIVE_IDS;
-  const shuffled = [...pool].sort(() => Math.random() - 0.5);
+  const shuffled = shuffle(pool);
   const objectives = {};
   slots.forEach((slot, i) => {
     objectives[slot] = { cardId: shuffled[i % shuffled.length], level: 1 };
@@ -306,7 +307,7 @@ function applyMulligan(s, role, indices) {
   const ps = { ...s[role] };
   const putBack = indices.map(i => ps.hand[i]);
   const keep = ps.hand.filter((_, i) => !indices.includes(i));
-  const newDeck = [...putBack, ...ps.deck].sort(() => Math.random() - 0.5);
+  const newDeck = shuffle([...putBack, ...ps.deck]);
   const drawn = newDeck.slice(0, putBack.length);
   return { ...s, [role]: { ...ps, hand: [...keep, ...drawn], deck: newDeck.slice(putBack.length) } };
 }
@@ -843,6 +844,7 @@ function normalizeFirebaseState(raw) {
 function receiveRemoteState(remoteState) {
   const normalized = normalizeFirebaseState(remoteState);
   const prevLogLen = state?.log?.length ?? 0;
+  const prevInitiative = state?.initiative;
   // Track tiles changed by the opponent so we can highlight them
   if (state?.board) {
     lastChangedKeys = new Set();
@@ -873,8 +875,12 @@ function receiveRemoteState(remoteState) {
   checkWin();
   // The opponent's End Turn handler can't prompt us, so an inbound state that hands us the
   // turn is where this client runs its own Hero Phase. runHeroPhase re-checks lastObjLevel,
-  // so arriving at the same state twice can't double-deploy.
-  if (isOnline && !gameOver && normalized.initiative === myRole) {
+  // so arriving at the same state twice can't double-deploy. Gated on the initiative actually
+  // CHANGING (not just "currently my turn") — was previously re-firing the "YOUR TURN" toast
+  // on every remote sync received while it was already your turn (e.g. the opponent poking the
+  // debug panel mid-turn), reported 2026-08-19: "when other player adds or removes card, to me
+  // it flashes your turn."
+  if (isOnline && !gameOver && normalized.initiative === myRole && prevInitiative !== normalized.initiative) {
     showTurnToast('YOUR TURN');
     runHeroPhase(myRole);
   }

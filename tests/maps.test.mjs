@@ -75,10 +75,20 @@ test('canPlaceOnTerrain: forest blocks Tank unless Airborne', () => {
   assert.equal(canPlaceOnTerrain({ cls: 'Infantry', keyword: null }, 'forest'), true);
 });
 
-test('canPlaceOnTerrain: plains, desert, and city are unrestricted', () => {
+test('canPlaceOnTerrain: plains, desert, and city are unrestricted EXCEPT Naval', () => {
   for (const terrain of ['plains', 'desert', 'city']) {
-    for (const cls of ['Infantry', 'Tank', 'Artillery', 'Aircraft', 'Naval']) {
+    for (const cls of ['Infantry', 'Tank', 'Artillery', 'Aircraft']) {
       assert.equal(canPlaceOnTerrain({ cls, keyword: null }, terrain), true, `${cls} should be allowed on ${terrain}`);
     }
+    assert.equal(canPlaceOnTerrain({ cls: 'Naval', keyword: null }, terrain), false, `Naval should NOT be allowed on ${terrain}`);
   }
+});
+
+test('canPlaceOnTerrain: Naval is water-only — locked 2026-08-19', () => {
+  assert.equal(canPlaceOnTerrain({ cls: 'Naval', keyword: null }, 'water'), true);
+  for (const terrain of ['plains', 'desert', 'city', 'forest']) {
+    assert.equal(canPlaceOnTerrain({ cls: 'Naval', keyword: null }, terrain), false, `Naval should NOT be allowed on ${terrain}`);
+  }
+  // Airborne still bypasses everything, even for a (hypothetical) Naval unit with the keyword.
+  assert.equal(canPlaceOnTerrain({ cls: 'Naval', keyword: 'Airborne' }, 'plains'), true);
 });

@@ -2,10 +2,11 @@
 // grid: [row][col], row 0 = top (P2 side), row 3 = bottom (P1 side).
 // Terrain types: 'plains' | 'forest' | 'desert' | 'city' | 'water'
 //
-// Placement rules (enforced in game.html):
+// Placement rules (enforced in canPlaceOnTerrain below):
 //   water  → Naval, Aircraft, or Airborne keyword only
 //   forest → no Tank class (Airborne bypasses)
-//   desert / city / plains → any unit
+//   desert / city / plains → any unit EXCEPT Naval — Naval is water-ONLY (2026-08-19)
+//   Naval  → water only, no exceptions besides Airborne (which no Naval card currently has)
 
 const P = 'plains', F = 'forest', D = 'desert', C = 'city', W = 'water';
 
@@ -99,8 +100,11 @@ export function getTerrain(mapId, row, col) {
 export function canPlaceOnTerrain(card, terrainType) {
   if (!card) return false;
   if (card.keyword === 'Airborne') return true;       // Airborne bypasses all terrain
+  // Naval is water-ONLY — locked 2026-08-19, per Filip. Before this, Naval was allowed
+  // anywhere non-water was unrestricted (plains/desert/city), same as ground classes.
+  if (card.cls === 'Naval') return terrainType === 'water';
   if (terrainType === 'water') {
-    return card.cls === 'Naval' || card.cls === 'Aircraft';
+    return card.cls === 'Aircraft'; // Naval already handled above
   }
   if (terrainType === 'forest') {
     return card.cls !== 'Tank';

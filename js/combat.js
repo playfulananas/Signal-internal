@@ -1,5 +1,5 @@
-import { CARD_BY_ID } from './cards.js?v=1787103166';
-import { getSideValue, getKeywords, attackBeats, applyHit, oppositeDir, unsuppressOnBoard, drawCards, addDiscount } from './state.js?v=1787103166';
+import { CARD_BY_ID } from './cards.js?v=1787173232';
+import { getSideValue, getKeywords, attackBeats, applyHit, oppositeDir, unsuppressOnBoard, drawCards, addDiscount } from './state.js?v=1787173232';
 
 // Orthogonal directions and their row/col offsets.
 const DIRS = ["n", "e", "s", "w"];
@@ -152,19 +152,27 @@ export function checkHeroPassivesOnPlace(s, active, col, key, card) {
 // gets +1 all sides." Mirrors discountFor/consumeDiscounts' one-shot-list shape but for a stat
 // bonus rather than a Fuel discount (see pendingUnitBuffs in state.js). Call at the same
 // placement site as checkHeroPassivesOnPlace/checkUnitOnPlayAbility.
+// Sums ALL queued buffs matching this Unit's class and applies them together to the one
+// Unit being placed, then clears all of them — not just the first match. This is what makes
+// a doubled Deathrattle (Graves Registration Officer, 147, on Convoy Escort 138) stack onto
+// a single next Naval Unit (+2) rather than spreading across the next two (+1 each) — per
+// Filip 2026-08-19. Mirrors discountFor's own "sum every matching entry" behavior, just for
+// a stat bonus instead of a Fuel discount. Never expires on its own (still valid however many
+// turns pass) but is fully consumed by the FIRST matching Unit played, never split further.
 export function checkPendingUnitBuff(s, active, key, card) {
   const ps = s[active];
   const pending = ps.pendingUnitBuffs ?? [];
-  const idx = pending.findIndex(b => b.appliesTo === card.cls);
-  if (idx === -1) return { state: s, log: [] };
-  const buff = pending[idx];
+  const matching = pending.filter(b => b.appliesTo === card.cls);
+  if (!matching.length) return { state: s, log: [] };
+  const total = matching.reduce((sum, b) => sum + b.amount, 0);
+  const remaining = pending.filter(b => b.appliesTo !== card.cls);
   const u = s.board[key];
   const newState = {
     ...s,
-    board: { ...s.board, [key]: { ...u, grantedSideBonus: (u.grantedSideBonus || 0) + buff.amount, sideBonusTurns: 1 } },
-    [active]: { ...ps, pendingUnitBuffs: pending.filter((_, i) => i !== idx) },
+    board: { ...s.board, [key]: { ...u, grantedSideBonus: (u.grantedSideBonus || 0) + total, sideBonusTurns: 1 } },
+    [active]: { ...ps, pendingUnitBuffs: remaining },
   };
-  return { state: newState, log: [`${card.name} +${buff.amount} all sides (until your next turn) — queued bonus`] };
+  return { state: newState, log: [`${card.name} +${total} all sides (until your next turn) — queued bonus`] };
 }
 
 // ── Hero passive — Counteroffensive General (101) ───────────────────────────
@@ -243,6 +251,9 @@ export function checkUnitOnPlayAbility(s, active, col, key, card) {
 // tile should be empty (or about to be overwritten by a summon effect) when this runs, and
 // `dyingUnit` is a snapshot of the unit taken BEFORE the mutation (for cardId/owner).
 // Graves Registration Officer (147) doubles the effect — runs runDeathrattleEffect twice.
+// `usedTargets` accumulates the board key each single-unit-target application picked (133/
+// 134/135), so the SECOND application of a doubled resolution excludes it — per Filip
+// 2026-08-19: a doubled effect must not land on the same card twice.
 export function checkDeathrattle(s, key, dyingUnit) {
   if (!dyingUnit) return { state: s, log: [] };
   const card = CARD_BY_ID[dyingUnit.cardId];
@@ -250,26 +261,42 @@ export function checkDeathrattle(s, key, dyingUnit) {
   const owner = dyingUnit.owner;
   const doubled = (s[owner]?.heroZones ?? []).includes(147);
   const log = [];
+  const usedTargets = new Set();
   for (let i = 0; i < (doubled ? 2 : 1); i++) {
-    const result = runDeathrattleEffect(s, key, dyingUnit, card, owner);
+    const result = runDeathrattleEffect(s, key, dyingUnit, card, owner, usedTargets);
     s = result.state;
     log.push(...result.log);
+    if (result.targetKey) usedTargets.add(result.targetKey);
   }
   return { state: s, log };
 }
 
 // Picks the first LIVE friendly unit adjacent to `key` (deterministic — the brainstorm text
-// for this effect (135) didn't say "random", unlike 132/133/134/137 which explicitly do).
-function firstAdjacentFriendly(s, key, owner) {
+// for this effect (135) didn't say "random", unlike 132/133/134/137 which explicitly do),
+// excluding any key already used earlier in the same (possibly doubled) resolution.
+function firstAdjacentFriendly(s, key, owner, excludeKeys = new Set()) {
   const [row, col] = tileCoords(key);
   return adjacentTiles(row, col)
     .map(({ key: k }) => k)
-    .find(k => { const u = s.board[k]; return u && u.owner === owner && u.state !== 'destroyed'; }) ?? null;
+    .find(k => {
+      if (excludeKeys.has(k)) return false;
+      const u = s.board[k];
+      return u && u.owner === owner && u.state !== 'destroyed';
+    }) ?? null;
 }
 
 // Picks a RANDOM live friendly unit of the given class (132/133/134/137 all say "random").
-function randomFriendlyOfClass(s, owner, cls) {
-  const list = unitsOnBoard(s, owner).filter(({ unit }) => CARD_BY_ID[unit.cardId]?.cls === cls);
+// General rule (per Filip 2026-08-19): if `avoidKeyword` is given, skip any unit that already
+// carries it (no point granting a keyword a unit already has) — do nothing if none qualify.
+// `excludeKeys` additionally skips units already targeted earlier in the same doubled
+// resolution (Graves Registration Officer, 147), so a double-trigger can't hit one card twice.
+function randomFriendlyOfClass(s, owner, cls, { avoidKeyword = null, excludeKeys = new Set() } = {}) {
+  const list = unitsOnBoard(s, owner).filter(({ key, unit }) => {
+    if (CARD_BY_ID[unit.cardId]?.cls !== cls) return false;
+    if (excludeKeys.has(key)) return false;
+    if (avoidKeyword && getKeywords(unit).includes(avoidKeyword)) return false;
+    return true;
+  });
   if (!list.length) return null;
   return list[Math.floor(Math.random() * list.length)];
 }
@@ -292,8 +319,11 @@ function summonRandomFromDeck(s, owner, key, predicate) {
   return { state: newState, log: [`Summoned ${CARD_BY_ID[pick.id].name} from deck`] };
 }
 
-// Per-card Deathrattle effect dispatch — mirrors applyHeroPower's switch-by-id pattern in game.js.
-function runDeathrattleEffect(s, key, dyingUnit, card, owner) {
+// Per-card Deathrattle effect dispatch — mirrors applyHeroPower's switch-by-id pattern in
+// game.js. Returns { state, log, targetKey } — targetKey (133/134/135 only) is the board key
+// a single-unit-target effect picked, fed back into checkDeathrattle's excludeKeys for a
+// doubled resolution's second application.
+function runDeathrattleEffect(s, key, dyingUnit, card, owner, excludeKeys = new Set()) {
   const log = [];
   const tag = `${card.name} (Deathrattle):`;
 
@@ -309,29 +339,32 @@ function runDeathrattleEffect(s, key, dyingUnit, card, owner) {
       log.push(r.log.length ? `${tag} ${r.log[0]}` : `${tag} no 1-cost Artillery in deck`);
       break;
     }
-    case 133: { // Ranging Section — give a random friendly Artillery Bombard until end of turn
-      const pick = randomFriendlyOfClass(s, owner, 'Artillery');
+    case 133: { // Ranging Section — give a random friendly Artillery (that doesn't already
+      // have it) Bombard until your next turn. Was "until end of turn" via tempKeywords;
+      // switched to grantedKeywords (2026-08-19, per Filip) — grantedKeywords already clears
+      // at the OWNER'S next startOfTurn (see state.js), giving exactly "until your next turn."
+      const pick = randomFriendlyOfClass(s, owner, 'Artillery', { avoidKeyword: 'Bombard', excludeKeys });
       if (!pick) { log.push(`${tag} no friendly Artillery to target`); break; }
       const u = s.board[pick.key];
-      s = { ...s, board: { ...s.board, [pick.key]: { ...u, tempKeywords: [...(u.tempKeywords || []), 'Bombard'] } } };
-      log.push(`${tag} ${CARD_BY_ID[u.cardId].name} gains Bombard (until end of turn)`);
-      break;
+      s = { ...s, board: { ...s.board, [pick.key]: { ...u, grantedKeywords: [...(u.grantedKeywords || []), 'Bombard'] } } };
+      log.push(`${tag} ${CARD_BY_ID[u.cardId].name} gains Bombard (until your next turn)`);
+      return { state: s, log, targetKey: pick.key };
     }
     case 134: { // Veteran Battery — give a random friendly Artillery +1 all sides
-      const pick = randomFriendlyOfClass(s, owner, 'Artillery');
+      const pick = randomFriendlyOfClass(s, owner, 'Artillery', { excludeKeys });
       if (!pick) { log.push(`${tag} no friendly Artillery to target`); break; }
       const u = s.board[pick.key];
       s = { ...s, board: { ...s.board, [pick.key]: { ...u, grantedSideBonus: (u.grantedSideBonus || 0) + 1, sideBonusTurns: 1 } } };
       log.push(`${tag} ${CARD_BY_ID[u.cardId].name} +1 all sides (until your next turn)`);
-      break;
+      return { state: s, log, targetKey: pick.key };
     }
     case 135: { // Rearguard Squad — adjacent friendly unit +1 all sides
-      const adjKey = firstAdjacentFriendly(s, key, owner);
+      const adjKey = firstAdjacentFriendly(s, key, owner, excludeKeys);
       if (!adjKey) { log.push(`${tag} no adjacent friendly Unit`); break; }
       const u = s.board[adjKey];
       s = { ...s, board: { ...s.board, [adjKey]: { ...u, grantedSideBonus: (u.grantedSideBonus || 0) + 1, sideBonusTurns: 1 } } };
       log.push(`${tag} ${CARD_BY_ID[u.cardId].name} +1 all sides (until your next turn)`);
-      break;
+      return { state: s, log, targetKey: adjKey };
     }
     case 136: { // Salvage Crew — next Tank costs 1 less Fuel
       s = { ...s, [owner]: addDiscount(s[owner], { appliesTo: 'Tank', column: null, amount: 1, min: 0 }) };

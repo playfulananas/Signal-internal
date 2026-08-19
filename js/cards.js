@@ -93,7 +93,7 @@ export const CARDS = [
   // Rally), not combat-kills only — see checkDeathrattle in combat.js.
   { id:131, name:"Forward Gun Crew",   cls:"Artillery", rarity:"Common", type:"unit", cost:2, ap:2, keyword:"Deathrattle", n:4, e:4, s:4, w:4,   ability:"Deathrattle: Draw 1 card." },
   { id:132, name:"Salvage Battery",    cls:"Artillery", rarity:"Common", type:"unit", cost:3, ap:3, keyword:"Deathrattle", n:5, e:2, s:2, w:6,   ability:"Deathrattle: Summon a random 1-cost friendly Artillery from your deck onto this tile." },
-  { id:133, name:"Ranging Section",    cls:"Artillery", rarity:"Common", type:"unit", cost:1, ap:1, keyword:"Deathrattle", n:7, e:1, s:1, w:1,   ability:"Deathrattle: Give a random friendly Artillery Bombard until end of turn." },
+  { id:133, name:"Ranging Section",    cls:"Artillery", rarity:"Common", type:"unit", cost:1, ap:1, keyword:"Deathrattle", n:7, e:1, s:1, w:1,   ability:"Deathrattle: Give a random friendly Artillery (that doesn't already have it) Bombard until your next turn." },
   { id:134, name:"Veteran Battery",    cls:"Artillery", rarity:"Common", type:"unit", cost:4, ap:4, keyword:"Deathrattle", n:10,e:2, s:1, w:1,   ability:"Deathrattle: Give a random friendly Artillery +1 all sides (until your next turn)." },
   { id:135, name:"Rearguard Squad",    cls:"Infantry",  rarity:"Common", type:"unit", cost:2, ap:2, keyword:"Deathrattle", n:3, e:4, s:3, w:4,   ability:"Deathrattle: Give an adjacent friendly Unit +1 all sides (until your next turn)." },
   { id:136, name:"Salvage Crew",       cls:"Tank",      rarity:"Common", type:"unit", cost:2, ap:2, keyword:"Deathrattle", n:4, e:5, s:5, w:4,   ability:"Deathrattle: Your next Tank costs 1 less Fuel." },

@@ -77,12 +77,15 @@ test('Salvage Battery (132): no-ops (logs, no summon) when the deck has no 1-cos
   assert.deepEqual(after.p1.deck, [10, 11]);
 });
 
-test('Ranging Section (133): gives a friendly Artillery Bombard until end of turn', () => {
-  const artillery = unit(10, 'p1'); // Field Howitzer
+test('Ranging Section (133): gives a friendly Artillery Bombard until your next turn', () => {
+  const artillery = unit(11, 'p1'); // Anti-Tank Gun — Artillery, no innate Bombard (Field Howitzer 10 has Bombard printed, would be auto-excluded)
   const s = { p1: playerState(), board: boardWith({ '1,1': artillery }) };
   const { state: after, log } = checkDeathrattle(s, '0,0', unit(133, 'p1'));
   assert.equal(log.length, 1);
-  assert.deepEqual(after.board['1,1'].tempKeywords, ['Bombard']);
+  // grantedKeywords, not tempKeywords — clears at the OWNER's next startOfTurn, giving "until
+  // your next turn" (2026-08-19 fix; was tempKeywords, "until end of turn").
+  assert.deepEqual(after.board['1,1'].grantedKeywords, ['Bombard']);
+  assert.deepEqual(after.board['1,1'].tempKeywords, []);
 });
 
 test('Ranging Section (133): no-ops when no friendly Artillery is on board', () => {
@@ -92,6 +95,34 @@ test('Ranging Section (133): no-ops when no friendly Artillery is on board', () 
   assert.ok(log[0].includes('no friendly Artillery'));
 });
 
+test('Ranging Section (133): skips an Artillery that already has Bombard, no-ops if that\'s the only one', () => {
+  const alreadyBombard = unit(10, 'p1', { grantedKeywords: ['Bombard'] });
+  const s = { p1: playerState(), board: boardWith({ '1,1': alreadyBombard }) };
+  const { state: after, log } = checkDeathrattle(s, '0,0', unit(133, 'p1'));
+  assert.equal(log.length, 1);
+  assert.ok(log[0].includes('no friendly Artillery'), 'the only Artillery already has Bombard, so nothing qualifies');
+  assert.deepEqual(after.board['1,1'].grantedKeywords, ['Bombard'], 'unchanged — not re-granted');
+});
+
+test('Ranging Section (133) doubled (Graves Registration Officer): hits two DIFFERENT Artillery, not the same one twice', () => {
+  const a = unit(11, 'p1'); // Anti-Tank Gun — Guard, no innate Bombard
+  const b = unit(43, 'p1'); // Anti-Aircraft Gun — Guard, no innate Bombard
+  const s = { p1: playerState({ heroZones: [147, null, null, null] }), board: boardWith({ '1,1': a, '2,2': b }) };
+  const { state: after, log } = checkDeathrattle(s, '0,0', unit(133, 'p1'));
+  assert.equal(log.length, 2);
+  assert.deepEqual(after.board['1,1'].grantedKeywords, ['Bombard']);
+  assert.deepEqual(after.board['2,2'].grantedKeywords, ['Bombard']);
+});
+
+test('Ranging Section (133) doubled with only ONE eligible Artillery: second application no-ops instead of re-hitting it', () => {
+  const only = unit(11, 'p1');
+  const s = { p1: playerState({ heroZones: [147, null, null, null] }), board: boardWith({ '1,1': only }) };
+  const { state: after, log } = checkDeathrattle(s, '0,0', unit(133, 'p1'));
+  assert.equal(log.length, 2);
+  assert.ok(log[1].includes('no friendly Artillery'), 'second application must not re-target the same unit');
+  assert.deepEqual(after.board['1,1'].grantedKeywords, ['Bombard'], 'only granted once, not twice');
+});
+
 test('Veteran Battery (134): gives a friendly Artillery +1 all sides until your next turn', () => {
   const artillery = unit(10, 'p1');
   const s = { p1: playerState(), board: boardWith({ '1,1': artillery }) };
@@ -99,6 +130,15 @@ test('Veteran Battery (134): gives a friendly Artillery +1 all sides until your 
   assert.equal(log.length, 1);
   assert.equal(after.board['1,1'].grantedSideBonus, 1);
   assert.equal(after.board['1,1'].sideBonusTurns, 1);
+});
+
+test('Veteran Battery (134) doubled: hits two different Artillery, not the same one twice', () => {
+  const a = unit(10, 'p1');
+  const b = unit(11, 'p1');
+  const s = { p1: playerState({ heroZones: [147, null, null, null] }), board: boardWith({ '1,1': a, '2,2': b }) };
+  const { state: after } = checkDeathrattle(s, '0,0', unit(134, 'p1'));
+  assert.equal(after.board['1,1'].grantedSideBonus, 1);
+  assert.equal(after.board['2,2'].grantedSideBonus, 1);
 });
 
 test('Rearguard Squad (135): gives the (deterministic) first adjacent friendly Unit +1 all sides', () => {
@@ -115,6 +155,16 @@ test('Rearguard Squad (135): no-ops when no adjacent friendly Unit exists', () =
   const { log } = checkDeathrattle(s, '0,0', unit(135, 'p1'));
   assert.equal(log.length, 1);
   assert.ok(log[0].includes('no adjacent friendly Unit'));
+});
+
+test('Rearguard Squad (135) doubled: hits two different adjacent friendlies, not the same one twice', () => {
+  const north = unit(1, 'p1');
+  const south = unit(2, 'p1');
+  // Dying unit at 1,1 — adjacent tiles 0,1 (north) and 2,1 (south) both hold a friendly.
+  const s = { p1: playerState({ heroZones: [147, null, null, null] }), board: boardWith({ '0,1': north, '2,1': south }) };
+  const { state: after } = checkDeathrattle(s, '1,1', unit(135, 'p1'));
+  assert.equal(after.board['0,1'].grantedSideBonus, 1);
+  assert.equal(after.board['2,1'].grantedSideBonus, 1);
 });
 
 test('Salvage Crew (136): next Tank costs 1 less Fuel (queues a discount)', () => {
@@ -137,6 +187,19 @@ test('Convoy Escort (138): queues a +1 all sides buff for the next Naval Unit pl
   const { state: after, log } = checkDeathrattle(s, '0,0', unit(138, 'p1'));
   assert.equal(log.length, 1);
   assert.deepEqual(after.p1.pendingUnitBuffs, [{ appliesTo: 'Naval', amount: 1 }]);
+});
+
+test('Convoy Escort (138) doubled: queues two +1 entries, which checkPendingUnitBuff stacks into +2 on ONE Unit', () => {
+  const s = { p1: playerState({ heroZones: [147, null, null, null] }), board: boardWith({}) };
+  const { state: after } = checkDeathrattle(s, '0,0', unit(138, 'p1'));
+  assert.deepEqual(after.p1.pendingUnitBuffs, [{ appliesTo: 'Naval', amount: 1 }, { appliesTo: 'Naval', amount: 1 }]);
+
+  const naval = CARD_BY_ID[15];
+  const placed = { p1: after.p1, board: boardWith({ '0,0': unit(15, 'p1') }) };
+  const { state: final, log } = checkPendingUnitBuff(placed, 'p1', '0,0', naval);
+  assert.equal(final.board['0,0'].grantedSideBonus, 2, 'both queued +1s land on the same Unit, not spread across two');
+  assert.deepEqual(final.p1.pendingUnitBuffs, [], 'both entries consumed at once');
+  assert.ok(log[0].includes('+2'));
 });
 
 // ── Graves Registration Officer (147) — doubling ──────────────────────────────
@@ -171,6 +234,17 @@ test('checkPendingUnitBuff applies a queued buff to a matching Unit and consumes
   assert.equal(log.length, 1);
   assert.equal(after.board['0,0'].grantedSideBonus, 1);
   assert.deepEqual(after.p1.pendingUnitBuffs, [], 'the buff is consumed, not left queued');
+});
+
+test('checkPendingUnitBuff aggregates entries from different sources, not just doubled ones — matches discountFor\'s "sum every matching entry" convention', () => {
+  const naval = CARD_BY_ID[15];
+  const s = {
+    p1: { ...playerState(), pendingUnitBuffs: [{ appliesTo: 'Naval', amount: 1 }, { appliesTo: 'Naval', amount: 3 }, { appliesTo: 'Infantry', amount: 5 }] },
+    board: boardWith({ '0,0': unit(15, 'p1') }),
+  };
+  const { state: after } = checkPendingUnitBuff(s, 'p1', '0,0', naval);
+  assert.equal(after.board['0,0'].grantedSideBonus, 4, '1 + 3 from the two Naval entries');
+  assert.deepEqual(after.p1.pendingUnitBuffs, [{ appliesTo: 'Infantry', amount: 5 }], 'the unrelated Infantry entry stays queued untouched');
 });
 
 test('checkPendingUnitBuff no-ops when the placed Unit\'s class does not match', () => {

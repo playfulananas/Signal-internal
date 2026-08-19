@@ -51,7 +51,7 @@
 //                                 Persists until explicitly rotated again; never auto-clears.
 // }
 
-import { CARD_BY_ID } from './cards.js?v=1787103166';
+import { CARD_BY_ID } from './cards.js?v=1787173232';
 
 // ── State factory ────────────────────────────────────────────────────────────
 
@@ -75,8 +75,23 @@ export function createInitialState(p1DeckIds, p2DeckIds, mapId = 'kursk', p1Hero
   };
 }
 
+// Fisher-Yates — NOT `arr.sort(() => Math.random() - 0.5)`, which does not produce a uniform
+// shuffle (a well-known JS anti-pattern: sort implementations don't call the comparator on
+// every pair with equal frequency, and it's especially biased on small arrays — V8 uses
+// insertion sort below ~10 elements, exactly the size of a starting deck's shuffle-relevant
+// windows and the Objectives pool). Was the actual cause of "same objectives across 7 games in
+// a row" (2026-08-19 playtest report) — see pickObjectives in game.js and applyMulligan.
+export function shuffle(arr) {
+  const out = [...arr];
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
+
 function createPlayerState(deckCardIds, heroIds = []) {
-  const shuffled = [...deckCardIds].sort(() => Math.random() - 0.5);
+  const shuffled = shuffle(deckCardIds);
   const hand = shuffled.slice(0, 4);
   const deck = shuffled.slice(4);
   return {
