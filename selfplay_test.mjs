@@ -403,7 +403,7 @@ async function playOneGame(page) {
   for (let g = 0; g < NUM_GAMES; g++) {
     const page = await browser.newPage();
     page.on("console", msg => { if (msg.type() === "error") consoleErrors.push(`game${g + 1}: ${msg.text()}`); });
-    page.on("pageerror", err => pageErrors.push(`game${g + 1}: ${err.message}`));
+    page.on("pageerror", err => pageErrors.push(`game${g + 1}: ${err.message}\n${err.stack}`));
     try {
       const result = await playOneGame(page);
       results.push(result);
