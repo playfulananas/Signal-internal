@@ -5,7 +5,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { getAttackableTargets, resolveSingleAttack, checkRally, computeDynamicSideBonus, recalculateDynamicStats, resolveDestructionChain, applyPostDestructionEffects } from '../js/combat.js';
-import { discountFor, getSideValue, getKeywords, startOfTurn } from '../js/state.js';
+import { discountFor, addDiscount, getSideValue, getKeywords, startOfTurn } from '../js/state.js';
+import { CARD_BY_ID } from '../js/cards.js';
 
 function boardWith(entries) {
   const board = {};
@@ -14,6 +15,35 @@ function boardWith(entries) {
 }
 const unit = (owner, cardId = 'I1', extra = {}) => ({ cardId, owner, state: 'normal', armorHits: 0, rotation: 0, persistentSpent: 0, tempExtraAttacks: 0, tempExtraAttacksSpent: 0, tempKeywords: [], grantedKeywords: [], ...extra });
 const baseState = (board, extra = {}) => ({ turn: 2, mapId: 'kursk', board, objectives: {}, p1: { hq: 30, hand: [] }, p2: { hq: 30, hand: [] }, ...extra });
+
+// ── getSideValue: directional stat floor = 0 (doc 01 §16, doc 02 Q127) ─────────
+test('getSideValue floors at 0 — a large negative modifier cannot push a side below 0', () => {
+  const u = unit('p1', 'I1', { debugSideBonus: -999 });
+  assert.equal(getSideValue(u, 'n'), 0);
+});
+
+test('getSideValue: no maximum cap — a large positive modifier passes through unclamped', () => {
+  const u = unit('p1', 'I1', { debugSideBonus: 50 });
+  assert.equal(getSideValue(u, 'n'), CARD_BY_ID['I1'].n + 50);
+});
+
+// ── discountFor: 'unit' appliesTo (Run 2, Factory O1 L2/L4) ─────────────────
+// Added because addDiscount's only prior generic dimension was 'command' (special-cased) or
+// an exact card.cls match — nothing meant "any Unit, any class, but not a Command." Factory's
+// "next Unit played this turn costs N less" needed exactly that, so discountMatches gained a
+// parallel 'unit' special case rather than leaving the discount over-broad enough to also
+// (wrongly) apply to Commands.
+test("discountFor: appliesTo 'unit' matches any Unit card regardless of class", () => {
+  const ps = addDiscount({ pendingDiscounts: [] }, { appliesTo: 'unit', column: null, amount: 1, min: 0 });
+  assert.equal(discountFor(ps, { type: 'unit', cls: 'Infantry', cost: 3 }, null), 1);
+  assert.equal(discountFor(ps, { type: 'unit', cls: 'Tank', cost: 3 }, null), 1);
+  assert.equal(discountFor(ps, { type: 'unit', cls: 'Aircraft', cost: 3 }, null), 1);
+});
+
+test("discountFor: appliesTo 'unit' does NOT match a Command", () => {
+  const ps = addDiscount({ pendingDiscounts: [] }, { appliesTo: 'unit', column: null, amount: 1, min: 0 });
+  assert.equal(discountFor(ps, { type: 'command', cost: 3 }, null), 0);
+});
 
 // ── Section 3/5: Guard / Precision ──────────────────────────────────────────
 

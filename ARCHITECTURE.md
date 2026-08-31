@@ -4,6 +4,8 @@
 
 **Rule:** If you write code that contradicts something in this doc, update this doc. If something here is wrong, fix it here. Never silently drift.
 
+**Doc set (2026-08-31):** `STATUS.md` is the current-state implementation summary (edited in place, no history); `CHANGELOG.md` is the append-only detailed history (never edited after the fact); this file is the code-structure reference, with its own terse Session Log below for quick module-level orientation. Don't duplicate the same fact across all three — put current facts in STATUS.md, structure/architecture here, and narrative "what happened and why" in CHANGELOG.md.
+
 ---
 
 ## Session Log
@@ -32,6 +34,8 @@
 | 20 | 2026-08-01 to 08-13 | Hero Command Layer — 4-slot hero roster/zones per player (`heroZones` indexed by board column), Activated + Passive hero powers, Hero Phase turn logic tied to the objective escalation schedule (L1-L4 = all 4 roster Heroes), hero roster selection wired into the deck builder. See the "Hero Command Layer" section below. |
 | 21 | 2026-08-14 | Fixed P2 board-card stat display bug — removed the owner-based P2_FLIP from `getSideValue` (state.js) and the matching opponent-viewer swap from `buildBoardCard` (ui.js). Both were the other half of session 12's per-viewer board rotation, whose visual half was reverted 2026-07-30; left in place, they silently swapped a P2 unit's N/S and E/W the instant it was placed, mismatching what was just shown in hand. Also retired Hero Combined Arms General (109). |
 | 22 | 2026-08-14 | Empty-Board HQ Strike (GDD Locked Decision) — `canStrikeHQDirectly`/`resolveEmptyBoardStrike` in `combat.js`, wired into all 3 places a unit's attack can resolve in `game.js` (idle click, post-placement auto-target, Double Attack's 2nd-hit re-entry — the last of which also fixes a pre-existing bug where a Double Attack unit's 2nd hit was silently lost if the 1st hit emptied the board). `bot_ai.js`/`bot_player.js`/`selfplay_test.mjs` updated so the bot actually uses it. See `tests/empty_board_hq_strike.test.mjs`. |
+| 23 | 2026-08-31 | **Run 1 — Set 1 truth-lock migration.** Full card pool replaced (65 Units/25 Heroes/35 Commands/5 Objectives, string ids), Naval class and Deathrattle cut (archived), Guard rewritten, Direct HQ built to replace the old reactive Empty-Board HQ Strike, shared destruction chain, Blast/Barrage/Rally/Inspire/Muster/Last Stand/Breakthrough/Maneuver/Escalate/Craft all newly built. See STATUS.md for full detail — this table row exists mainly to keep the log continuous; Run 1's narrative lives in STATUS.md/CLAUDE.md, not here. |
+| 24 | 2026-08-31 | **Run 2 — Maps/Objectives migration**, same day, separate pass, against doc 04 (Objectives & Maps Truth). Normandy + Midway cut (archived in `maps.js`'s new `ARCHIVED_MAPS`); Stalingrad/Kursk/El Alamein/Ardennes kept with corrected objective-slot geometry; all water/Naval terrain code removed. `applyObjectiveEffects` (game.js) rewired from dead pre-Run-1 numeric-id code to the live O1-O5 scheme — this was the actual bug: every Objective had done nothing at all since Run 1 shipped. Universal 1/1/2/2 HQ backbone, fixed column-major multi-objective resolution order with lethal-stop, and all 5 objectives' L1-L4 secondary effects now execute for real. `discountFor` gained an `appliesTo: 'unit'` dimension. Objective identities now randomize after mulligan, not before. `tests/maps.test.mjs` rewritten for the 4-map reality. |
 
 *(Session Log entries above are milestone summaries, not one-per-commit — see `git log` for full commit-level history.)*
 
@@ -42,7 +46,7 @@
 | File | Exports | Depends on |
 |---|---|---|
 | `js/cards.js` | `CARDS`, `CARD_BY_ID` | nothing |
-| `js/maps.js` | `MAPS`, `getTerrain`, `canPlaceOnTerrain` | nothing |
+| `js/maps.js` | `MAPS` (4 live maps), `ARCHIVED_MAPS` (Normandy/Midway, cut Run 2), `getTerrain`, `canPlaceOnTerrain` | nothing |
 | `js/state.js` | see State API below | `cards.js` |
 | `js/combat.js` | see Combat API below (incl. Hero passives — see below) | `cards.js`, `state.js` |
 | `js/ui.js` | see UI API below | `cards.js`, `state.js`, `maps.js` |

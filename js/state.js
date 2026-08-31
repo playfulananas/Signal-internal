@@ -27,6 +27,14 @@
 //   pendingDiscounts: [{ appliesTo, column, amount, min }],  — unspent Fuel discounts
 //   pendingUnitBuffs: [{ appliesTo, amount }],  — unspent stat buffs (Deathrattle: Convoy Escort)
 //   fieldMarshalUses: number,   — Field Marshal (144) activation count this match, never reset
+//   discardPile: number[],      — cardIds destroyed/resolved/discarded (doc 02 Q026-Q028): destroyed
+//                                 Units, resolved Commands, and any card that would enter hand while
+//                                 hand is already at the 10-card max. Tracked but currently has no
+//                                 gameplay effect that reads it (no retrieval/counting/targeting) —
+//                                 per doc 02 Q028, that's locked Set 1 truth, not a gap.
+//   fatigueCount: number,       — failed draw-from-empty-deck attempts this match (doc 02 Q029-Q030).
+//                                 Each attempt deals fatigueCount HQ damage (1, then 2, then 3...) —
+//                                 see drawCards. Never resets.
 // }
 //
 // ActiveMission: { cardId, killsAtDeploy? } — no turn limit; stays active until its reward fires.
@@ -70,14 +78,20 @@
 // "reset attacks" effect (e.g. Maneuver Commander, Scramble) zeroes persistentSpent only and
 // never recreates an already-spent temporary extra attack.
 
-import { CARD_BY_ID } from './cards.js?v=1788192005';
+import { CARD_BY_ID } from './cards.js?v=1788220498';
 
 // ── State factory ────────────────────────────────────────────────────────────
 
 export function createInitialState(p1DeckIds, p2DeckIds, mapId = 'kursk', p1HeroIds = [], p2HeroIds = []) {
   return {
     turn: 1,
-    initiative: "p1",
+    // Doc 02 Q005 (locked): first player is chosen randomly — "remove alternate-initiative or
+    // predetermined first-player rules." Previously hardcoded to always be p1, missed by both
+    // Run 1 and Run 2 since neither touched match-setup sequencing. Safe to randomize here even
+    // for online play: only the host (p1's client) ever calls createInitialState — P2's client
+    // receives the resulting state (including this field) via the normal Firebase push, so
+    // there's no risk of the two clients independently rolling different results.
+    initiative: Math.random() < 0.5 ? "p1" : "p2",
     phase: "play",
     p2Joined: false,
     mapId,
@@ -123,6 +137,8 @@ function createPlayerState(deckCardIds, heroIds = []) {
     missions: [],
     pendingDiscounts: [],
     overrun: false,
+    discardPile: [],
+    fatigueCount: 0,
     // ── Hero command layer ──
     // Heroes are never shuffled into the deck; the roster is a separate fixed list of 4.
     heroRoster: [...heroIds],
@@ -265,12 +281,35 @@ export function updateObjectiveLevels(state) {
 
 // ── Player state helpers ─────────────────────────────────────────────────────
 
-// Draws up to n cards from deck into hand. Stops if deck empty.
+// Single funnel for "put a card into this player's hand" (doc 02 Q022-Q025): if hand is
+// already at the 10-card max, the incoming card goes to discardPile instead. Applies
+// regardless of source — normal draw, Craft, Tactical Withdrawal-style return-to-hand, or
+// any future "add to hand" effect — so every call site shares one overflow rule rather than
+// each one needing its own copy of this check (several didn't have it at all before).
+export function addCardToHand(playerState, cardId) {
+  if (playerState.hand.length >= 10) {
+    return { ...playerState, discardPile: [...(playerState.discardPile ?? []), cardId] };
+  }
+  return { ...playerState, hand: [...playerState.hand, cardId] };
+}
+
+// Draws n cards one at a time (doc 02 Q030: multi-draws resolve sequentially, not as one
+// packet). Empty-deck exception (doc 02 Q029-Q030, doc 01 §4 Fatigue), previously entirely
+// missing: each failed draw deals escalating HQ damage to the drawing player — 1st failed
+// draw this match = 1, 2nd = 2, 3rd = 3, etc. Never resets. This used to just silently stop
+// drawing with no consequence at all. Hand-cap overflow per successful draw goes through
+// addCardToHand above.
 export function drawCards(playerState, n) {
-  const ps = { ...playerState };
-  const drawn = ps.deck.slice(0, n);
-  ps.hand = [...ps.hand, ...drawn];
-  ps.deck = ps.deck.slice(n);
+  let ps = playerState;
+  for (let i = 0; i < n; i++) {
+    if (ps.deck.length === 0) {
+      const fatigueCount = (ps.fatigueCount ?? 0) + 1;
+      ps = { ...ps, fatigueCount, hq: ps.hq - fatigueCount };
+      continue;
+    }
+    const [card, ...restDeck] = ps.deck;
+    ps = { ...addCardToHand(ps, card), deck: restDeck };
+  }
   return ps;
 }
 
@@ -290,10 +329,16 @@ export function expireTempFuelGrant(playerState) {
 }
 
 export function gainFuel(playerState, amount, cap = true) {
-  const newFuel = playerState.fuel + amount;
-  // Cap is per-player so a Hero can raise it (Logistics Chief: 11 instead of 9).
-  // Callers passing cap=false (objective/mission Fuel grants) still bypass it entirely.
-  return { ...playerState, fuel: cap ? Math.min(fuelCapOf(playerState), newFuel) : newFuel };
+  // doc 02 Q037 (locked): if current Fuel is already above the normal threshold (from a prior
+  // uncapped effect-generated gain), a normal capped Fuel step must add 0, NOT reduce it back
+  // down to the cap. The previous `Math.min(capValue, fuel + amount)` got this wrong — e.g.
+  // fuel already at 12 (cap 9) + a normal +3 step computed min(9, 15) = 9, silently erasing 3
+  // Fuel of legitimate excess every single turn. Correct rule: the capped GAIN itself is
+  // clamped to "however much room is left under the cap," never negative, then added — excess
+  // already banked is left alone.
+  if (!cap) return { ...playerState, fuel: playerState.fuel + amount };
+  const room = Math.max(0, fuelCapOf(playerState) - playerState.fuel);
+  return { ...playerState, fuel: playerState.fuel + Math.min(amount, room) };
 }
 
 // Base cap is 9, but Logistics Chief (H02) raises it to 11 while deployed in any Hero Zone.
@@ -315,6 +360,9 @@ export function fuelCapOf(playerState) {
 
 function discountMatches(d, card, col) {
   if (d.appliesTo === 'command') { if (card.type !== 'command') return false; }
+  // 'unit' means "any Unit class" (Factory L2/L4's "next Unit played" — as opposed to a
+  // specific class like 'Tank'/'Aircraft', or a Command, which 'unit' must exclude).
+  else if (d.appliesTo === 'unit') { if (card.type !== 'unit') return false; }
   else if (d.appliesTo && card.cls !== d.appliesTo) return false;
   // col === null means "don't filter by column" — used by the hand display and the
   // affordability pre-check, which run before a tile has been chosen, so they show the
@@ -412,7 +460,12 @@ export function getSideValue(boardUnit, dir) {
   // as the base printed stat, so a later rotation (Change Formation etc.) carries the bonus
   // with its side exactly like every other stat does, rather than pinning it to whichever
   // physical board direction happened to face that way at grant time.
-  return card[d] + (boardUnit.tempSideBonus || 0) + (boardUnit.grantedSideBonus || 0) + (boardUnit.objSideBonus || 0) + (boardUnit.debugSideBonus || 0) + (boardUnit.dynamicSideBonus || 0) + (boardUnit[`perm_${d}`] || 0);
+  const total = card[d] + (boardUnit.tempSideBonus || 0) + (boardUnit.grantedSideBonus || 0) + (boardUnit.objSideBonus || 0) + (boardUnit.debugSideBonus || 0) + (boardUnit.dynamicSideBonus || 0) + (boardUnit[`perm_${d}`] || 0);
+  // doc 01 §16 / doc 02 Q127: directional stat floor = 0, no maximum cap. Not currently
+  // reachable by any card in the live pool (no negative modifier exists yet) — only via the
+  // debug panel's negative all-sides buff — but the rule is unconditional, not "unless no
+  // card needs it yet," so enforce it here rather than leave it to luck.
+  return Math.max(0, total);
 }
 
 // Returns card's base keyword(s) + tempKeywords + grantedKeywords.

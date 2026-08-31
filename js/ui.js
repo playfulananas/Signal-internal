@@ -1,6 +1,7 @@
-import { CARD_BY_ID } from './cards.js?v=1788192005';
-import { getKeywords, maxArmorHits, discountFor, fuelCapOf, rotatedDir } from './state.js?v=1788192005';
-import { getTerrain } from './maps.js?v=1788192005';
+import { CARD_BY_ID } from './cards.js?v=1788220498';
+import { getKeywords, maxArmorHits, discountFor, fuelCapOf, rotatedDir } from './state.js?v=1788220498';
+import { getTerrain } from './maps.js?v=1788220498';
+import { nextCraftCost } from './combat.js?v=1788220498';
 
 const TERRAIN_SHORT = { plains: 'P', forest: 'F', water: 'W', desert: 'D', city: 'C' };
 
@@ -352,7 +353,11 @@ export function renderHeroZones(state, selectedZone = null) {
       // showed the flat printed cost, which read as "broken" when a discount/tax was pending.
       const discount = ps.pendingHeroDiscount ?? 0;
       const tax = (ps.heroTaxedColumns ?? {})[col] ?? 0;
-      const effectiveCost = card.powerType === 'active' ? Math.max(0, (card.activeCost ?? 0) - discount + tax) : null;
+      // H25's printed cost escalates down each activation (see nextCraftCost, combat.js) —
+      // the displayed cost must track that, not the static printed activeCost, to match what
+      // tryActivateHero (game.js) actually charges.
+      const baseCost = heroId === 'H25' ? nextCraftCost(ps) : (card.activeCost ?? 0);
+      const effectiveCost = card.powerType === 'active' ? Math.max(0, baseCost - discount + tax) : null;
       return `<div class="hero-zone-slot filled${isDropTarget ? ' drop-target' : ''}" data-hero-zone="${role}-${col}">${heroPlacedHtml(card, role, { ready, spent, picked, effectiveCost })}</div>`;
     }).join('');
   }

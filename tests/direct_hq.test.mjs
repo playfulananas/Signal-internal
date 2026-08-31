@@ -96,6 +96,23 @@ test('Player 2 first turn (state.turn === 2) uses normal Direct HQ, not blocked'
   assert.equal(hqDamageToP1, 1);
 });
 
+// Doc 02 Q005 (locked, fixed 2026-08-31): first player is chosen randomly, not always "p1" —
+// these two mirror the pair above with the roles swapped, confirming the turn-1 lock is truly
+// label-agnostic (keyed on state.turn, never on which of p1/p2 is acting) now that either role
+// can actually be the one moving first in a real game.
+test('p2 moving first (state.turn === 1) is blocked, regardless of label', () => {
+  const state = baseState(boardWith({ '0,0': unit('p2', 'T36') }), { turn: 1 });
+  const { hqDamageToP1, log } = evaluateDirectHQ(state, 'p2');
+  assert.equal(hqDamageToP1, 0);
+  assert.equal(log.length, 0);
+});
+
+test('p1 moving second (state.turn === 2) uses normal Direct HQ, not blocked, regardless of label', () => {
+  const state = baseState(boardWith({ '0,0': unit('p1', 'I1') }), { turn: 2 });
+  const { hqDamageToP2 } = evaluateDirectHQ(state, 'p1');
+  assert.equal(hqDamageToP2, 1);
+});
+
 test('multiple qualifying Units resolve in fixed left-to-right column, top-to-bottom order', () => {
   const state = baseState(boardWith({ '2,1': unit('p1', 'I1'), '0,0': unit('p1', 'I2'), '1,0': unit('p1', 'I3') }));
   const { log } = evaluateDirectHQ(state, 'p1');

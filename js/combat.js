@@ -1,6 +1,6 @@
-import { CARD_BY_ID, registerGeneratedCard } from './cards.js?v=1788192005';
-import { getSideValue, getKeywords, attackBeats, applyHit, oppositeDir, unsuppressOnBoard, drawCards, addDiscount, remainingAttacks, spendAttack, grantTempAttacks, resetPersistentAttacks, fuelCapOf, gainFuel } from './state.js?v=1788192005';
-import { canPlaceOnTerrain, getTerrain } from './maps.js?v=1788192005';
+import { CARD_BY_ID, registerGeneratedCard } from './cards.js?v=1788220498';
+import { getSideValue, getKeywords, attackBeats, applyHit, oppositeDir, unsuppressOnBoard, drawCards, addDiscount, remainingAttacks, spendAttack, grantTempAttacks, resetPersistentAttacks, fuelCapOf, gainFuel } from './state.js?v=1788220498';
+import { canPlaceOnTerrain, getTerrain } from './maps.js?v=1788220498';
 
 // Orthogonal directions and their row/col offsets.
 const DIRS = ["n", "e", "s", "w"];
@@ -116,10 +116,12 @@ export function resolveEmptyBoardStrike(state, attackerKey, hits) {
 //   - If no legal target: every remaining attack converts to 1 HQ damage, sequentially,
 //     stopping immediately once the opponent's HQ would reach 0 (checked after each point of
 //     damage, matching doc 01 §19 step 7's "check victory after each damage instance").
-// Turn-1 lock: only the player who moves first can ever be active during state.turn === 1
-// (turn is a global counter that only advances via endTurn's initiative swap), so checking
-// `state.turn === 1` correctly and exclusively targets "Player 1's own first turn" — the
-// second player's first turn is necessarily state.turn === 2 and is never blocked here.
+// Turn-1 lock: only whichever player moves first (chosen randomly, doc 02 Q005 — not always
+// the "p1" role/label) can ever be active during state.turn === 1 (turn is a global counter
+// that only advances via endTurn's initiative swap), so checking `state.turn === 1` correctly
+// and exclusively targets the first-moving player's own first turn regardless of which p1/p2
+// label they carry — the other player's first turn is necessarily state.turn === 2 and is
+// never blocked here.
 // Does not call resolveSingleAttack/applyHit and never touches boardMutations/kill-tracking,
 // so it cannot trigger Rally (which requires an actual attack against an enemy Unit).
 export function evaluateDirectHQ(state, activePlayer) {
@@ -370,8 +372,10 @@ export function resolveDestructionChain(s, { unitKey, sourceUnitKey = null, caus
   const log = [];
   let hqDamageToP1 = 0, hqDamageToP2 = 0;
 
-  // 1-2. Mark destroyed, remove from board.
+  // 1-2. Mark destroyed, remove from board. Destroyed Units go to their owner's Discard Pile
+  // (doc 02 Q026) — bookkeeping only, no current card reads this zone (doc 02 Q028).
   s = { ...s, board: { ...s.board, [unitKey]: { ...dyingUnit, state: 'destroyed' } } };
+  s = { ...s, [owner]: { ...s[owner], discardPile: [...(s[owner].discardPile ?? []), dyingUnit.cardId] } };
   s = recalculateDynamicStats(s);
 
   // 3. Normal-or-replacement HQ damage. Normal: destroying a Unit deals 2 to its OWNER's HQ

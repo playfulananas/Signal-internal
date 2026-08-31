@@ -1,9 +1,11 @@
 // Smoke test for "vs AI" mode: drives ONLY P1 via Playwright. If the bot wiring works,
 // P2's turns resolve on their own with no P2-side clicks from this script at all.
 //
-// Note: navigates to /game?ai=1 (not /game.html?ai=1) — the local `npx serve` dev server's
-// clean-URL redirect drops query strings on .html requests (a local-only artifact; the real
-// GitHub Pages host has no such redirect, so game.html?ai=1 works fine there).
+// Fixed 2026-08-31: this used to navigate to /game?ai=1 (not /game.html?ai=1) on a claimed
+// theory that the local `npx serve` dev server clean-URL-redirects /game to game.html while
+// dropping the query string on .html requests. Verified directly (Playwright): /game?ai=1
+// 404s outright in this environment — the redirect theory was simply wrong, not a
+// version-specific quirk. This script had never actually run successfully as a result.
 import { chromium } from "playwright";
 
 const BASE_URL = "http://localhost:3000";
@@ -17,13 +19,15 @@ async function readDebug(page) { return page.evaluate(() => window.__SIGNAL_DEBU
   const pageErrors = [];
   page.on("pageerror", e => pageErrors.push(e.message));
 
-  await page.goto(`${BASE_URL}/game?ai=1`, { waitUntil: "domcontentloaded" });
+  await page.goto(`${BASE_URL}/game.html?ai=1`, { waitUntil: "domcontentloaded" });
 
-  // P1 deck + map pick (P2 is auto-assigned in AI mode — no second picker step to handle).
-  await page.locator("#deck-grid .deck-option").first().waitFor({ state: "visible", timeout: 8000 });
-  await page.locator("#deck-grid .deck-option").first().click();
-  await page.locator("#map-picker").waitFor({ state: "visible", timeout: 5000 });
+  // Map + P1 deck pick (P2 is auto-assigned in AI mode — no second picker step to handle).
+  // Run 2 (2026-08-31): map picker now shows first (doc 04 §1's locked setup order),
+  // reversing the old deck->map sequence.
+  await page.locator("#map-grid .deck-option").first().waitFor({ state: "visible", timeout: 8000 });
   await page.locator("#map-grid .deck-option").first().click();
+  await page.locator("#deck-picker").waitFor({ state: "visible", timeout: 5000 });
+  await page.locator("#deck-grid .deck-option").first().click();
 
   // Only P1's mulligan should appear.
   await page.locator("#btn-mulligan-keep").waitFor({ state: "visible", timeout: 5000 });

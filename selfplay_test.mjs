@@ -14,11 +14,10 @@ const STALL_STREAK_LIMIT = 8; // consecutive half-turns with zero HQ/board chang
 const BASE_URL = "http://localhost:3000";
 
 // Updated 2026-08-31 (Run 1) for the 8 SIGNAL Set 1 Recommended Decks (see decks.js
-// STARTER_DECKS) replacing the old 4 starter decks. Maps list is unchanged in Run 1
-// (Maps/Objectives migration to the new 4-map truth is Run 2 scope) — kept as-is so this
-// harness still exercises the existing 6 maps until that run.
+// STARTER_DECKS) replacing the old 4 starter decks. Updated again same day (Run 2) for the
+// doc-04-locked 4-map truth — Normandy and Midway are cut (archived in maps.js, not deleted).
 const DECKS = ["infantry-formation", "tank-blitz", "artillery-fire-control", "air-superiority", "last-stand-sacrifice", "command-engine", "combined-arms", "objective-tempo"];
-const MAPS = ["normandy", "stalingrad", "el_alamein", "ardennes", "kursk", "midway"];
+const MAPS = ["stalingrad", "el_alamein", "ardennes", "kursk"];
 
 function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 
@@ -300,11 +299,13 @@ async function playOneGame(page) {
   await page.locator("#btn-local").click();
 
   const d1 = pick(DECKS), d2 = pick(DECKS), map = pick(MAPS);
+  // Run 2 (2026-08-31): map picker now shows first for local play (doc 04 §1's locked
+  // setup order — map before deck/Hero roster), reversing the old deck->deck->map sequence.
+  await page.locator(`#map-grid .deck-option[data-map="${map}"]`).click();
+  await page.locator("#deck-picker").waitFor({ state: "visible", timeout: 5000 });
   await page.locator(`#deck-grid .deck-option[data-deck="${d1}"]`).click();
   await page.waitForTimeout(50);
   await page.locator(`#deck-grid .deck-option[data-deck="${d2}"]`).click();
-  await page.locator("#map-picker").waitFor({ state: "visible", timeout: 5000 });
-  await page.locator(`#map-grid .deck-option[data-map="${map}"]`).click();
   await page.waitForTimeout(50);
 
   // Mulligan and starting-Hero pick interleave (P1 mulligan -> P2 mulligan -> P1 hero -> P2 hero),

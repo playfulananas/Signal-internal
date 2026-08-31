@@ -1,7 +1,7 @@
 // Deck rules, starter decks, validation, and custom-deck persistence.
 // Validation functions are pure (node-testable). localStorage helpers are
 // browser-only — never called at module top level.
-import { CARDS, CARD_BY_ID } from './cards.js?v=1788180619';
+import { CARDS, CARD_BY_ID } from './cards.js?v=1788220498';
 
 export const DECK_RULES = {
   deckSize: 30, // v0.4 fixed deck size (2026-07-30) — replaces the old 50-AP budget model. Exact, not a ceiling.
@@ -85,8 +85,14 @@ export function countCopies(ids) {
   return counts;
 }
 
+// doc 02 Q015 (locked): "Use card-level Allowed Copies... mostly 2, selected 1-copy Units...
+// do not infer copy count from rarity." Read the card's own `copies` field directly. For the
+// current 65-card pool this happens to always agree with a Rare=1/Common=2 rarity inference
+// (verified: no card currently diverges), but relying on rarity was still the wrong migration
+// per doc 02's explicit instruction — a future card with an off-rarity copy limit would have
+// silently gotten the wrong cap. Fallback only covers a card missing the field entirely.
 export function copyCap(card) {
-  return card.rarity === 'Rare' ? DECK_RULES.maxCopiesRare : DECK_RULES.maxCopiesCommon;
+  return card.copies ?? (card.rarity === 'Rare' ? DECK_RULES.maxCopiesRare : DECK_RULES.maxCopiesCommon);
 }
 
 // Returns { valid, errors: string[] }. Checks every rule so the UI can

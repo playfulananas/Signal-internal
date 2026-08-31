@@ -4,10 +4,10 @@
 // Given a live state snapshot (read from window.__SIGNAL_DEBUG__ in the browser), this module
 // picks the best legal action. It does not touch the DOM — callers (selfplay_test.mjs,
 // bot_player.js) execute the chosen action via clicks.
-import { CARD_BY_ID } from "./cards.js";
-import { getAttackableTargets, resolveSingleAttack } from "./combat.js";
-import { getKeywords, applyHit, hasEscalated } from "./state.js";
-import { canPlaceOnTerrain, getTerrain } from "./maps.js";
+import { CARD_BY_ID } from "./cards.js?v=1788220498";
+import { getAttackableTargets, resolveSingleAttack } from "./combat.js?v=1788220498";
+import { getKeywords, applyHit, hasEscalated } from "./state.js?v=1788220498";
+import { canPlaceOnTerrain, getTerrain } from "./maps.js?v=1788220498";
 
 const W_HQ = 10;      // weight per point of HQ damage dealt/avoided
 const W_MATERIAL = 3; // weight per "state step" (normal→suppressed→destroyed) inflicted/risked
@@ -172,19 +172,21 @@ function exposureRisk(state, unitKey) {
 // Run 1 (2026-08-31): game.js's applyObjectiveEffects still switches on the OLD numeric
 // Objective ids (26-33) — verified by reading it directly — so for every currently-live
 // Objective (O1-O5, the only ids state.objectives can ever hold post-migration) that switch is
-// dead code and holding one pays out exactly 0 HQ damage right now, regardless of level. That's
-// not a guess or an oversight here: it's the same "Objective secondary effects — inert" gap
-// STATUS.md already documents as Run 2 scope (re-wiring against the locked 1/1/2/2 HQ backbone).
-// So OBJ_HQ_DMG is intentionally all-zero until that lands — scoring it as anything else would
-// have the bot value objective control for a payout the engine doesn't actually deliver today.
+// Run 2 (2026-08-31) wired the real 1/1/2/2 HQ backbone into applyObjectiveEffects — every
+// controlled Objective now deals this damage regardless of identity, on top of its own named
+// secondary effect (Fuel/draw/buffs/etc., not modeled here — OBJ_ECON_VALUE below stands in for
+// that as a flat value, same as before Run 2). Previously this table was intentionally all-zero
+// because the engine paid out nothing at all (dead pre-Run-1 numeric-id code); now that the
+// engine delivers the backbone for real, scoring it as zero would just make the bot undervalue
+// objective control across the board.
 const OBJ_HQ_DMG = {
-  O1: { 1: 0, 2: 0, 3: 0, 4: 0 }, // Factory
-  O2: { 1: 0, 2: 0, 3: 0, 4: 0 }, // Airfield
-  O3: { 1: 0, 2: 0, 3: 0, 4: 0 }, // Supply Depot
-  O4: { 1: 0, 2: 0, 3: 0, 4: 0 }, // City
-  O5: { 1: 0, 2: 0, 3: 0, 4: 0 }, // Artillery Position
+  O1: { 1: 1, 2: 1, 3: 2, 4: 2 }, // Factory
+  O2: { 1: 1, 2: 1, 3: 2, 4: 2 }, // Airfield
+  O3: { 1: 1, 2: 1, 3: 2, 4: 2 }, // Supply Depot
+  O4: { 1: 1, 2: 1, 3: 2, 4: 2 }, // City
+  O5: { 1: 1, 2: 1, 3: 2, 4: 2 }, // Artillery Position
 };
-const OBJ_ECON_VALUE = 4; // flat value for board-presence/area-control alone, pending Run 2's real payouts
+const OBJ_ECON_VALUE = 4; // flat stand-in for each Objective's own named secondary effect (Fuel/draw/buffs/etc.), not individually modeled
 
 function objectiveValue(cardId, level) {
   const hqDmg = OBJ_HQ_DMG[cardId]?.[level] ?? 0;

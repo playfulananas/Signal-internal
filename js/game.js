@@ -1,9 +1,10 @@
-import { CARD_BY_ID, CARDS } from './cards.js?v=1788202754';
+import { CARD_BY_ID, CARDS } from './cards.js?v=1788220498';
 import {
   createInitialState,
   startOfTurn,
   endTurn,
   drawCards,
+  addCardToHand,
   gainFuel,
   updateObjectiveLevels,
   objectiveLevel,
@@ -26,15 +27,15 @@ import {
   hasEscalated,
   markEscalateUse,
   expireTempFuelGrant,
-} from './state.js?v=1788202754';
-import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkCounteroffensiveGeneral, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff } from './combat.js?v=1788202754';
-import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1788202754';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1788202754';
-import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1788202754';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1788202754';
-import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1788202754';
-import { runBotTurn } from './bot_player.js?v=1788202754';
-import { bestHeroDeployment } from './bot_ai.js?v=1788202754';
+} from './state.js?v=1788220498';
+import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkCounteroffensiveGeneral, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff } from './combat.js?v=1788220498';
+import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1788220498';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1788220498';
+import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1788220498';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1788220498';
+import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1788220498';
+import { runBotTurn } from './bot_player.js?v=1788220498';
+import { bestHeroDeployment } from './bot_ai.js?v=1788220498';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
@@ -95,14 +96,14 @@ const WORKING_OBJECTIVE_IDS = ['O1', 'O2', 'O3', 'O4', 'O5'];
 
 // Objective tile positions are fixed per map (MAPS[mapId].objectiveSlots — see maps.js);
 // the CARD assigned to each position is randomized from the auto-resolving pool at match
-// start. Was previously hardcoded to always 2 slots at a random symmetric position
-// regardless of map (`_mapId` was unused) — maps.js's per-map objectiveSlots existed but
-// were dead data until 2026-08-19, when map-specific counts (1-4, varies by map) were wired
-// up for real. A map may also set `objectiveExclude: [id, ...]` (e.g. Midway excludes
-// Factory/City — their Tank/Infantry bonuses are dead weight on an all-water board) to draw
-// from a narrower pool than the other maps. `% shuffled.length` guards a map whose slot
-// count exceeds its (possibly narrowed) pool size, reusing an id rather than assigning
-// undefined — Midway needs exactly this, 4 slots drawing from only 3 valid objectives.
+// start, unique per map (doc 04 §1/§19 — no identity may repeat on the same map), and — as
+// of Run 2 — after mulligan, not at match start (see finishStartGame). A map may set
+// `objectiveExclude: [id, ...]` to draw from a narrower pool; none of the current 4 locked
+// maps (Stalingrad/Kursk/El Alamein/Ardennes) need this — it existed for the now-archived
+// Midway (all-water, Factory/City excluded as dead weight). `% shuffled.length` guarded a
+// slot count exceeding the (possibly narrowed) pool size, which only Midway's 4-slots-from-3
+// case ever hit; with Midway gone every remaining map draws at most 4 of 5, so the wraparound
+// is unreachable today but left in place as a harmless safety net, not dead-code cruft to chase.
 function pickObjectives(mapId) {
   const map = MAPS[mapId];
   const slots = map?.objectiveSlots ?? [];
@@ -190,7 +191,8 @@ document.getElementById('deck-grid').addEventListener('click', e => {
     return;
   }
 
-  // Local play: P1 deck → P2 deck → map. In AI mode, P2's deck is auto-assigned — no second picker step.
+  // Local play: map already chosen (see doc-04 setup-order note above) → P1 deck → P2 deck →
+  // startGame. In AI mode, P2's deck is auto-assigned — no second picker step.
   if (pickerStep === 1) {
     p1DeckIds = [...ids];
     p1HeroIds = [...heroIds];
@@ -198,9 +200,8 @@ document.getElementById('deck-grid').addEventListener('click', e => {
       const botDeck = STARTER_DECKS[Math.floor(Math.random() * STARTER_DECKS.length)];
       p2DeckIds = [...botDeck.ids];
       p2HeroIds = [...(botDeck.heroIds ?? [])];
-      pickerStep = 3;
       document.getElementById('deck-picker').style.display = 'none';
-      document.getElementById('map-picker').style.display = '';
+      startGame(p1DeckIds, p2DeckIds, localMapId, p1HeroIds, p2HeroIds);
     } else {
       pickerStep = 2;
       document.getElementById('picker-label').textContent = 'PLAYER 2 — CHOOSE YOUR DECK';
@@ -208,9 +209,8 @@ document.getElementById('deck-grid').addEventListener('click', e => {
   } else {
     p2DeckIds = [...ids];
     p2HeroIds = [...heroIds];
-    pickerStep = 3;
     document.getElementById('deck-picker').style.display = 'none';
-    document.getElementById('map-picker').style.display = '';
+    startGame(p1DeckIds, p2DeckIds, localMapId, p1HeroIds, p2HeroIds);
   }
 });
 
@@ -262,7 +262,12 @@ document.getElementById('map-grid').addEventListener('click', e => {
 
   if (isOnline && myRole === 'p1') { beginHostWait(option.dataset.map); return; }
 
-  startGame(p1DeckIds, p2DeckIds, option.dataset.map, p1HeroIds, p2HeroIds);
+  // Local/AI mode: map is chosen first (see the doc-04 setup-order note above), so this
+  // just records it and moves on to the deck picker(s) — startGame happens from there once
+  // decks are chosen, not from here.
+  localMapId = option.dataset.map;
+  document.getElementById('map-picker').style.display = 'none';
+  document.getElementById('deck-picker').style.display = '';
 });
 
 // ── Online mode ───────────────────────────────────────────────────────────────
@@ -273,6 +278,22 @@ const myRole   = params.get('role') ?? null; // 'p1' | 'p2' | null for local pla
 const isAiMode = params.get('ai') === '1';
 const urlMapId = params.get('mapId') ?? null; // set when this game came from the open-lobby browser — the map was already chosen there, so skip the map-picker
 let myLastPushId = null;
+
+// Doc 04 §1 (locked setup order): Map is selected/revealed BEFORE deck+Hero roster
+// confirmation. Local hotseat and AI mode start on the map-picker for this reason (Run 2
+// fix, 2026-08-31 — every mode used to start on the deck-picker instead). Deliberately NOT
+// touching online here: P1's direct-code-join still deck-picks before map (existing
+// behavior, flagged as a known gap, not fixed this pass — see CLAUDE.md/STATUS.md), and
+// P2 never sees a map-picker at all in either online flow (same flagged gap). Restructuring
+// the online lobby/Firebase handshake order can't be safely verified without a live 2-client
+// session, so it's left alone rather than guessed at. P1-via-open-lobby-browser already
+// satisfies the order on its own, since the map is chosen on index.html before this page
+// even loads (`urlMapId` arrives already set).
+let localMapId = null;
+if (!isOnline) {
+  document.getElementById('deck-picker').style.display = 'none';
+  document.getElementById('map-picker').style.display = '';
+}
 
 // Board grid itself stays fixed/unrotated for both players (see renderBoard's comment in
 // ui.js) — this class only makes the HUD framing around it (Hero Zone strip position, unit
@@ -507,16 +528,12 @@ function runHeroPhase(role) {
 // See lastObjLevel: 0 in state.js and the timing note on runHeroPhase.
 function startGame(p1Ids, p2Ids, mapId, p1Heroes = [], p2Heroes = []) {
   let s = createInitialState(p1Ids, p2Ids, mapId, p1Heroes, p2Heroes);
-  s = { ...s, objectives: pickObjectives(mapId) };
 
   if (isOnline && myRole === 'p1') {
     document.getElementById('lobby').style.display = 'none';
     document.getElementById('waiting-screen').style.display = 'none';
     showMulligan('YOUR OPENING HAND', s.p1.hand, indices => {
       s = applyMulligan(s, 'p1', indices);
-      // First player (P1) draws 5, second player draws 4 — see the P2 mulligan branches
-      // below/at the online P2 handler, which do NOT get this bonus draw.
-      s = { ...s, p1: drawCards(s.p1, 1) };
       finishStartGame(s, mapId);
     });
     return;
@@ -526,8 +543,6 @@ function startGame(p1Ids, p2Ids, mapId, p1Heroes = [], p2Heroes = []) {
     document.getElementById('lobby').style.display = 'none';
     showMulligan('P1 — OPENING HAND', s.p1.hand, indices1 => {
       s = applyMulligan(s, 'p1', indices1);
-      // First player (P1) draws 5, second player (P2/bot) draws 4.
-      s = { ...s, p1: drawCards(s.p1, 1) };
       if (isAiMode) {
         finishStartGame(s, mapId);
       } else {
@@ -549,11 +564,32 @@ function finishStartGame(s, mapId) {
   document.getElementById('waiting-screen').style.display = 'none';
   document.getElementById('game-area').style.display = 'flex';
 
+  // Doc 04 §1 (Objective Setup, locked): identities randomize into fixed slots AFTER
+  // mulligan, not before. Every startGame() path converges here post-mulligan, so this is
+  // the single correct place for it — moved out of startGame() (Run 2), which previously
+  // computed objectives before either player's mulligan had even run.
+  s = { ...s, objectives: pickObjectives(mapId) };
+  // Doc 01 §2 (Turn State Machine, locked): "Every active-player turn resolves in this
+  // order" — Refresh, Fuel, then Draw 1, with no stated exception for turn 1 (contrast
+  // Direct HQ's explicit first-turn carve-out in §1.11/§19). Whoever has initiative draws
+  // here for the same reason the End Turn handler draws for every later turn transition —
+  // turn 1 just has no preceding End Turn to trigger it from. This is keyed off
+  // `s.initiative` (randomized per doc 02 Q005), not hardcoded to 'p1' — the earlier
+  // hardcoded version of this same draw was the actual bug, not the draw itself.
+  s = { ...s, [s.initiative]: drawCards(s[s.initiative], 1) };
   state = startOfTurn(s);
   const mapName = MAPS[mapId].name;
-  state = { ...state, log: [`Game started on ${mapName} — P1 goes first.`] };
+  state = { ...state, log: [`Game started on ${mapName} — ${state.initiative.toUpperCase()} goes first.`] };
   appendLog(state.log);
   redraw();
+
+  // First player is now randomized (doc 02 Q005) — in AI mode the bot always sits in the p2
+  // seat, so if p2 wins the coin flip its very first turn needs to be kicked off here.
+  // Every other bot turn fires reactively from the End Turn handler once a turn transition
+  // happens, but turn 1 has no preceding End Turn to react to.
+  if (isAiMode && state.initiative === 'p2' && !gameOver) {
+    runBotTurn();
+  }
 
   if (isOnline) {
     pushStateIfOnline(state);
@@ -886,6 +922,7 @@ function normalizeFirebaseState(raw) {
     heroesActivatedThisTurn: toArray(p.heroesActivatedThisTurn),
     pendingDiscounts: toArray(p.pendingDiscounts),
     pendingUnitBuffs: toArray(p.pendingUnitBuffs),
+    discardPile: toArray(p.discardPile),
   } : p;
   return {
     ...raw,
@@ -1183,7 +1220,11 @@ function tryActivateHero(role, col) {
   // to this one activation, then clear. min 0 per Priority Orders' own wording.
   const discount = ps.pendingHeroDiscount ?? 0;
   const tax = (ps.heroTaxedColumns ?? {})[col] ?? 0;
-  const cost = Math.max(0, (hero.activeCost ?? 0) - discount + tax);
+  // H25 Chief Aircraft Engineer's printed cost escalates down each activation (5->4->3->2->1,
+  // floor 1 — see nextCraftCost/advanceCraftCost in combat.js) — base cost must come from
+  // there, not the static printed activeCost, or Craft would always charge a flat 5.
+  const baseCost = heroId === 'H25' ? nextCraftCost(ps) : (hero.activeCost ?? 0);
+  const cost = Math.max(0, baseCost - discount + tax);
   if (ps.fuel < cost) {
     appendLog([`Not enough Fuel for ${hero.name} (need ${cost}, have ${ps.fuel})`]);
     return true;
@@ -1526,6 +1567,14 @@ document.getElementById('p1-hand').addEventListener('click', e => {
       startCoordinatedStrike(cardId);
       return;
     }
+    if (cardId === 'C15' && !(state[active].heroZones ?? []).some(z => z != null)) {
+      // Command Shuffle needs a deployed Hero to move/swap — block pre-cost like every other
+      // targeted Command's zero-target case (playInstantCommand's own C15 case only discovers
+      // this AFTER its unconditional top-of-function Fuel/hand deduction, which would otherwise
+      // waste the card for a no-op instead of refusing the play, per doc 01 §26).
+      appendLog([`${card.name}: no deployed Hero to move`]);
+      return;
+    }
     if (!playInstantCommand(cardId)) {
       const validTargets = getCommandTargets(cardId);
       if (validTargets === null) {
@@ -1773,13 +1822,29 @@ document.getElementById('board').addEventListener('click', e => {
     const result = resolveSingleAttack(rallyState, pendingAttackerKey, clickedKey);
     const newBoard = applyMutations(rallyState.board, result.boardMutations);
 
-    // Overrun bonus: attacker's Overrun flag adds +1 HQ damage per hit that deals damage
+    // Overrun (C09): "enemy Units Suppressed after this resolves deal 1 HQ damage" (normally
+    // 0) "enemy normal Units destroyed after this resolves deal 3 HQ damage instead of 2" —
+    // two distinct per-hit bonuses, not a flat +1 on top of whatever total damage happened.
+    // Must be computed per board mutation (not from the pre-summed hqDamageToP1/P2), since a
+    // Blast/Barrage attack can Suppress and/or Destroy several units in one resolution and each
+    // qualifying hit gets its own bonus. A mutation with newUnit === null just got destroyed
+    // (2 -> 3, +1); one with newUnit.state === 'suppressed' where it wasn't suppressed before
+    // just got suppressed (0 -> 1, +1); armor-absorb mutations (state unchanged) get nothing.
     const attacker = rallyState.initiative;
     let dmgP1 = result.hqDamageToP1;
     let dmgP2 = result.hqDamageToP2;
     const overrunLog = [];
-    if (attacker === 'p1' && dmgP2 > 0 && rallyState.p1.overrun) { dmgP2++; overrunLog.push('Overrun: +1 HQ damage'); }
-    if (attacker === 'p2' && dmgP1 > 0 && rallyState.p2.overrun) { dmgP1++; overrunLog.push('Overrun: +1 HQ damage'); }
+    if (rallyState[attacker]?.overrun) {
+      for (const { key, newUnit } of result.boardMutations) {
+        const before = rallyState.board[key];
+        if (!before) continue;
+        const justDestroyed = newUnit === null;
+        const justSuppressed = newUnit && newUnit.state === 'suppressed' && before.state !== 'suppressed';
+        if (!justDestroyed && !justSuppressed) continue;
+        if (before.owner === 'p1') dmgP1 += 1; else dmgP2 += 1;
+        overrunLog.push(`Overrun: +1 HQ damage (${justDestroyed ? 'destroy' : 'suppress'})`);
+      }
+    }
 
     let newState = {
       ...rallyState,
@@ -1950,110 +2015,207 @@ function friendlyAdjacentUnitKeys(board, key, player, clsFilter = null) {
   });
 }
 
+// Picks up to n distinct random entries from list (fewer if list is shorter). Mirrors the
+// established "random pick, no-op if empty" convention (combat.js's runLastStandEffect /
+// resolveCraftDrawback) extended to a small-N pick via the already-imported Fisher-Yates
+// shuffle rather than a second, subtly-different sampling method.
+function pickRandomN(list, n) {
+  return shuffle(list).slice(0, n);
+}
+
+// Run 2 (2026-08-31): rewired from the old numeric-id switch (26-33) to the new O1-O5
+// scheme. That old switch was 100% dead code since Run 1 changed obj.cardId to strings —
+// no `case 26` etc. could ever match `'O1'` etc., so every controlled Objective silently
+// fell through to the "not automated" default and did nothing at all. Effect text below is
+// cards.js's own O1-O5 l1-l4 fields (verified against doc 04, SIGNAL Objectives & Maps
+// Truth, during Run 1 — that data was already correct, only this execution code was missing).
+//
+// Doc 04's locked HQ backbone: every controlled Objective, regardless of identity, deals
+// 1/1/2/2 HQ damage by level, resolved BEFORE its own named secondary effect (doc 09's
+// backbone-then-secondary order) — on top of, not instead of, the per-card effect below.
 function applyObjectiveEffects(s, player) {
   const log = [];
   const opp = player === 'p1' ? 'p2' : 'p1';
-  let artyHits = 0;
+  const artyHits = 0; // Run 2: no O1-O5 card triggers a click-to-hit targeting mode any
+                       // more (the old dead Artillery Position had one; the new-truth O5
+                       // does not) — kept in the return shape so callers need no change.
 
-  for (const [key, obj] of Object.entries(s.objectives)) {
-    if (obj.controller !== player) continue;
+  // Doc 04 §5 (locked): several controlled Objectives resolve in fixed board scan order —
+  // column 1 top-to-bottom, then column 2, etc. — one FULLY resolved (backbone, win check,
+  // secondary) before the next begins. Doc 04 §19's QA assertions require this order to be
+  // deterministic, not JS's insertion-order object iteration.
+  const orderedKeys = Object.keys(s.objectives)
+    .filter(k => s.objectives[k].controller === player)
+    .sort((a, b) => {
+      const [ar, ac] = a.split(',').map(Number);
+      const [br, bc] = b.split(',').map(Number);
+      return ac !== bc ? ac - bc : ar - br;
+    });
+
+  for (const key of orderedKeys) {
+    const obj = s.objectives[key];
     const card = CARD_BY_ID[obj.cardId];
     if (!card) continue;
     const lv = obj.level;
     if (lv === 0) continue;
     const nm = card.name;
 
+    const backbone = lv >= 3 ? 2 : 1;
+    s = { ...s, [opp]: { ...s[opp], hq: s[opp].hq - backbone } };
+    log.push(`${nm} L${lv}: ${backbone} HQ damage to ${opp.toUpperCase()}`);
+
+    // Doc 04 §5/§19 (locked): "lethal backbone stops later secondary/Objective resolution"
+    // — check victory immediately after backbone, before this Objective's OWN secondary,
+    // and before any subsequent Objective in scan order.
+    if (s[opp].hq <= 0) {
+      log.push(`${opp.toUpperCase()}'s HQ is destroyed — further Objective resolution stops`);
+      break;
+    }
+
     switch (obj.cardId) {
-      case 26: { // Factory — fuel; L2 tank discount; L3+ buffs friendly Tanks; L4 HQ damage
-        const fuel = lv >= 2 ? 2 : 1;
-        s = { ...s, [player]: gainFuel(s[player], fuel, false) };
-        log.push(`${nm} L${lv}: +${fuel} Fuel`);
+      case 'O1': { // Factory — Fuel every level; L2/L4 discount next Unit, L3 next Tank
+        s = { ...s, [player]: gainFuel(s[player], 1, false) };
+        log.push(`${nm} L${lv}: +1 Fuel`);
         if (lv === 2) {
-          s = { ...s, [player]: addDiscount(s[player], { appliesTo: 'Tank', column: null, amount: 1, min: 0 }) };
-          log.push(`${nm} L2: next Tank costs 1 less Fuel`);
+          s = { ...s, [player]: addDiscount(s[player], { appliesTo: 'unit', column: null, amount: 1, min: 0 }) };
+          log.push(`${nm} L2: next Unit played this turn costs 1 less Fuel`);
+        } else if (lv === 3) {
+          s = { ...s, [player]: addDiscount(s[player], { appliesTo: 'Tank', column: null, amount: 2, min: 0 }) };
+          log.push(`${nm} L3: next Tank played this turn costs 2 less Fuel`);
+        } else if (lv === 4) {
+          s = { ...s, [player]: addDiscount(s[player], { appliesTo: 'unit', column: null, amount: 2, min: 0 }) };
+          log.push(`${nm} L4: next Unit played this turn costs 2 less Fuel`);
         }
-        if (lv >= 3) {
+        break;
+      }
+      case 'O2': { // Airfield — Aircraft-tempo effects
+        if (lv === 1) {
+          const list = unitsOnBoard(s, player).filter(({ unit: u }) => CARD_BY_ID[u.cardId]?.cls === 'Aircraft');
+          if (list.length) {
+            const [pick] = pickRandomN(list, 1);
+            s = { ...s, board: { ...s.board, [pick.key]: { ...pick.unit, tempSideBonus: (pick.unit.tempSideBonus || 0) + 1 } } };
+            log.push(`${nm} L1: ${CARD_BY_ID[pick.unit.cardId].name} +1 all sides this turn`);
+          }
+        } else if (lv === 2) {
+          // Doc 04 §8: "global Maneuver: any other legal empty tile, orientation preserved,
+          // attack state preserved, terrain rules apply" — no player choice is described for
+          // any Objective secondary, so this auto-picks like every other random Objective
+          // effect: a random friendly Unit that HAS a legal destination, then a random
+          // legal destination for it.
+          const movable = unitsOnBoard(s, player).filter(({ key: k }) => getManeuverTargets(s, k).length > 0);
+          if (movable.length) {
+            const [pick] = pickRandomN(movable, 1);
+            const [dest] = pickRandomN(getManeuverTargets(s, pick.key), 1);
+            const result = resolveManeuver(s, pick.key, dest);
+            s = result.state;
+            log.push(`${nm} L2: ${CARD_BY_ID[pick.unit.cardId].name} maneuvers to ${dest}`);
+          }
+        } else if (lv === 3) {
+          s = { ...s, [player]: drawCards(s[player], 1) };
+          log.push(`${nm} L3: Draw 1 card`);
+        } else if (lv === 4) {
+          const list = unitsOnBoard(s, player).filter(({ unit: u }) => CARD_BY_ID[u.cardId]?.cls === 'Aircraft');
+          const picks = pickRandomN(list, 2);
+          let board = s.board;
+          for (const p of picks) board = { ...board, [p.key]: grantTempAttacks(board[p.key], 1) };
+          s = { ...s, board };
+          if (picks.length) log.push(`${nm} L4: ${picks.map(p => CARD_BY_ID[p.unit.cardId].name).join(', ')} gain 1 additional attack this turn`);
+        }
+        break;
+      }
+      case 'O3': { // Supply Depot — Suppression removal, Fuel, draw
+        if (lv === 1) {
+          const target = friendlyAdjacentUnitKeys(s.board, key, player).find(ak => s.board[ak].state === 'suppressed');
+          if (target) {
+            const result = removeSuppression(s, target);
+            s = result.state;
+            log.push(`${nm} L1: ${CARD_BY_ID[s.board[target].cardId].name} un-suppressed`);
+          }
+        } else if (lv === 2) {
+          s = { ...s, [player]: gainFuel(s[player], 1, false) };
+          log.push(`${nm} L2: +1 Fuel`);
+        } else if (lv === 3) {
+          s = { ...s, [player]: drawCards(s[player], 1) };
+          log.push(`${nm} L3: Draw 1 card`);
+        } else if (lv === 4) {
+          s = { ...s, [player]: gainFuel(s[player], 2, false) };
+          log.push(`${nm} L4: +2 Fuel`);
+        }
+        break;
+      }
+      case 'O4': { // City — Guard / side-bonus grants, escalating scope and duration
+        if (lv === 1) {
+          // Doc 04 §6 (locked): "avoid a duplicate no-op if random eligibility can legally
+          // choose another useful eligible target" — filter to non-Guard units FIRST, then
+          // pick, rather than picking blind and risking a wasted no-op re-grant.
+          const list = unitsOnBoard(s, player).filter(({ unit: u }) => !getKeywords(u).includes('Guard'));
+          if (list.length) {
+            const [pick] = pickRandomN(list, 1);
+            const u = pick.unit;
+            s = { ...s, board: { ...s.board, [pick.key]: { ...u, grantedKeywords: [...u.grantedKeywords, 'Guard'] } } };
+            log.push(`${nm} L1: ${CARD_BY_ID[u.cardId].name} gains Guard until your next turn`);
+          }
+        } else if (lv === 2 || lv === 4) {
           const bonus = lv === 4 ? 2 : 1;
-          const newBoard = { ...s.board };
-          let buffCount = 0;
-          for (const [bk, u] of Object.entries(newBoard)) {
-            if (!u || u.owner !== player || u.state === 'destroyed') continue;
-            if (CARD_BY_ID[u.cardId]?.cls !== 'Tank') continue;
-            newBoard[bk] = { ...u, objSideBonus: (u.objSideBonus || 0) + bonus };
-            buffCount++;
+          const picks = pickRandomN(friendlyAdjacentUnitKeys(s.board, key, player), 2);
+          let board = s.board;
+          for (const ak of picks) {
+            const u = board[ak];
+            board = { ...board, [ak]: { ...u, grantedSideBonus: (u.grantedSideBonus || 0) + bonus, sideBonusTurns: 1 } };
           }
-          if (buffCount > 0) {
-            s = { ...s, board: newBoard };
-            log.push(`${nm} L${lv}: ${buffCount} Tank(s) +${bonus} all sides (persists)`);
+          s = { ...s, board };
+          if (picks.length) log.push(`${nm} L${lv}: ${picks.length} adjacent Unit(s) +${bonus} all sides until your next turn`);
+        } else if (lv === 3) {
+          const picks = pickRandomN(friendlyAdjacentUnitKeys(s.board, key, player, 'Infantry'), 2);
+          let board = s.board;
+          for (const ak of picks) {
+            const u = board[ak];
+            board = { ...board, [ak]: { ...u, grantedSideBonus: (u.grantedSideBonus || 0) + 1, sideBonusTurns: 99 } };
+          }
+          s = { ...s, board };
+          if (picks.length) log.push(`${nm} L3: ${picks.length} adjacent Infantry +1 all sides (permanent)`);
+        }
+        break;
+      }
+      case 'O5': { // Artillery Position — rotate, then Bombard/Precision/extra-attack grants
+        if (lv === 1) {
+          const list = unitsOnBoard(s, player);
+          if (list.length) {
+            const [pick] = pickRandomN(list, 1);
+            const dir = Math.random() < 0.5 ? 90 : -90;
+            const u = pick.unit;
+            s = { ...s, board: { ...s.board, [pick.key]: { ...u, rotation: (((u.rotation ?? 0) + dir) % 360 + 360) % 360 } } };
+            log.push(`${nm} L1: ${CARD_BY_ID[u.cardId].name} rotates ${dir > 0 ? 'right' : 'left'}`);
+          }
+        } else if (lv === 2) {
+          const list = friendlyAdjacentUnitKeys(s.board, key, player).filter(ak => !getKeywords(s.board[ak]).includes('Bombard'));
+          if (list.length) {
+            const [pick] = pickRandomN(list, 1);
+            const u = s.board[pick];
+            s = { ...s, board: { ...s.board, [pick]: { ...u, tempKeywords: [...u.tempKeywords, 'Bombard'] } } };
+            log.push(`${nm} L2: ${CARD_BY_ID[u.cardId].name} gains Bombard this turn`);
+          }
+        } else if (lv === 3) {
+          const list = unitsOnBoard(s, player).filter(({ unit: u }) => CARD_BY_ID[u.cardId]?.cls === 'Artillery' && !getKeywords(u).includes('Precision'));
+          if (list.length) {
+            const [pick] = pickRandomN(list, 1);
+            s = { ...s, board: { ...s.board, [pick.key]: { ...pick.unit, tempKeywords: [...pick.unit.tempKeywords, 'Precision'] } } };
+            log.push(`${nm} L3: ${CARD_BY_ID[pick.unit.cardId].name} gains Precision this turn`);
+          }
+        } else if (lv === 4) {
+          const list = unitsOnBoard(s, player).filter(({ unit: u }) => CARD_BY_ID[u.cardId]?.cls === 'Artillery');
+          if (list.length) {
+            const [pick] = pickRandomN(list, 1);
+            s = { ...s, board: { ...s.board, [pick.key]: grantTempAttacks(pick.unit, 1) } };
+            log.push(`${nm} L4: ${CARD_BY_ID[pick.unit.cardId].name} gains 1 additional attack this turn`);
           }
         }
-        if (lv === 4) {
-          s = { ...s, [opp]: { ...s[opp], hq: s[opp].hq - 2 } };
-          log.push(`${nm} L4: 2 HQ damage to ${opp.toUpperCase()}`);
-        }
-        break;
-      }
-      case 27: { // Airfield — L1 aircraft effect (not automated), L2+ HQ damage
-        if (lv === 1) { log.push(`${nm} L1: Aircraft placement bonus (not automated)`); break; }
-        const dmg = lv === 4 ? 4 : 1;
-        s = { ...s, [opp]: { ...s[opp], hq: s[opp].hq - dmg } };
-        log.push(`${nm} L${lv}: ${dmg} HQ damage to ${opp.toUpperCase()}`);
-        if (lv >= 3) { s = { ...s, [player]: drawCards(s[player], 1) }; log.push(`${nm} L${lv}: Draw 1 card`); }
-        break;
-      }
-      case 28: { // Supply Depot — fuel + card draw at L3+, HQ at L4
-        const fuel = lv === 1 ? 1 : lv === 2 ? 2 : lv === 3 ? 2 : 3;
-        s = { ...s, [player]: gainFuel(s[player], fuel, false) };
-        log.push(`${nm} L${lv}: +${fuel} Fuel`);
-        if (lv >= 3) { s = { ...s, [player]: drawCards(s[player], 1) }; log.push(`${nm} L${lv}: Draw 1 card`); }
-        if (lv === 4) {
-          s = { ...s, [opp]: { ...s[opp], hq: s[opp].hq - 2 } };
-          log.push(`${nm} L4: 2 HQ damage to ${opp.toUpperCase()}`);
-        }
-        break;
-      }
-      case 29: log.push(`${nm} L${lv}: Return unit to hand (not automated)`); break;
-      case 30: log.push(`${nm} L${lv}: Look at opponent's hand (not automated)`); break;
-      case 31: { // City — adjacent friendly Infantry gain Guard and/or side bonus
-        const targets = friendlyAdjacentUnitKeys(s.board, key, player, 'Infantry');
-        const newBoard = { ...s.board };
-        for (const ak of targets) {
-          let updated = { ...newBoard[ak] };
-          if (lv === 1 || lv >= 3) updated.tempKeywords = [...updated.tempKeywords, 'Guard'];
-          if (lv >= 2) updated.tempSideBonus = updated.tempSideBonus + (lv === 4 ? 2 : 1);
-          newBoard[ak] = updated;
-        }
-        s = { ...s, board: newBoard };
-        if (targets.length > 0) log.push(`${nm} L${lv}: ${targets.length} adjacent Infantry buffed`);
-        if (lv === 4) { s = { ...s, [opp]: { ...s[opp], hq: s[opp].hq - 2 } }; log.push(`${nm} L4: 2 HQ damage`); }
-        break;
-      }
-      case 32: { // Artillery Position — HQ damage every level; L2/L4 also deal 1 hit
-        const dmg = lv === 1 ? 1 : lv === 2 ? 0 : lv === 3 ? 2 : 3;
-        if (dmg > 0) {
-          s = { ...s, [opp]: { ...s[opp], hq: s[opp].hq - dmg } };
-          log.push(`${nm} L${lv}: ${dmg} HQ damage to ${opp.toUpperCase()}`);
-        }
-        if (lv === 2 || lv === 4) { artyHits++; log.push(`${nm} L${lv}: click an enemy unit to deal 1 hit`); }
-        break;
-      }
-      case 33: { // Fortification — adjacent friendly units gain Armor this turn
-        const targets = friendlyAdjacentUnitKeys(s.board, key, player);
-        const newBoard = { ...s.board };
-        for (const ak of targets) {
-          let updated = { ...newBoard[ak], tempKeywords: [...newBoard[ak].tempKeywords, 'Armor'] };
-          if (lv >= 3) updated.tempSideBonus = updated.tempSideBonus + (lv === 4 ? 2 : 1);
-          newBoard[ak] = updated;
-        }
-        s = { ...s, board: newBoard };
-        if (targets.length > 0) log.push(`${nm} L${lv}: ${targets.length} adjacent units gain Armor`);
-        if (lv === 4) { s = { ...s, [opp]: { ...s[opp], hq: s[opp].hq - 2 } }; log.push(`${nm} L4: 2 HQ damage`); }
         break;
       }
       default: log.push(`${nm} L${lv}: effect triggered (not automated)`);
     }
   }
-  return { state: s, log, pendingArtyHits: artyHits };
+  return { state: recalculateDynamicStats(s), log, pendingArtyHits: artyHits };
 }
 
 // ── Hero passive — Ruthless Strategist (H20) ────────────────────────────────
@@ -2089,8 +2251,11 @@ function playInstantCommand(cardId) {
 
   let s = {
     ...state,
+    // doc 02 Q027: resolved Commands go to owner Discard Pile (bookkeeping only — no current
+    // card reads this zone, doc 02 Q028). Safe to add here even though this Command hasn't
+    // finished resolving yet: nothing below this point can cancel/refund an instant Command.
     [active]: consumeDiscounts(
-      { ...state[active], fuel: state[active].fuel - effectiveCost, hand: handAfter },
+      { ...state[active], fuel: state[active].fuel - effectiveCost, hand: handAfter, discardPile: [...(state[active].discardPile ?? []), cardId] },
       card, null, discount,
     ),
   };
@@ -2259,6 +2424,7 @@ function playInstantCommand(cardId) {
 
   const rs = applyRuthlessStrategistIfPresent(s, active);
   commitState(rs.state, [...log, ...rs.log]);
+  checkWin();
   return true;
 }
 
@@ -2386,7 +2552,9 @@ function startCoordinatedStrike(cardId) {
   const idx = handAfter.indexOf(cardId);
   if (idx !== -1) handAfter.splice(idx, 1);
   preCommandState = state;
-  state = { ...state, [active]: consumeDiscounts({ ...state[active], fuel: state[active].fuel - effectiveCost, hand: handAfter }, card, null, discount) };
+  // doc 02 Q027: goes to Discard Pile — safe even mid-targeting since Cancel fully restores
+  // preCommandState, wiping this along with the hand-removal/Fuel-spend if the player bails.
+  state = { ...state, [active]: consumeDiscounts({ ...state[active], fuel: state[active].fuel - effectiveCost, hand: handAfter, discardPile: [...(state[active].discardPile ?? []), cardId] }, card, null, discount) };
   pendingCommandId = cardId;
   pendingCoordStrikeFirst = null;
   uiState = 'command-coordstrike-first';
@@ -2438,7 +2606,8 @@ function startCommandManeuver(cardId) {
   preCommandState = state;
   state = {
     ...state,
-    [active]: consumeDiscounts({ ...state[active], fuel: state[active].fuel - effectiveCost, hand: handAfter }, card, null, discount),
+    // doc 02 Q027 (Discard Pile) — safe pre-completion, see the note on startCoordinatedStrike.
+    [active]: consumeDiscounts({ ...state[active], fuel: state[active].fuel - effectiveCost, hand: handAfter, discardPile: [...(state[active].discardPile ?? []), cardId] }, card, null, discount),
   };
   pendingCommandId = cardId;
   pendingCommandManeuverSource = { key: null, commandId: cardId };
@@ -2527,8 +2696,9 @@ function startCommandTargeting(cardId) {
   preCommandState = state;
   state = {
     ...state,
+    // doc 02 Q027 (Discard Pile) — safe pre-completion, see the note on startCoordinatedStrike.
     [active]: consumeDiscounts(
-      { ...state[active], fuel: state[active].fuel - effectiveCost, hand: handAfter },
+      { ...state[active], fuel: state[active].fuel - effectiveCost, hand: handAfter, discardPile: [...(state[active].discardPile ?? []), cardId] },
       card, null, discount,
     ),
   };
@@ -2558,8 +2728,9 @@ function startEnemyHeroTargeting(cardId) {
   preCommandState = state;
   state = {
     ...state,
+    // doc 02 Q027 (Discard Pile) — safe pre-completion, see the note on startCoordinatedStrike.
     [active]: consumeDiscounts(
-      { ...state[active], fuel: state[active].fuel - effectiveCost, hand: handAfter },
+      { ...state[active], fuel: state[active].fuel - effectiveCost, hand: handAfter, discardPile: [...(state[active].discardPile ?? []), cardId] },
       card, null, discount,
     ),
   };
@@ -2694,8 +2865,8 @@ function applyCommandEffect(commandId, targetKey) {
       break;
     }
     case 'C11': { // Tactical Withdrawal — return to hand (resets to printed/default state; no draw)
-      const handAfter = [...s[active].hand, unit.cardId];
-      s = { ...s, board: { ...s.board, [targetKey]: null }, [active]: { ...s[active], hand: handAfter } };
+      // doc 02 Q025: if hand is already full, the returned card goes to Discard Pile instead.
+      s = { ...s, board: { ...s.board, [targetKey]: null }, [active]: addCardToHand(s[active], unit.cardId) };
       log.push(`${card.name}: ${unitName} returned to hand`);
       break;
     }
@@ -3152,8 +3323,6 @@ if (isOnline && myRole === 'p2') {
         document.getElementById('waiting-screen').style.display = 'none';
         showMulligan('YOUR OPENING HAND', normalized.p2.hand, indices => {
           state = applyMulligan(normalized, 'p2', indices);
-          // Second player (P2) draws 4, not 5 — no post-mulligan bonus draw here; P1 gets
-          // it instead (see startGame's P1 mulligan branches).
           // No pre-game Hero pick anymore — P2's first Hero arrives at round 2 via
           // runHeroPhase, same as P1 and local hotseat (removed 2026-08-11). This used to
           // deploy a Hero here immediately after mulligan; that stale copy of the old flow
@@ -3260,7 +3429,8 @@ function confirmFO() {
   const bottomId = foCards.find(id => foAssignments[id] === 'bottom'); // undefined when only 2 were drawn (doc 01 §27 — no bottom instruction target)
   const ps = state[foPlayer];
   const newDeck = [topId, ...ps.deck, ...(bottomId !== undefined ? [bottomId] : [])];
-  let s = { ...state, [foPlayer]: { ...ps, hand: [...ps.hand, keepId], deck: newDeck } };
+  // doc 02 Q022-Q025: a full hand sends the kept card to Discard Pile instead.
+  let s = { ...state, [foPlayer]: { ...addCardToHand(ps, keepId), deck: newDeck } };
   const keepName   = CARD_BY_ID[keepId]?.name   ?? '?';
   const topName    = CARD_BY_ID[topId]?.name    ?? '?';
   const log = [`Forward Observer: kept ${keepName} · ${topName} → top` + (bottomId !== undefined ? ` · ${CARD_BY_ID[bottomId]?.name ?? '?'} → bottom` : '')];
@@ -3369,7 +3539,8 @@ function confirmCraftPick(chosenId) {
   craftPickerRole = null;
   const ps = state[role];
   const chosen = CARD_BY_ID[chosenId];
-  const s = { ...state, [role]: { ...advanceCraftCost(ps), hand: [...ps.hand, chosenId] } };
+  // doc 02 Q024: a full hand sends the generated card to Discard Pile instead.
+  const s = { ...state, [role]: addCardToHand(advanceCraftCost(ps), chosenId) };
   const log = [`Chief Aircraft Engineer: Crafted ${chosen.name} (${chosen.n}/${chosen.e}/${chosen.s}/${chosen.w}, ${chosen.keyword}) — next activation costs ${nextCraftCost(s[role])}`];
   commitState(s, log);
 }
@@ -3648,6 +3819,7 @@ document.getElementById('debug-draw-go').addEventListener('click', () => {
   if (n <= 0) return;
   const { state: newState, log } = debugDrawCards(state, debugTargetPlayer, n);
   commitState(newState, log);
+  checkWin(); // fatigue (doc 02 Q029-Q030) can now make even a debug draw lethal
 });
 
 document.getElementById('debug-turn-go').addEventListener('click', () => {
