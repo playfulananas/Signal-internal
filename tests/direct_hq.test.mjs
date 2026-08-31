@@ -113,6 +113,30 @@ test('lethal Direct HQ stops accumulating damage exactly at the lethal instant',
   assert.equal(log.length, 1);
 });
 
+test('lethal Direct HQ correctly stacks ACROSS units in scan order — a second unit finishes off HQ already reduced by the first, not each independently against the original value', () => {
+  // Column 0 (I2 at row 0) resolves before column 1 (I1 at row 2) — fixedScanOrder is
+  // column-major. Opponent HQ = 2: the first unit's 1 conversion must bring it to 1 before the
+  // second unit is ever evaluated, so the second unit's own lethal check sees HQ=1, not HQ=2.
+  const state = baseState(boardWith({ '2,1': unit('p1', 'I1'), '0,0': unit('p1', 'I2') }), { p2: { hq: 2 } });
+  const { hqDamageToP2, log } = evaluateDirectHQ(state, 'p1');
+  assert.equal(hqDamageToP2, 2, 'both units together finish the HQ — not 1 (only the first) and not somehow more than 2');
+  assert.equal(log.length, 2, 'both units get exactly 1 conversion each, none stop short or overshoot');
+});
+
+test('a Precision attacker with a wider (Guard + non-Guard) legal-target pool still correctly blocks Direct HQ', () => {
+  // A61 Strategic Bomber: Precision + Bombard. Note what this test can and can't show: Direct
+  // HQ only ever cares whether getAttackableTargets returns an EMPTY set — Guard-priority
+  // filtering can only narrow a non-empty raw pool to a non-empty Guard subset, never to empty,
+  // so Precision's "return the full pool instead of just the Guard subset" widening can never
+  // flip Direct HQ from blocked to converting (or vice versa) on its own. What this test DOES
+  // confirm is that evaluateDirectHQ correctly consumes a WIDER legal-target array (both I6 and
+  // I2 here, not just the Guard one) without some implementation quirk assuming a Guard-only
+  // shape — i.e. it still reads "non-empty" correctly regardless of which candidates are in it.
+  const state = baseState(boardWith({ '0,0': unit('p1', 'A61'), '3,0': unit('p2', 'I6'), '0,3': unit('p2', 'I2') })); // I6 Guard, I2 no keyword
+  const { hqDamageToP2 } = evaluateDirectHQ(state, 'p1');
+  assert.equal(hqDamageToP2, 0, 'both enemies are legal targets for a Precision attacker — still blocks Direct HQ');
+});
+
 test('evaluateDirectHQ never calls into attack-resolution machinery (structural: no Rally trigger possible)', () => {
   // Rally only fires from checkRally/resolveSingleAttack in the real attack path (game.js) —
   // evaluateDirectHQ's own board mutations are limited to spendAttack bookkeeping, so a Rally
