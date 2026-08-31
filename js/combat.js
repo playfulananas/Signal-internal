@@ -1,6 +1,6 @@
-import { CARD_BY_ID, registerGeneratedCard } from './cards.js?v=1788180619';
-import { getSideValue, getKeywords, attackBeats, applyHit, oppositeDir, unsuppressOnBoard, drawCards, addDiscount, remainingAttacks, spendAttack, grantTempAttacks, resetPersistentAttacks, fuelCapOf, gainFuel } from './state.js?v=1788180619';
-import { canPlaceOnTerrain, getTerrain } from './maps.js?v=1788180619';
+import { CARD_BY_ID, registerGeneratedCard } from './cards.js?v=1788186034';
+import { getSideValue, getKeywords, attackBeats, applyHit, oppositeDir, unsuppressOnBoard, drawCards, addDiscount, remainingAttacks, spendAttack, grantTempAttacks, resetPersistentAttacks, fuelCapOf, gainFuel } from './state.js?v=1788186034';
+import { canPlaceOnTerrain, getTerrain } from './maps.js?v=1788186034';
 
 // Orthogonal directions and their row/col offsets.
 const DIRS = ["n", "e", "s", "w"];
@@ -328,8 +328,20 @@ export function checkRally(s, attackerKey) {
       if (others.length) log.push(`${tag} all other friendly Infantry +1 all sides (permanent)`);
       break;
     }
+    case 'I14': { // Veteran Raider — all adjacent friendly Units +1 all sides permanently
+      const [row, col] = tileCoords(attackerKey);
+      let any = false;
+      for (const { key: adjKey } of adjacentTiles(row, col)) {
+        const u = s.board[adjKey];
+        if (!u || u.state === 'destroyed' || u.owner !== owner) continue;
+        s = { ...s, board: { ...s.board, [adjKey]: { ...u, grantedSideBonus: (u.grantedSideBonus || 0) + 1, sideBonusTurns: 99 } } };
+        any = true;
+      }
+      if (any) log.push(`${tag} adjacent friendly Units +1 all sides (permanent)`);
+      break;
+    }
     default:
-      break; // I14 Veteran Raider (all adjacent friendly Units +1 permanently) — TODO, not yet wired
+      break;
   }
   return { state: s, log };
 }
