@@ -1,4 +1,4 @@
-import { CARD_BY_ID, CARDS } from './cards.js?v=1788180619';
+import { CARD_BY_ID, CARDS } from './cards.js?v=1788182290';
 import {
   createInitialState,
   startOfTurn,
@@ -26,15 +26,15 @@ import {
   hasEscalated,
   markEscalateUse,
   expireTempFuelGrant,
-} from './state.js?v=1788180619';
-import { getAttackableTargets, resolveSingleAttack, tileKey, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkCounteroffensiveGeneral, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff } from './combat.js?v=1788180619';
-import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1788180619';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1788180619';
-import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1788180619';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1788180619';
-import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1788180619';
-import { runBotTurn } from './bot_player.js?v=1788180619';
-import { bestHeroDeployment } from './bot_ai.js?v=1788180619';
+} from './state.js?v=1788182290';
+import { getAttackableTargets, resolveSingleAttack, tileKey, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkCounteroffensiveGeneral, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff } from './combat.js?v=1788182290';
+import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1788182290';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1788182290';
+import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1788182290';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1788182290';
+import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1788182290';
+import { runBotTurn } from './bot_player.js?v=1788182290';
+import { bestHeroDeployment } from './bot_ai.js?v=1788182290';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
@@ -424,7 +424,7 @@ function showHeroDeploy(title, subtitle, roster, occupiedZones, onConfirm) {
   cardsEl.innerHTML = roster.map(id => CARD_BY_ID[id]).filter(Boolean).map(heroCardHtml).join('');
   cardsEl.querySelectorAll('.hero-card').forEach(node => {
     node.onclick = () => {
-      picked = Number(node.dataset.heroId);
+      picked = node.dataset.heroId;
       cardsEl.querySelectorAll('.hero-card').forEach(c => c.classList.remove('selected'));
       node.classList.add('selected');
       renderZones();
@@ -758,6 +758,18 @@ function redraw() {
   }
   if (uiState === 'command-maneuver-destination' && pendingCommandManeuverSource?.key) {
     for (const key of getManeuverTargets(state, pendingCommandManeuverSource.key)) {
+      const el = document.querySelector(`[data-key="${key}"]`);
+      if (el) el.classList.add('cmd-target');
+    }
+  }
+  if (uiState === 'unit-maneuver-source' && pendingUnitManeuverPlacedKey) {
+    for (const key of getUnitOnPlayManeuverSources(pendingUnitManeuverPlacedKey)) {
+      const el = document.querySelector(`[data-key="${key}"]`);
+      if (el) el.classList.add('cmd-target');
+    }
+  }
+  if (uiState === 'unit-maneuver-destination' && pendingUnitManeuverSource?.key) {
+    for (const key of getManeuverTargets(state, pendingUnitManeuverSource.key)) {
       const el = document.querySelector(`[data-key="${key}"]`);
       if (el) el.classList.add('cmd-target');
     }
@@ -1283,6 +1295,69 @@ function resolveHeroManeuverDestination(destKey) {
   checkWin();
 }
 
+// Aircraft On-Play Maneuver (A55 Tactical Fighter, A56 Escort Fighter, A61 Strategic Bomber,
+// A62 Fighter-Bomber, A63 Strike Aircraft, A65 Ground-Attack Aircraft — all share identical
+// ability text: "On Play: Maneuver 1 other friendly Unit to another legal position."). Doc 01
+// §26: a Unit's target-dependent On Play effect stays legal to play even with no legal target —
+// the effect portion just no-ops — but is not itself optional once a legal (source, destination)
+// pair exists (no "may" in the printed text), so there's no Cancel-with-refund here the way
+// Hero/Command Maneuver flows have (the Unit is already placed; only the choice of which other
+// friendly Unit to move, and where, remains). 2-step source-then-destination flow, same shape as
+// the existing Hero H16 / Command C21/C27/C35 Maneuver flows, generalized for a fresh placement.
+let pendingUnitManeuverPlacedKey = null; // which just-placed Aircraft triggered this
+let pendingUnitManeuverSource = null;    // { key } once the first pick (unit to move) is made
+
+// Candidates for the "1 other friendly Unit" pick: friendly, not the just-placed Unit itself,
+// state === 'normal' (a Suppressed Unit can't be Maneuvered — matches getCommandManeuverSources'
+// convention), AND pre-filtered to only those with at least 1 legal destination so the player
+// can never pick a source that leads to a dead end with nowhere to place it.
+function getUnitOnPlayManeuverSources(excludeKey) {
+  const active = state.initiative;
+  return new Set(
+    Object.entries(state.board)
+      .filter(([k, u]) => k !== excludeKey && u && u.owner === active && u.state === 'normal')
+      .map(([k]) => k)
+      .filter(k => getManeuverTargets(state, k).length > 0)
+  );
+}
+
+function resolveUnitManeuverSource(sourceKey) {
+  if (!getUnitOnPlayManeuverSources(pendingUnitManeuverPlacedKey).has(sourceKey)) return;
+  pendingUnitManeuverSource = { key: sourceKey };
+  uiState = 'unit-maneuver-destination';
+  appendLog([`Choose a destination tile for ${CARD_BY_ID[state.board[sourceKey]?.cardId]?.name ?? 'the unit'}`]);
+  redraw();
+}
+
+// Resumes the normal placement tail (the placed Aircraft's own immediate-attack check) once the
+// Maneuver resolves — that check was deferred when this flow was entered instead of falling
+// through to it directly (see the PLACING block below).
+function resolveUnitManeuverDestination(destKey) {
+  if (!pendingUnitManeuverSource?.key) return;
+  const { key: sourceKey } = pendingUnitManeuverSource;
+  const legalTargets = getManeuverTargets(state, sourceKey);
+  if (!legalTargets.includes(destKey)) return;
+  const placedKey = pendingUnitManeuverPlacedKey;
+  pendingUnitManeuverSource = null;
+  pendingUnitManeuverPlacedKey = null;
+
+  let { state: s, log } = resolveManeuver(state, sourceKey, destKey);
+  s = recalculateDynamicStats(s);
+  const placedCard = CARD_BY_ID[s.board[placedKey]?.cardId];
+  log = [...log, `${placedCard?.name ?? 'Aircraft'}: On Play Maneuver resolved`];
+
+  const targets = getAttackableTargets(s, placedKey);
+  if (targets.length > 0) {
+    uiState = 'targeting';
+    pendingAttackerKey = placedKey;
+  } else {
+    uiState = 'idle';
+    pendingAttackerKey = null;
+  }
+  commitState(s, log);
+  checkWin();
+}
+
 // Mobile Command Halftrack (114) on-play: column index awaiting an optional Hero move into
 // its (confirmed-empty) zone, or null. Set at placement, cleared by a move, a click on the
 // target zone itself (skip), or any of the usual transient-state resets.
@@ -1391,7 +1466,7 @@ document.getElementById('p1-hand').addEventListener('click', e => {
   if (isOnline && state.initiative !== myRole) return;
   const cardEl = e.target.closest('.hand-card');
   if (!cardEl) return;
-  const cardId = Number(cardEl.dataset.cardId);
+  const cardId = cardEl.dataset.cardId;
   const card = CARD_BY_ID[cardId];
   if (!card) return;
 
@@ -1581,16 +1656,30 @@ document.getElementById('board').addEventListener('click', e => {
     // Unit's own "On Play" ability. Run 1 (2026-08-31): the old per-old-numeric-id dispatcher
     // (checkUnitOnPlayAbility, Veteran Signal Corps 119 / Combat Engineers 112 — both archived,
     // no new-truth equivalent) and the Deathrattle-only checkPendingUnitBuff (Convoy Escort 138,
-    // also archived) are both removed. Only a generic hook remains: a Craft-generated Aircraft's
+    // also archived) are both removed. Two generic hooks remain: a Craft-generated Aircraft's
     // drawback (doc 01 §28), which fires immediately on entering the battlefield regardless of
-    // which specific crafted card it is. On-Play effects for the current 125-card pool's actual
-    // Units (Aircraft "Maneuver 1 other friendly Unit" On Plays: A55/A56/A61/A62/A63/A65) are
-    // NOT yet wired — they need the same 2-step source-then-destination targeting flow H16 uses
-    // (see resolveHeroManeuverDestination) applied to unit placement, not yet built.
+    // which specific crafted card it is; and the Aircraft "Maneuver 1 other friendly Unit" On
+    // Play (A55/A56/A61/A62/A63/A65 — see getUnitOnPlayManeuverSources above), which enters its
+    // own 2-step flow and returns early, deferring the immediate-attack check further below.
     if (card.generated && card.craftDrawback) {
       const { state: afterDrawback, log: drawbackLog } = resolveCraftDrawback(state, active, clickedKey, card.craftDrawback);
       state = { ...afterDrawback, log: [...(afterDrawback.log ?? []), ...drawbackLog] };
       appendLog(drawbackLog);
+    }
+
+    {
+      const staticKeywords = Array.isArray(card.keyword) ? card.keyword : (card.keyword ? [card.keyword] : []);
+      if (staticKeywords.includes('Maneuver') && card.ability?.startsWith('On Play: Maneuver')) {
+        if (getUnitOnPlayManeuverSources(clickedKey).size > 0) {
+          pendingUnitManeuverPlacedKey = clickedKey;
+          uiState = 'unit-maneuver-source';
+          selectedHandCardId = null;
+          appendLog([`${card.name}: choose a friendly Unit to Maneuver`]);
+          redraw();
+          pushStateIfOnline(state);
+          return;
+        }
+      }
     }
 
     // Mobile Command Halftrack (114) — on-play, offers to move a Hero into this (empty)
@@ -1778,6 +1867,17 @@ document.getElementById('board').addEventListener('click', e => {
   }
   if (uiState === 'command-maneuver-destination') {
     resolveCommandManeuverDestination(clickedKey);
+    return;
+  }
+
+  // AIRCRAFT ON-PLAY MANEUVER (A55/A56/A61/A62/A63/A65): 1st click picks the source unit,
+  // 2nd picks the destination — see getUnitOnPlayManeuverSources above.
+  if (uiState === 'unit-maneuver-source') {
+    resolveUnitManeuverSource(clickedKey);
+    return;
+  }
+  if (uiState === 'unit-maneuver-destination') {
+    resolveUnitManeuverDestination(clickedKey);
     return;
   }
 
@@ -2801,6 +2901,8 @@ document.getElementById('btn-cancel').addEventListener('click', () => {
   pendingCommandManeuverSource = null;
   pendingHeroManeuverSource = null;
   pendingCoordStrikeFirst = null;
+  pendingUnitManeuverSource = null;
+  pendingUnitManeuverPlacedKey = null;
   uiState = "idle";
   // Hero targeting must be cancellable: bot_player's flushPendingUiState blindly clicks
   // Cancel whenever uiState !== 'idle', so leaving these set would loop the bot.
@@ -2945,7 +3047,7 @@ function showObjectivePreview(tileKey) {
 // Hand hover → card preview
 document.getElementById('p1-hand').addEventListener('mouseover', e => {
   const cardEl = e.target.closest('.hand-card');
-  if (cardEl) showCardPreview(Number(cardEl.dataset.cardId));
+  if (cardEl) showCardPreview(cardEl.dataset.cardId);
 });
 document.getElementById('p1-hand').addEventListener('mouseleave', hideCardPreview);
 
@@ -2968,7 +3070,7 @@ for (const role of ['p1', 'p2']) {
   const strip = document.getElementById(`hero-zone-${role}`);
   strip?.addEventListener('mouseover', e => {
     const placed = e.target.closest('.hero-placed');
-    if (placed) showCardPreview(Number(placed.dataset.heroId));
+    if (placed) showCardPreview(placed.dataset.heroId);
   });
   strip?.addEventListener('mouseleave', hideCardPreview);
 }
