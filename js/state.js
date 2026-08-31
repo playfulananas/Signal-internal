@@ -64,7 +64,7 @@
 // "reset attacks" effect (e.g. Maneuver Commander, Scramble) zeroes persistentSpent only and
 // never recreates an already-spent temporary extra attack.
 
-import { CARD_BY_ID } from './cards.js?v=1788180619';
+import { CARD_BY_ID } from './cards.js?v=1788186230';
 
 // ── State factory ────────────────────────────────────────────────────────────
 
@@ -401,7 +401,12 @@ export function getSideValue(boardUnit, dir) {
   const card = CARD_BY_ID[boardUnit.cardId];
   if (!card || card.type !== "unit") return 0;
   const d = rotatedDir(dir, boardUnit.rotation);
-  return card[d] + (boardUnit.tempSideBonus || 0) + (boardUnit.grantedSideBonus || 0) + (boardUnit.objSideBonus || 0) + (boardUnit.debugSideBonus || 0) + (boardUnit.dynamicSideBonus || 0);
+  // perm_n/e/s/w (Long War Commander, H24): a printed-side-relative permanent bonus, granted
+  // to one of the 4 sides at random each activation — looked up via the same rotated index `d`
+  // as the base printed stat, so a later rotation (Change Formation etc.) carries the bonus
+  // with its side exactly like every other stat does, rather than pinning it to whichever
+  // physical board direction happened to face that way at grant time.
+  return card[d] + (boardUnit.tempSideBonus || 0) + (boardUnit.grantedSideBonus || 0) + (boardUnit.objSideBonus || 0) + (boardUnit.debugSideBonus || 0) + (boardUnit.dynamicSideBonus || 0) + (boardUnit[`perm_${d}`] || 0);
 }
 
 // Returns card's base keyword(s) + tempKeywords + grantedKeywords.

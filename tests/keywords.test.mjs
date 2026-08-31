@@ -5,7 +5,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { getAttackableTargets, resolveSingleAttack, checkRally, computeDynamicSideBonus, recalculateDynamicStats, resolveDestructionChain, applyPostDestructionEffects } from '../js/combat.js';
-import { discountFor } from '../js/state.js';
+import { discountFor, getSideValue } from '../js/state.js';
 
 function boardWith(entries) {
   const board = {};
@@ -236,4 +236,30 @@ test('applyPostDestructionEffects (combat-path sibling) never adds its own HQ da
   const dyingSnapshot = unit('p2', 'I1');
   const { log } = applyPostDestructionEffects(state, { unitKey: '0,1', dyingUnit: dyingSnapshot, sourceUnitKey: '0,0' });
   assert.ok(!log.some(l => /HQ damage/i.test(l)), 'HQ damage is the combat path\'s own job (applyHit), not this sibling\'s');
+});
+
+// ── Section 7: Long War Commander (H24) permanent per-side bonus ─────────────
+// game.js's H24 activation writes boardUnit[`perm_${dir}`] directly (not exported for direct
+// unit testing — it's an internal game.js closure), but getSideValue is the one place that
+// must actually READ it for the ability to do anything at all. Found via code reading that it
+// didn't (a genuine, silent "major card effect does nothing" bug per checklist Section 13's
+// NO-GO criteria) — fixed in state.js, verified here directly against getSideValue.
+test('getSideValue includes a perm_<dir> bonus (Long War Commander, H24)', () => {
+  const u = { cardId: 'I1', rotation: 0, perm_n: 3 }; // I1 printed n=5
+  assert.equal(getSideValue(u, 'n'), 8);
+  assert.equal(getSideValue(u, 'e'), 4, 'unaffected side is untouched');
+});
+
+test('a perm_<dir> bonus is stored card-relative and rotates with the Unit like every other stat', () => {
+  // I1 printed: n=5 e=4 s=3 w=2. A 90° rotation shifts which printed side faces each physical
+  // direction — the SAME shift must apply to a perm_ bonus, or it would silently detach from
+  // its side the moment the Unit rotates (Change Formation, Field Coordinator, etc.).
+  const unrotated = { cardId: 'I1', rotation: 0, perm_n: 10 };
+  const rotated90 = { cardId: 'I1', rotation: 90, perm_n: 10 };
+  assert.equal(getSideValue(unrotated, 'n'), 15, 'bonus applies to physical north pre-rotation');
+  assert.notEqual(getSideValue(rotated90, 'n'), 15, 'after rotating, a different printed side now faces physical north');
+  // Whichever physical direction now maps back to printed 'n' should carry the +10.
+  const physicalDirs = ['n', 'e', 's', 'w'];
+  const boosted = physicalDirs.filter(d => getSideValue(rotated90, d) >= 10);
+  assert.equal(boosted.length, 1, 'the +10 bonus followed its printed side to exactly one (different) physical direction');
 });
