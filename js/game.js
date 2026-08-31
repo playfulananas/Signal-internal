@@ -1,4 +1,4 @@
-import { CARD_BY_ID, CARDS } from './cards.js?v=1788192005';
+import { CARD_BY_ID, CARDS } from './cards.js?v=1788193103';
 import {
   createInitialState,
   startOfTurn,
@@ -26,15 +26,15 @@ import {
   hasEscalated,
   markEscalateUse,
   expireTempFuelGrant,
-} from './state.js?v=1788192005';
-import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkCounteroffensiveGeneral, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff } from './combat.js?v=1788192005';
-import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1788192005';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1788192005';
-import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1788192005';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1788192005';
-import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1788192005';
-import { runBotTurn } from './bot_player.js?v=1788192005';
-import { bestHeroDeployment } from './bot_ai.js?v=1788192005';
+} from './state.js?v=1788193103';
+import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkCounteroffensiveGeneral, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff } from './combat.js?v=1788193103';
+import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1788193103';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1788193103';
+import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1788193103';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1788193103';
+import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1788193103';
+import { runBotTurn } from './bot_player.js?v=1788193103';
+import { bestHeroDeployment } from './bot_ai.js?v=1788193103';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
@@ -1345,8 +1345,20 @@ function resolveUnitManeuverDestination(destKey) {
 
   let { state: s, log } = resolveManeuver(state, sourceKey, destKey);
   s = recalculateDynamicStats(s);
-  const placedCard = CARD_BY_ID[s.board[placedKey]?.cardId];
+  const placedUnit = s.board[placedKey];
+  const placedCard = CARD_BY_ID[placedUnit?.cardId];
   log = [...log, `${placedCard?.name ?? 'Aircraft'}: On Play Maneuver resolved`];
+
+  // Objective Marshal / Infantry Commander / Emergency Logistics Officer fire AFTER the Unit's
+  // own On Play (doc 01 §22) — for a Maneuver-On-Play Unit, THIS Maneuver is that On Play, so
+  // the call is here rather than in the PLACING block (which skipped it for this exact case).
+  if (placedUnit) {
+    const owner = placedUnit.owner;
+    const col = Number(placedKey.split(',')[1]);
+    const hp = checkHeroPassivesOnPlace(s, owner, col, placedKey, placedCard);
+    s = hp.state;
+    log = [...log, ...hp.log];
+  }
 
   const targets = getAttackableTargets(s, placedKey);
   if (targets.length > 0) {
@@ -1644,45 +1656,49 @@ document.getElementById('board').addEventListener('click', e => {
 
     const logLines = [`Placed ${card.name} at ${clickedKey} (${terrain})${discount > 0 ? ` [Armored Spearhead: -${discount} Fuel]` : ''}`];
     state = { ...newState, log: [...(newState.log ?? []), ...logLines] };
-    appendLog(logLines); // fire immediately so it displays before any Hero-passive lines below
+    appendLog(logLines); // fire immediately so it displays before any On-Play/Hero-passive lines below
 
-    // Objective Marshal / Infantry Commander / Combined Arms General / Conventional Warfare
-    // Commander — "first qualifying Unit played this turn" passives.
-    const { state: afterHeroPassives, log: heroPassiveLog } = checkHeroPassivesOnPlace(state, active, c, clickedKey, card);
-    if (heroPassiveLog.length > 0) {
-      state = { ...afterHeroPassives, log: [...(afterHeroPassives.log ?? []), ...heroPassiveLog] };
-      appendLog(heroPassiveLog);
-    } else {
-      state = afterHeroPassives;
-    }
-
-    // Unit's own "On Play" ability. Run 1 (2026-08-31): the old per-old-numeric-id dispatcher
-    // (checkUnitOnPlayAbility, Veteran Signal Corps 119 / Combat Engineers 112 — both archived,
-    // no new-truth equivalent) and the Deathrattle-only checkPendingUnitBuff (Convoy Escort 138,
-    // also archived) are both removed. Two generic hooks remain: a Craft-generated Aircraft's
-    // drawback (doc 01 §28), which fires immediately on entering the battlefield regardless of
-    // which specific crafted card it is; and the Aircraft "Maneuver 1 other friendly Unit" On
-    // Play (A55/A56/A61/A62/A63/A65 — see getUnitOnPlayManeuverSources above), which enters its
-    // own 2-step flow and returns early, deferring the immediate-attack check further below.
+    // Unit's own "On Play" ability MUST resolve before Objective Marshal / Infantry Commander /
+    // Emergency Logistics Officer passives (doc 01 §22, checklist Section 7 — corrected
+    // 2026-08-31, these previously fired in the wrong order relative to the Unit's own On Play).
+    // Run 1: the old per-old-numeric-id dispatcher (checkUnitOnPlayAbility, Veteran Signal Corps
+    // 119 / Combat Engineers 112 — both archived, no new-truth equivalent) and the Deathrattle-
+    // only checkPendingUnitBuff (Convoy Escort 138, also archived) are both removed. Two generic
+    // hooks remain: a Craft-generated Aircraft's drawback (doc 01 §28), which resolves
+    // synchronously right here; and the Aircraft "Maneuver 1 other friendly Unit" On Play
+    // (A55/A56/A61/A62/A63/A65 — see getUnitOnPlayManeuverSources above), which needs a UI
+    // round-trip, so for THAT case the Hero-passives call below is skipped here and instead
+    // fires from resolveUnitManeuverDestination once the Maneuver actually resolves.
     if (card.generated && card.craftDrawback) {
       const { state: afterDrawback, log: drawbackLog } = resolveCraftDrawback(state, active, clickedKey, card.craftDrawback);
       state = { ...afterDrawback, log: [...(afterDrawback.log ?? []), ...drawbackLog] };
       appendLog(drawbackLog);
     }
 
-    {
-      const staticKeywords = Array.isArray(card.keyword) ? card.keyword : (card.keyword ? [card.keyword] : []);
-      if (staticKeywords.includes('Maneuver') && card.ability?.startsWith('On Play: Maneuver')) {
-        if (getUnitOnPlayManeuverSources(clickedKey).size > 0) {
-          pendingUnitManeuverPlacedKey = clickedKey;
-          uiState = 'unit-maneuver-source';
-          selectedHandCardId = null;
-          appendLog([`${card.name}: choose a friendly Unit to Maneuver`]);
-          redraw();
-          pushStateIfOnline(state);
-          return;
-        }
+    const staticKeywords = Array.isArray(card.keyword) ? card.keyword : (card.keyword ? [card.keyword] : []);
+    if (staticKeywords.includes('Maneuver') && card.ability?.startsWith('On Play: Maneuver')) {
+      if (getUnitOnPlayManeuverSources(clickedKey).size > 0) {
+        pendingUnitManeuverPlacedKey = clickedKey;
+        uiState = 'unit-maneuver-source';
+        selectedHandCardId = null;
+        appendLog([`${card.name}: choose a friendly Unit to Maneuver`]);
+        redraw();
+        pushStateIfOnline(state);
+        return;
       }
+    }
+
+    // Objective Marshal / Infantry Commander / Emergency Logistics Officer — "first qualifying
+    // Unit played this turn" passives. Fires here (after the Unit's own On Play resolved above,
+    // or correctly no-op'd per doc 01 §26 if it had no legal target) for every placement except
+    // a Maneuver-On-Play Unit that found a legal Maneuver target, which returned early above and
+    // instead triggers this same call from resolveUnitManeuverDestination.
+    const { state: afterHeroPassives, log: heroPassiveLog } = checkHeroPassivesOnPlace(state, active, c, clickedKey, card);
+    if (heroPassiveLog.length > 0) {
+      state = { ...afterHeroPassives, log: [...(afterHeroPassives.log ?? []), ...heroPassiveLog] };
+      appendLog(heroPassiveLog);
+    } else {
+      state = afterHeroPassives;
     }
 
     // Mobile Command Halftrack (114) — on-play, offers to move a Hero into this (empty)
