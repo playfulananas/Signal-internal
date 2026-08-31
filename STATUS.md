@@ -8,6 +8,54 @@ predates even the last CLAUDE.md snapshot. Rewritten from scratch against the ac
 code rather than patched. See `CLAUDE.md` for full project history/decisions and the Run 1 plan
 for exactly what changed and why.
 
+**2026-08-31 — post-Run-1 QA pass against Denis's Local Playtest Card QA Checklist.** All the
+Run 1 work above was verified almost entirely via unit tests and bot self-play, never by a
+human or a real browser — this pass actually drove the game (Playwright, live clicks, the debug
+panel) and cross-checked the checklist's specific scenarios one section at a time. Found and
+fixed real bugs no automated test had caught, roughly in order of severity:
+- **Every hand-card click did nothing at all.** 4 places in `game.js` wrapped a DOM dataset id
+  in `Number(...)`, a leftover from the pre-migration numeric-id scheme — `Number("I1")` is
+  `NaN`, so the click handler silently bailed. This affected the hand-card click listener, the
+  hand-card and Hero-Zone hover previews, and the Hero Deploy modal's pick handler (which
+  corrupted `heroZones` with `NaN` rather than crashing). This is almost certainly the real
+  explanation for every "STALLED" self-play result and the "heroes=2/2, never 3/4" plateau
+  reported earlier in Run 1 — previously misdiagnosed here as a too-narrow stall-detection
+  signature. That diagnosis was wrong; corrected.
+- **Aircraft On-Play Maneuver was never wired at all** (A55/A56/A61/A62/A63/A65 — 6 cards
+  sharing "On Play: Maneuver 1 other friendly Unit to another legal position"). Built as a new
+  2-step source-then-destination flow mirroring the existing Hero H16/Command C21/C27/C35
+  pattern.
+- **Change Formation (C16) + Ruthless Strategist (H20) crashed the page** — the rotate-modal's
+  context object never carried `role` for the Command-triggered path, so H20's post-Command
+  check ran with `role=undefined` and threw.
+- **H22 Frontline Marshal crashed on every activation** — called `columnKeys(col)`, a real
+  exported `combat.js` helper `game.js` never imported.
+- **I14 Veteran Raider's Rally was an explicit TODO stub**, never wired at all.
+- **H24 Long War Commander's Active Power did nothing** — it wrote a per-side bonus to
+  `boardUnit.perm_<dir>`, a field `getSideValue` never read. The ability "succeeded" (logged a
+  message, even showed in the debug panel's raw dump) but never affected combat.
+- **Sacrifice Play (C18) dealt full self-HQ-damage through Guard.** Unlike C19 (which correctly
+  bypasses Guard on purpose, per its own text), C18 has no such override and should follow the
+  normal destruction rule — 0 damage if the sacrificed Unit has Guard. Fixed by routing both
+  through `resolveDestructionChain` directly instead of hand-rolling HQ math a second time.
+- **2 of 8 `applyRuthlessStrategistIfPresent` (H20) call sites never called `checkWin()`**
+  afterward (Command Shuffle's move resolution, Forward Observer's modal confirm) — H20's
+  self-damage could reach 0 HQ without the game noticing until some unrelated later action
+  happened to check.
+
+Also closed a real test-coverage gap: **none of Guard/Precision/Blast/Barrage/Rally/Inspire/
+Muster/Last Stand/Breakthrough/Direct HQ had any unit tests at all** despite being the core of
+the whole Set 1 migration and exactly what the checklist's Sections 2-6 ask about (an earlier
+session note's "97/97 green" claim did not reflect what's actually in `tests/` today). Added
+`tests/direct_hq.test.mjs` (15 tests) and `tests/keywords.test.mjs` (33 tests, including the
+H24/C18 regression tests above) — 159/159 tests green throughout this pass.
+
+Sections 2 (Direct HQ) and 8 (Craft) of the checklist got full test-backed verification;
+Sections 7 and 9 got a systematic code-reading pass (the fixes above came from that); Sections
+1, 3-6 got both. Sections 10-13 (duration/cleanup edge cases, Objective/Map smoke test, the
+high-risk combo games, and the final Go/No-Go read) were spot-checked, not exhaustively worked —
+see the checklist doc itself for what's left to physically play through by hand.
+
 ---
 
 ## Run 1 summary — what's actually true right now
