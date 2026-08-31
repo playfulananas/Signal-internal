@@ -1,4 +1,4 @@
-import { CARD_BY_ID, CARDS } from './cards.js?v=1788184087';
+import { CARD_BY_ID, CARDS } from './cards.js?v=1788186391';
 import {
   createInitialState,
   startOfTurn,
@@ -26,15 +26,15 @@ import {
   hasEscalated,
   markEscalateUse,
   expireTempFuelGrant,
-} from './state.js?v=1788184087';
-import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkCounteroffensiveGeneral, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff } from './combat.js?v=1788184087';
-import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1788184087';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1788184087';
-import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1788184087';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1788184087';
-import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1788184087';
-import { runBotTurn } from './bot_player.js?v=1788184087';
-import { bestHeroDeployment } from './bot_ai.js?v=1788184087';
+} from './state.js?v=1788186391';
+import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkCounteroffensiveGeneral, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff } from './combat.js?v=1788186391';
+import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1788186391';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1788186391';
+import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1788186391';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1788186391';
+import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1788186391';
+import { runBotTurn } from './bot_player.js?v=1788186391';
+import { bestHeroDeployment } from './bot_ai.js?v=1788186391';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
@@ -2690,29 +2690,24 @@ function applyCommandEffect(commandId, targetKey) {
       showRotateDirectionModal({ kind: 'command', targetKey, cardName: card.name, s, log, role: active });
       return;
     }
-    case 'C18': { // Sacrifice Play — destroy 1 friendly Unit, draw 2
-      const pd = applyPostDestructionEffects(
-        { ...s, board: { ...s.board, [targetKey]: null } },
-        { unitKey: targetKey, dyingUnit: unit, sourceUnitKey: null }
-      );
-      // Sacrifice Play's own destruction is a plain "friendly Unit destroyed" (normal 2-HQ
-      // self-damage per doc 01 §9), not a replacement — apply that here since
-      // applyPostDestructionEffects deliberately does NOT touch HQ (see its own doc comment).
-      s = { ...recalculateDynamicStats(pd.state), [active]: { ...pd.state[active], hq: pd.state[active].hq - 2 } };
+    case 'C18': { // Sacrifice Play — destroy 1 friendly Unit, draw 2. No "even through Guard"
+      // wording on this card (unlike C19), so it must follow the NORMAL destruction-HQ rule —
+      // 2 damage to the owner's own HQ, or 0 if the sacrificed Unit has Guard. Route through
+      // the full resolveDestructionChain (not the HQ-free applyPostDestructionEffects sibling)
+      // so that Guard check isn't hand-rolled a second time and risk diverging from combat's.
+      const dc = resolveDestructionChain(s, { unitKey: targetKey, sourceUnitKey: null, cause: 'command' });
+      s = { ...dc.state, p1: { ...dc.state.p1, hq: dc.state.p1.hq - dc.hqDamageToP1 }, p2: { ...dc.state.p2, hq: dc.state.p2.hq - dc.hqDamageToP2 } };
       s = { ...s, [active]: drawCards(s[active], 2) };
-      log.push(`${card.name}: ${unitName} destroyed (2 HQ damage to ${active.toUpperCase()}), draw 2 cards`);
-      log.push(...pd.log);
+      log.push(`${card.name}: draw 2 cards`);
+      log.push(...dc.log);
       break;
     }
     case 'C19': { // Scorched Earth Raid — destroy 1 friendly Unit, 2 HQ to ENEMY instead of
       // the normal friendly-destruction result — applies even if the Unit has Guard.
-      const pd = applyPostDestructionEffects(
-        { ...s, board: { ...s.board, [targetKey]: null } },
-        { unitKey: targetKey, dyingUnit: unit, sourceUnitKey: null }
-      );
-      s = { ...recalculateDynamicStats(pd.state), [opp]: { ...pd.state[opp], hq: pd.state[opp].hq - 2 } };
-      log.push(`${card.name}: ${unitName} destroyed — 2 HQ damage to ${opp.toUpperCase()} instead (even through Guard)`);
-      log.push(...pd.log);
+      const dc = resolveDestructionChain(s, { unitKey: targetKey, sourceUnitKey: null, cause: 'command', hqResultReplacement: { targetHq: opp, amount: 2 } });
+      s = { ...dc.state, p1: { ...dc.state.p1, hq: dc.state.p1.hq - dc.hqDamageToP1 }, p2: { ...dc.state.p2, hq: dc.state.p2.hq - dc.hqDamageToP2 } };
+      log.push(`${card.name}:`);
+      log.push(...dc.log);
       break;
     }
     case 'C24': { // Suppressing Fire (Infantry) — +1 all sides permanently (simple stat buff —

@@ -231,6 +231,27 @@ test('Breakthrough does not trigger if the source Unit did not survive the excha
   assert.deepEqual(log.filter(l => l.includes('Breakthrough')), []);
 });
 
+test('resolveDestructionChain with no replacement: destroying a Guard Unit deals 0 HQ damage to its owner (Sacrifice Play C18)', () => {
+  const state = baseState(boardWith({ '0,0': unit('p1', 'I6') })); // I6 Shield Bearers, Guard
+  const { hqDamageToP1, hqDamageToP2, log } = resolveDestructionChain(state, { unitKey: '0,0', sourceUnitKey: null, cause: 'command' });
+  assert.equal(hqDamageToP1, 0, 'Guard reduces normal self-destruction HQ damage to 0');
+  assert.equal(hqDamageToP2, 0);
+  assert.ok(log.some(l => /0 HQ damage/.test(l)));
+});
+
+test('resolveDestructionChain with no replacement: destroying a non-Guard Unit deals the normal 2 HQ damage to its owner', () => {
+  const state = baseState(boardWith({ '0,0': unit('p1', 'I1') }));
+  const { hqDamageToP1 } = resolveDestructionChain(state, { unitKey: '0,0', sourceUnitKey: null, cause: 'command' });
+  assert.equal(hqDamageToP1, 2);
+});
+
+test('resolveDestructionChain with hqResultReplacement bypasses Guard entirely (Scorched Earth Raid C19)', () => {
+  const state = baseState(boardWith({ '0,0': unit('p1', 'I6') })); // Guard
+  const { hqDamageToP1, hqDamageToP2 } = resolveDestructionChain(state, { unitKey: '0,0', sourceUnitKey: null, cause: 'command', hqResultReplacement: { targetHq: 'p2', amount: 2 } });
+  assert.equal(hqDamageToP1, 0, 'the owner takes no self-damage when a replacement is in effect');
+  assert.equal(hqDamageToP2, 2, 'the replacement amount lands on the opponent regardless of Guard');
+});
+
 test('applyPostDestructionEffects (combat-path sibling) never adds its own HQ damage — only Last Stand/Breakthrough', () => {
   const state = baseState(boardWith({ '0,0': unit('p1', 'T32'), '0,1': unit('p2', 'I1', { state: 'destroyed' }) }));
   const dyingSnapshot = unit('p2', 'I1');
