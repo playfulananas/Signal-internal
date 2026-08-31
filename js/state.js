@@ -39,6 +39,12 @@
 //   armorHits: number,          — hits absorbed by armor so far
 //   tempKeywords: string[],     — keywords added THIS TURN only (objective buffs, Entrench); cleared by endTurn
 //   grantedKeywords: string[],  — keywords from commands lasting UNTIL OWNER'S NEXT TURN; cleared by startOfTurn
+//   permanentKeywords: string[], — keywords granted for the rest of the match (Breakthrough's Armor/
+//                                 Double Attack grants, Blitzkrieg Order, Field Repairs) — never
+//                                 cleared by startOfTurn/endTurn, unlike the confusingly-similarly-
+//                                 named grantedKeywords above. Added 2026-08-31: T34/T35/C27/C28 had
+//                                 all been storing their permanent grants in grantedKeywords, which
+//                                 silently wiped them the very next time the owner's turn started.
 //   tempSideBonus: number,      — +N to all sides this turn
 //   grantedSideBonus: number,   — +N to all sides from Rally Cry; lasts sideBonusTurns owner turn-starts
 //   sideBonusTurns: number,     — turn-starts remaining before grantedSideBonus clears (Rally Cry = 2)
@@ -64,7 +70,7 @@
 // "reset attacks" effect (e.g. Maneuver Commander, Scramble) zeroes persistentSpent only and
 // never recreates an already-spent temporary extra attack.
 
-import { CARD_BY_ID } from './cards.js?v=1788186230';
+import { CARD_BY_ID } from './cards.js?v=1788192005';
 
 // ── State factory ────────────────────────────────────────────────────────────
 
@@ -416,7 +422,7 @@ export function getKeywords(boardUnit) {
   const base = card?.keyword
     ? (Array.isArray(card.keyword) ? card.keyword : [card.keyword])
     : [];
-  return [...new Set([...base, ...(boardUnit.tempKeywords || []), ...(boardUnit.grantedKeywords || [])])];
+  return [...new Set([...base, ...(boardUnit.tempKeywords || []), ...(boardUnit.grantedKeywords || []), ...(boardUnit.permanentKeywords || [])])];
 }
 
 // Heavy Armor → 2, Armor → 1, else → 0.

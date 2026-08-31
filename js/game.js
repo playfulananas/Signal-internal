@@ -1,4 +1,4 @@
-import { CARD_BY_ID, CARDS } from './cards.js?v=1788191513';
+import { CARD_BY_ID, CARDS } from './cards.js?v=1788192005';
 import {
   createInitialState,
   startOfTurn,
@@ -26,15 +26,15 @@ import {
   hasEscalated,
   markEscalateUse,
   expireTempFuelGrant,
-} from './state.js?v=1788191513';
-import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkCounteroffensiveGeneral, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff } from './combat.js?v=1788191513';
-import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1788191513';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1788191513';
-import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1788191513';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1788191513';
-import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1788191513';
-import { runBotTurn } from './bot_player.js?v=1788191513';
-import { bestHeroDeployment } from './bot_ai.js?v=1788191513';
+} from './state.js?v=1788192005';
+import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkCounteroffensiveGeneral, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff } from './combat.js?v=1788192005';
+import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1788192005';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1788192005';
+import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1788192005';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1788192005';
+import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1788192005';
+import { runBotTurn } from './bot_player.js?v=1788192005';
+import { bestHeroDeployment } from './bot_ai.js?v=1788192005';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
@@ -859,7 +859,7 @@ function pushStateIfOnline(s) {
 // This restores them to real arrays for all fields that must be arrays.
 function normalizeFirebaseState(raw) {
   const toArray = v => Array.isArray(v) ? v : Object.values(v ?? {});
-  const fixUnit = u => u ? { ...u, tempKeywords: toArray(u.tempKeywords), grantedKeywords: toArray(u.grantedKeywords) } : u;
+  const fixUnit = u => u ? { ...u, tempKeywords: toArray(u.tempKeywords), grantedKeywords: toArray(u.grantedKeywords), permanentKeywords: toArray(u.permanentKeywords) } : u;
   const fixBoard = b => {
     if (!b) return {};
     return Object.fromEntries(Object.entries(b).map(([k, v]) => [k, fixUnit(v)]));
@@ -1627,6 +1627,7 @@ document.getElementById('board').addEventListener('click', e => {
       armorHits: 0,
       tempKeywords: [],
       grantedKeywords: [],
+      permanentKeywords: [],
       tempSideBonus: 0,
       justPlaced: true,
       rotation: 0,
@@ -2463,12 +2464,14 @@ function resolveCommandManeuverDestination(destKey) {
   if (commandId === 'C21') { // Forced March — Maneuver, then draw 1
     s = { ...s, [active]: drawCards(s[active], 1) };
     log = [...log, `${card.name}: draw 1 card`];
-  } else if (commandId === 'C27') { // Blitzkrieg Order — Maneuver + grant Armor
+  } else if (commandId === 'C27') { // Blitzkrieg Order — Maneuver + grant Armor (permanent — no
+    // "until" wording on this card, so it must use permanentKeywords, not grantedKeywords
+    // which clears every startOfTurn — see the BoardUnit shape comment in state.js)
     const kws = getKeywords(movedUnit);
     if (!kws.includes('Armor') && !kws.includes('Heavy Armor')) {
-      s = { ...s, board: { ...s.board, [destKey]: { ...movedUnit, grantedKeywords: [...(movedUnit.grantedKeywords || []), 'Armor'] } } };
+      s = { ...s, board: { ...s.board, [destKey]: { ...movedUnit, permanentKeywords: [...(movedUnit.permanentKeywords || []), 'Armor'] } } };
     }
-    log = [...log, `${card.name}: gains Armor`];
+    log = [...log, `${card.name}: gains Armor (permanent)`];
   } else if (commandId === 'C35') { // Scramble — Maneuver + reset persistent attacks
     s = { ...s, board: { ...s.board, [destKey]: resetPersistentAttacks(s.board[destKey]) } };
     log = [...log, `${card.name}: attacks reset`];
@@ -2719,10 +2722,11 @@ function applyCommandEffect(commandId, targetKey) {
       break;
     }
     case 'C28': { // Field Repairs (Tank) — Armor, or Heavy Armor if it already has Armor
+      // (permanent — no "until" wording, so permanentKeywords not grantedKeywords)
       const kws = getKeywords(unit);
       const newKw = kws.includes('Armor') ? 'Heavy Armor' : 'Armor';
-      s = { ...s, board: { ...s.board, [targetKey]: { ...unit, grantedKeywords: [...(unit.grantedKeywords || []), newKw] } } };
-      log.push(`${card.name}: ${unitName} gains ${newKw}`);
+      s = { ...s, board: { ...s.board, [targetKey]: { ...unit, permanentKeywords: [...(unit.permanentKeywords || []), newKw] } } };
+      log.push(`${card.name}: ${unitName} gains ${newKw} (permanent)`);
       break;
     }
     case 'C30': { // Artillery Barrage (Artillery) — grant Barrage until end of turn (NOT the

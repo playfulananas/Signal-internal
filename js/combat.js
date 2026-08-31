@@ -1,6 +1,6 @@
-import { CARD_BY_ID, registerGeneratedCard } from './cards.js?v=1788186034';
-import { getSideValue, getKeywords, attackBeats, applyHit, oppositeDir, unsuppressOnBoard, drawCards, addDiscount, remainingAttacks, spendAttack, grantTempAttacks, resetPersistentAttacks, fuelCapOf, gainFuel } from './state.js?v=1788186034';
-import { canPlaceOnTerrain, getTerrain } from './maps.js?v=1788186034';
+import { CARD_BY_ID, registerGeneratedCard } from './cards.js?v=1788192005';
+import { getSideValue, getKeywords, attackBeats, applyHit, oppositeDir, unsuppressOnBoard, drawCards, addDiscount, remainingAttacks, spendAttack, grantTempAttacks, resetPersistentAttacks, fuelCapOf, gainFuel } from './state.js?v=1788192005';
+import { canPlaceOnTerrain, getTerrain } from './maps.js?v=1788192005';
 
 // Orthogonal directions and their row/col offsets.
 const DIRS = ["n", "e", "s", "w"];
@@ -505,19 +505,21 @@ function runBreakthroughEffect(s, key, unit, card) {
       log.push(`${tag} next Tank costs 1 Fuel`);
       return { state: s, log };
     }
-    case 'T34': { // Breakthrough Tank — gains Armor
+    case 'T34': { // Breakthrough Tank — gains Armor (permanent — no "until" wording on this
+      // card, so it must use permanentKeywords, not grantedKeywords which clears every
+      // startOfTurn — see the BoardUnit shape comment in state.js)
       const kws = getKeywords(unit);
       if (!kws.includes('Armor') && !kws.includes('Heavy Armor')) {
-        s = { ...s, board: { ...s.board, [key]: { ...unit, grantedKeywords: [...(unit.grantedKeywords || []), 'Armor'] } } };
-        log.push(`${tag} gains Armor`);
+        s = { ...s, board: { ...s.board, [key]: { ...unit, permanentKeywords: [...(unit.permanentKeywords || []), 'Armor'] } } };
+        log.push(`${tag} gains Armor (permanent)`);
       }
       return { state: s, log };
     }
-    case 'T35': { // Ace Tank — gains Double Attack
+    case 'T35': { // Ace Tank — gains Double Attack (permanent — same permanentKeywords fix as T34)
       const kws = getKeywords(unit);
       if (!kws.includes('Double Attack')) {
-        s = { ...s, board: { ...s.board, [key]: { ...unit, grantedKeywords: [...(unit.grantedKeywords || []), 'Double Attack'] } } };
-        log.push(`${tag} gains Double Attack`);
+        s = { ...s, board: { ...s.board, [key]: { ...unit, permanentKeywords: [...(unit.permanentKeywords || []), 'Double Attack'] } } };
+        log.push(`${tag} gains Double Attack (permanent)`);
       }
       return { state: s, log };
     }

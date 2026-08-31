@@ -1,6 +1,6 @@
-import { CARD_BY_ID } from './cards.js?v=1788180619';
-import { getKeywords, maxArmorHits, discountFor, fuelCapOf, rotatedDir } from './state.js?v=1788180619';
-import { getTerrain } from './maps.js?v=1788180619';
+import { CARD_BY_ID } from './cards.js?v=1788192005';
+import { getKeywords, maxArmorHits, discountFor, fuelCapOf, rotatedDir } from './state.js?v=1788192005';
+import { getTerrain } from './maps.js?v=1788192005';
 
 const TERRAIN_SHORT = { plains: 'P', forest: 'F', water: 'W', desert: 'D', city: 'C' };
 
@@ -128,7 +128,7 @@ export function renderBoard(state, selectedTileKey, validDropKeys, changedKeys =
 function buildBoardCard(unit, viewer = 'p1', transitionFlag = null) {
   const card = CARD_BY_ID[unit.cardId];
   const el = document.createElement('div');
-  const buffed = unit.tempSideBonus > 0 || unit.grantedSideBonus > 0 || unit.debugSideBonus > 0 || (unit.tempKeywords?.length > 0) || (unit.grantedKeywords?.length > 0);
+  const buffed = unit.tempSideBonus > 0 || unit.grantedSideBonus > 0 || unit.debugSideBonus > 0 || (unit.tempKeywords?.length > 0) || (unit.grantedKeywords?.length > 0) || (unit.permanentKeywords?.length > 0);
   const opponent = unit.owner !== viewer;
   const justSuppressed = transitionFlag === 'suppressed' ? ' just-suppressed' : '';
   el.className = `board-card ${unit.owner} ${unit.state}${buffed ? ' buffed' : ''}${opponent ? ' opponent-card' : ''}${justSuppressed}`;

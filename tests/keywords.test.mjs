@@ -5,7 +5,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { getAttackableTargets, resolveSingleAttack, checkRally, computeDynamicSideBonus, recalculateDynamicStats, resolveDestructionChain, applyPostDestructionEffects } from '../js/combat.js';
-import { discountFor, getSideValue } from '../js/state.js';
+import { discountFor, getSideValue, getKeywords, startOfTurn } from '../js/state.js';
 
 function boardWith(entries) {
   const board = {};
@@ -216,13 +216,22 @@ test('Breakthrough (T33 Tank Destroyer): sets a Tank set-cost discount that othe
 test('Breakthrough (T34 Breakthrough Tank): gains Armor, no-ops if it already has Armor/Heavy Armor', () => {
   const state = baseState(boardWith({ '0,0': unit('p1', 'T34'), '0,1': unit('p2', 'I1') }));
   const { state: after } = resolveDestructionChain(state, { unitKey: '0,1', sourceUnitKey: '0,0' });
-  assert.ok((after.board['0,0'].grantedKeywords ?? []).includes('Armor'));
+  assert.ok((after.board['0,0'].permanentKeywords ?? []).includes('Armor'), 'must be permanentKeywords, not grantedKeywords (which clears every startOfTurn)');
 });
 
 test('Breakthrough (T35 Ace Tank): gains Double Attack on a kill', () => {
   const state = baseState(boardWith({ '0,0': unit('p1', 'T35'), '0,1': unit('p2', 'I1') }));
   const { state: after } = resolveDestructionChain(state, { unitKey: '0,1', sourceUnitKey: '0,0' });
-  assert.ok((after.board['0,0'].grantedKeywords ?? []).includes('Double Attack'));
+  assert.ok((after.board['0,0'].permanentKeywords ?? []).includes('Double Attack'), 'must be permanentKeywords, not grantedKeywords (which clears every startOfTurn)');
+});
+
+test('regression: a Breakthrough-granted keyword survives the owner\'s startOfTurn (was silently wiped — grantedKeywords clears every startOfTurn, but this grant has no "until" wording and must be permanent)', () => {
+  const richP1 = { hq: 30, hand: [], fuel: 5, fuelCap: 9, pendingFuelGain: 0, heroesActivatedThisTurn: [], heroZones: [null, null, null, null] };
+  const state = baseState(boardWith({ '0,0': unit('p1', 'T35'), '0,1': unit('p2', 'I1') }), { p1: richP1 });
+  const { state: afterKill } = resolveDestructionChain(state, { unitKey: '0,1', sourceUnitKey: '0,0' });
+  assert.ok(getKeywords(afterKill.board['0,0']).includes('Double Attack'), 'sanity: granted immediately after the kill');
+  const afterOwnerTurnStarts = startOfTurn({ ...afterKill, initiative: 'p1' });
+  assert.ok(getKeywords(afterOwnerTurnStarts.board['0,0']).includes('Double Attack'), 'must still be there once the owner\'s own next turn begins');
 });
 
 test('Breakthrough does not trigger if the source Unit did not survive the exchange', () => {
