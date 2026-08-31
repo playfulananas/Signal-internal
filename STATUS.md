@@ -42,13 +42,30 @@ fixed real bugs no automated test had caught, roughly in order of severity:
   afterward (Command Shuffle's move resolution, Forward Observer's modal confirm) — H20's
   self-damage could reach 0 HQ without the game noticing until some unrelated later action
   happened to check.
+- **Activating ANY Hero Power never called `checkWin()` at all** — not H20-specific, this was
+  the whole Hero Power system. Both `tryActivateHero`'s instant-power branch and
+  `resolveHeroTargeting`'s targeted-power tail committed state and stopped. H17 HQ Assault
+  Commander's guaranteed 1 enemy-HQ damage and H15 Strike Commander's direct Hit (which can
+  land a 2-HQ kill) could each end the game and the UI would just keep running. Verified live
+  after the fix: deployed H17, set the opponent to 1 HQ via the debug panel, activated it —
+  correctly dropped them to 0 and showed the end screen immediately.
+- **T34/T35/C27/C28's "permanent" keyword grants were wiped the very next turn.** All 4 grant
+  a keyword with no "until" wording on the card (Armor or Double Attack, meant to last the rest
+  of the match), but were written to `grantedKeywords` — a field explicitly documented, and
+  implemented, to clear every single `startOfTurn` for its owner (it's meant for genuinely
+  temporary "until your next turn" effects like Dig In's Guard grant). Verified with a
+  standalone script before touching code: an Ace Tank's Breakthrough-granted Double Attack was
+  gone the moment its owner's next turn began. Fixed by adding a real `permanentKeywords`
+  BoardUnit field that nothing clears, and moving all 4 grants onto it — also had to update
+  Firebase's array-normalization fixup and the "buffed" visual-indicator check, both of which
+  would have silently mishandled the new field otherwise.
 
 Also closed a real test-coverage gap: **none of Guard/Precision/Blast/Barrage/Rally/Inspire/
 Muster/Last Stand/Breakthrough/Direct HQ had any unit tests at all** despite being the core of
 the whole Set 1 migration and exactly what the checklist's Sections 2-6 ask about (an earlier
 session note's "97/97 green" claim did not reflect what's actually in `tests/` today). Added
-`tests/direct_hq.test.mjs` (15 tests) and `tests/keywords.test.mjs` (33 tests, including the
-H24/C18 regression tests above) — 159/159 tests green throughout this pass.
+`tests/direct_hq.test.mjs` (15 tests) and `tests/keywords.test.mjs` (34 tests, including the
+H24/C18/permanentKeywords regression tests above) — 160/160 tests green throughout this pass.
 
 Sections 2 (Direct HQ) and 8 (Craft) of the checklist got full test-backed verification;
 Sections 7 and 9 got a systematic code-reading pass (the fixes above came from that); Sections
