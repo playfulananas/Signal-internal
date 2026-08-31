@@ -65,6 +65,28 @@ test('random27 stats integrity holds across many rolls', () => {
   }
 });
 
+// Checklist Section 8: "6/6/6/6 stats option can occur" and "zero side is legal" — both are
+// probabilistic, so assert they actually show up across enough rolls rather than just being
+// theoretically possible (a regression that silently narrowed either range wouldn't fail the
+// integrity check above, since e.g. always-random27 or always-nonzero would still pass it).
+test('the fixed 6/6/6/6 stats option actually occurs across many rolls', () => {
+  let sawFixed = false;
+  for (let i = 0; i < 500 && !sawFixed; i++) {
+    const [c] = generateCraftCandidates();
+    if (c.stats.n === 6 && c.stats.e === 6 && c.stats.s === 6 && c.stats.w === 6) sawFixed = true;
+  }
+  assert.ok(sawFixed, '6/6/6/6 never rolled in 500 tries — statsRoll===0 branch may be broken');
+});
+
+test('a zero-value side actually occurs across many random27 rolls', () => {
+  let sawZero = false;
+  for (let i = 0; i < 500 && !sawZero; i++) {
+    const [c] = generateCraftCandidates();
+    if ([c.stats.n, c.stats.e, c.stats.s, c.stats.w].includes(0)) sawZero = true;
+  }
+  assert.ok(sawZero, 'no zero side rolled in 500 tries — stick-breaking cut points may never collide');
+});
+
 test('craftCandidateToCard produces a real Aircraft card definition, not in the static pool', () => {
   // Doesn't cross-check the module-level CARD_BY_ID registry here — this test file imports
   // cards.js via a different specifier (no cache-busting query string) than combat.js's
