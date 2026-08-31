@@ -261,6 +261,17 @@ test('resolveDestructionChain with hqResultReplacement bypasses Guard entirely (
   assert.equal(hqDamageToP2, 2, 'the replacement amount lands on the opponent regardless of Guard');
 });
 
+// Section 12 high-risk combo: "Scorched Earth Raid + Guard Last Stand Unit" — I22 Field
+// Commander carries both Guard and Last Stand. Guard blocking the normal self-HQ result and
+// Last Stand triggering are independent steps in the chain; neither should suppress the other.
+test('Scorched Earth Raid on a Guard + Last Stand Unit: HQ replacement bypasses Guard AND Last Stand still fires', () => {
+  const state = baseState(boardWith({ '0,0': unit('p1', 'I22'), '0,1': unit('p1', 'I1') })); // I22: Guard + Last Stand
+  const { hqDamageToP1, hqDamageToP2, state: after } = resolveDestructionChain(state, { unitKey: '0,0', sourceUnitKey: null, cause: 'command', hqResultReplacement: { targetHq: 'p2', amount: 2 } });
+  assert.equal(hqDamageToP1, 0);
+  assert.equal(hqDamageToP2, 2, 'Guard does not block the replacement');
+  assert.equal(after.board['0,1'].tempSideBonus, 1, "Field Commander's Last Stand (adjacent Infantry +1) still fires despite Guard/replacement");
+});
+
 test('applyPostDestructionEffects (combat-path sibling) never adds its own HQ damage — only Last Stand/Breakthrough', () => {
   const state = baseState(boardWith({ '0,0': unit('p1', 'T32'), '0,1': unit('p2', 'I1', { state: 'destroyed' }) }));
   const dyingSnapshot = unit('p2', 'I1');
