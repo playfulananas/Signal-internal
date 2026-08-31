@@ -109,6 +109,40 @@ test('multiple column Heroes can stack their bonus onto the same Unit, via Supre
   assert.equal(after.board['1,0'].grantedSideBonus, 3); // 1 (Objective Marshal) + 2 (Infantry Commander)
 });
 
+test('Emergency Logistics Officer (H21): +1 Fuel, 1 damage to own HQ, on the first Unit played each turn', () => {
+  const card = { ...CARD_BY_ID['I1'], cls: 'Artillery' }; // neutralise Infantry Commander/Objective Marshal for this test
+  const s = { p1: playerState({ heroZones: ['H21', null, null, null], fuel: 3, fuelCap: 9, hq: 30 }), board: boardWith({ '2,2': placedUnit() }), objectives: {} };
+  const { state: after, log } = checkHeroPassivesOnPlace(s, 'p1', 2, '2,2', card);
+  assert.equal(log.length, 1);
+  assert.equal(after.p1.fuel, 4);
+  assert.equal(after.p1.hq, 29);
+  assert.equal(after.p1.heroTriggeredThisTurn['H21'], true);
+});
+
+test('Emergency Logistics Officer only fires once per turn, gated the same way as the other on-place passives', () => {
+  const card = { ...CARD_BY_ID['I1'], cls: 'Artillery' };
+  const s = { p1: playerState({ heroZones: ['H21', null, null, null], heroTriggeredThisTurn: { H21: true }, fuel: 3, fuelCap: 9, hq: 30 }), board: boardWith({ '2,2': placedUnit() }), objectives: {} };
+  const { log } = checkHeroPassivesOnPlace(s, 'p1', 2, '2,2', card);
+  assert.equal(log.length, 0);
+});
+
+test('all three on-place passives (Objective Marshal, Infantry Commander, Emergency Logistics Officer) fire together on one qualifying placement, in a fixed order, none stepping on another', () => {
+  // Column 0 for all three column-agnostic-via-Supreme-Commander triggers would collide with
+  // the "one Hero per column" rule, so use Supreme Commander (H13) to give H04/H08 board reach
+  // the same way the stacking test above does, alongside H21 (which is board-scoped natively).
+  // An Infantry Unit placed adjacent to an Objective should trigger all three: +1 (Objective
+  // Marshal), +2 (Infantry Commander), and +1 Fuel/-1 HQ (Emergency Logistics Officer).
+  const card = { ...CARD_BY_ID['I1'], cls: 'Infantry', keyword: null };
+  const objectives = { '0,0': { cardId: 'O1', level: 1 } };
+  const s = { p1: playerState({ heroZones: ['H04', 'H08', 'H13', 'H21'], fuel: 3, fuelCap: 9, hq: 30 }), board: boardWith({ '1,0': placedUnit() }), objectives };
+  const { state: after, log } = checkHeroPassivesOnPlace(s, 'p1', 0, '1,0', card);
+  assert.equal(log.length, 3, 'all three passives fire from one placement');
+  assert.equal(after.board['1,0'].grantedSideBonus, 3, '1 (Objective Marshal) + 2 (Infantry Commander)');
+  assert.equal(after.p1.fuel, 4, 'Emergency Logistics Officer +1 Fuel');
+  assert.equal(after.p1.hq, 29, 'Emergency Logistics Officer -1 own HQ');
+  assert.deepEqual(after.p1.heroTriggeredThisTurn, { H04: true, H08: true, H21: true }, 'all three independently marked triggered — none overwrote another\'s gate');
+});
+
 // ── removeSuppression ─────────────────────────────────────────────────────────
 // Counteroffensive General (H06) fires from the Suppression-APPLYING side (see
 // checkCounteroffensiveGeneral tests below), never from removeSuppression.
