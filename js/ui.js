@@ -1,6 +1,6 @@
-import { CARD_BY_ID } from './cards.js?v=1787179497';
-import { getKeywords, maxArmorHits, discountFor, fuelCapOf, rotatedDir } from './state.js?v=1787179497';
-import { getTerrain } from './maps.js?v=1787179497';
+import { CARD_BY_ID } from './cards.js?v=1788180619';
+import { getKeywords, maxArmorHits, discountFor, fuelCapOf, rotatedDir } from './state.js?v=1788180619';
+import { getTerrain } from './maps.js?v=1788180619';
 
 const TERRAIN_SHORT = { plains: 'P', forest: 'F', water: 'W', desert: 'D', city: 'C' };
 
@@ -147,7 +147,7 @@ function buildBoardCard(unit, viewer = 'p1', transitionFlag = null) {
       ).join('')
     : '';
 
-  const CLS_ABBR = { Infantry:'INF', Tank:'TNK', Artillery:'ART', Aircraft:'AIR', Commander:'CMD', Naval:'NAV' };
+  const CLS_ABBR = { Infantry:'INF', Tank:'TNK', Artillery:'ART', Aircraft:'AIR' };
   // rotatedDir only (Change Formation 124 / Field Engineer 91) — no owner/viewer swap.
   // A card's printed N/E/S/W always shows at physical N/E/S/W, matching hand and getSideValue
   // (see state.js — the matching P2_FLIP there was removed 2026-08-14 for the same reason).

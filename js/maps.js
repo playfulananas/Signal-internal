@@ -83,12 +83,16 @@ export const MAPS = {
     ],
     // 4, dead center (the 2x2 middle block) — the carrier task forces converging. Per Filip 2026-08-19.
     objectiveSlots: ["1,1", "1,2", "2,1", "2,2"],
-    // Factory (26, category "Economy/Vehicle") buffs Tanks; City (31, "Infantry/Defense") buffs
+    // Factory (O1, category "Economy/Vehicle") buffs Tanks; City (O4, "Infantry/Defense") buffs
     // Infantry — both dead weight here since neither class can ever be placed on 100% water.
     // Per Filip 2026-08-19. Only 3 of the 5 working objectives remain valid for 4 slots, so one
     // objective type repeats among Midway's slots — see the % in pickObjectives (game.js),
     // already built to handle a map needing more slots than its available pool.
-    objectiveExclude: [26, 31],
+    // IDs updated 2026-08-31 (Run 1) to the new O1-O5 objective scheme — see cards.js. Note:
+    // Midway itself is cut from the new Set 1 truth's 4-map list (Normandy/Midway both dropped,
+    // Run 2 scope) — this id fix is only so the map's existing data stays internally consistent
+    // and testable until Run 2 physically removes the map, not a sign Midway is staying.
+    objectiveExclude: ['O1', 'O4'],
   },
 };
 

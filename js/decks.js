@@ -1,7 +1,7 @@
 // Deck rules, starter decks, validation, and custom-deck persistence.
 // Validation functions are pure (node-testable). localStorage helpers are
 // browser-only — never called at module top level.
-import { CARDS, CARD_BY_ID } from './cards.js?v=1786664736';
+import { CARDS, CARD_BY_ID } from './cards.js?v=1788180619';
 
 export const DECK_RULES = {
   deckSize: 30, // v0.4 fixed deck size (2026-07-30) — replaces the old 50-AP budget model. Exact, not a ceiling.
@@ -10,48 +10,60 @@ export const DECK_RULES = {
   heroRosterSize: 4, // separate from deckSize — Heroes are never shuffled into the main deck (see getDeckPool)
 };
 
+// Replaced 2026-08-31 (Run 1 of the SIGNAL Claude Handoff surgical update) with the exact 8
+// recommended Set 1 decks from the authoritative "SIGNAL_Set1_RecommendedDecksList" Google
+// Sheet (spreadsheet id 1hFLSH4vPkPSnT3SL9v_42SI6gZThtCVx9oOhRXXbAj0) — per Denis's explicit
+// correction during Run 1 planning, starter decks must come from this source, not invented
+// same-role substitutions. Every id/copy count/Hero roster below is transcribed directly from
+// that spreadsheet's 8 deck tabs, cross-referenced against the new cards.js id scheme.
 export const STARTER_DECKS = [
   {
-    key: 'aggro', name: 'Hammer Strike',
-    flavor: 'Bombard units deal hits on placement. Double Attack finishers close the game. Draw fast, destroy everything.',
-    // Rebuilt to exactly 30 cards for the v0.4 fixed-deck model (2026-07-30) — Missions
-    // stripped in Batch 1 (removed 2x Total Onslaught), then filled back up to 30 with
-    // cheap aggressive Commons already on-theme (Storm Squad to 2x, Rifle Squad, Scouts,
-    // Radio Operator) rather than reworking the deck's identity.
-    ids: [5,5, 42,42, 40,40, 19,19, 22,22, 10,10, 59,59, 1,1, 34,34, 111,111, 4,4, 13,13, 61,61, 52,52, 8,8],
-    // Fixed 4-Hero roster (not player-selectable yet — see Batch 4/5 scope notes in cards.js).
-    // Rosters draw only from the implemented Tier 1 pool (see `implemented` in cards.js) so
-    // every starter deck's Heroes actually do something. Reassigned 2026-08-03.
-    heroIds: [92, 104, 110, 87], // Tactical Commander, Infantry Commander, Conventional Warfare Commander, Quartermaster General
+    key: 'infantry-formation', name: '01 Infantry Formation',
+    flavor: 'Cheap bodies -> adjacency -> wide scaling -> permanent growth. Inspire / Rally / Muster density, formation protection, and permanent scaling.',
+    ids: ['I1','I1', 'I6','I6', 'I9','I9', 'I12','I12', 'I13','I13', 'I15','I15', 'I17', 'I18','I18', 'I20','I20', 'I21', 'I22','I22', 'C24','C24', 'C25','C25', 'C26', 'C03', 'C06', 'C21', 'C22', 'C12'],
+    heroIds: ['H08', 'H19', 'H23', 'H11'], // Infantry Commander, Training Officer, Army Group Commander, Field Coordinator
   },
   {
-    key: 'control', name: 'Iron Fortress',
-    flavor: "Armor and Guard wall. Bombard can't suppress Heavy Armor. Guard nullifies Double Attack. Hold objectives, outlast.",
-    // Rebuilt to exactly 30 cards (2026-07-30) — Missions stripped in Batch 1 (removed
-    // 2x Fortify the Line), filled back up with more Guard/Armor Commons on-theme.
-    ids: [65,65, 6,6, 36,36, 11,11, 39,39, 63,63, 2,2, 75,75, 74,74, 49,49, 54,54, 16,16, 43,43, 9,9, 66,66],
-    heroIds: [94, 99, 100, 101], // Objective Marshal, Garrison Commander, Recovery Officer, Counteroffensive General
+    key: 'tank-blitz', name: '02 Tank Blitz',
+    flavor: 'Fuel investment -> Armor durability -> Breakthrough kill -> momentum.',
+    ids: ['T23','T23', 'T25','T25', 'T28','T28', 'T29','T29', 'T30','T30', 'T32','T32', 'T33','T33', 'T34','T34', 'T36','T36', 'T38', 'T39', 'C27','C27', 'C28','C28', 'C29','C29', 'C13', 'C23', 'C10', 'C21'],
+    heroIds: ['H07', 'H02', 'H21', 'H05'], // Armored Commander, Logistics Chief, Emergency Logistics Officer, Recovery Officer
   },
   {
-    key: 'counter', name: 'Blitz Breaker',
-    flavor: 'Four Guard unit types wall off Double Attack. Armor absorbs Bombard. Cheap flood, full draw engine, Overrun punishes every kill.',
-    // Rebuilt to exactly 30 cards (2026-07-30) — Missions stripped in Batch 1 (removed
-    // 2x Blitz Assault, 2x Total Onslaught), filled back up with more cheap Guard bodies.
-    ids: [2,2, 11,11, 36,36, 43,43, 6,6, 69,69, 5,5, 1,1, 34,34, 22,22, 19,19, 73,73, 51,51, 62,62, 112,112],
-    heroIds: [87, 104, 101, 92], // Quartermaster General, Infantry Commander, Counteroffensive General, Tactical Commander
+    key: 'artillery-fire-control', name: '03 Artillery Fire Control',
+    flavor: 'Directional setup -> range / AoE -> formation punishment. Bombard, Blast, forward-ray Barrage, facing, Precision.',
+    ids: ['AR40','AR40', 'AR43','AR43', 'AR44','AR44', 'AR45','AR45', 'AR46','AR46', 'AR47','AR47', 'AR48','AR48', 'AR49', 'AR50','AR50', 'AR51','AR51', 'AR53', 'C30','C30', 'C31','C31', 'C32','C32', 'C16','C16', 'C21', 'C12'],
+    heroIds: ['H18', 'H11', 'H16', 'H05'], // Artillery Commander, Field Coordinator, Maneuver Commander, Recovery Officer
   },
   {
-    key: 'power', name: 'Steel Column',
-    flavor: 'Six Armor / Heavy Armor vehicles grind through hits. Supply Runner and Industrial Surge ramp Fuel, Field Medic stabilizes.',
-    // Rebuilt to exactly 30 cards (2026-07-30) — Missions stripped in Batch 1 (removed
-    // 2x Armored Spearhead, 2x Blitz Assault, 2x Hold the Line), filled back up with
-    // heavier grind pieces on-theme. 2x Tank Destroyer (41) swapped for 2x Flak Halftrack
-    // (40) on 2026-08-13 — Tank Destroyer retired along with Breakthrough (unbalanced as
-    // vanilla); Flak Halftrack keeps the slot in-class (Tank) and fills a cost-2 curve gap.
-    ids: [63,63, 66,66, 65,65, 39,39, 6,6, 9,9, 5,5, 76,76, 18,18, 45,45, 40,40, 117,117, 116,116, 64,64, 43,43],
-    // Combined Arms General (109) retired 2026-08-14 — swapped for Recovery Officer (100),
-    // a closer fit for a grind-and-outlast deck (pairs with Field Medic on Suppression removal).
-    heroIds: [89, 103, 100, 107], // Logistics Chief, Armored Commander, Recovery Officer, Command Specialist
+    key: 'air-superiority', name: '04 Air Superiority',
+    flavor: 'Expensive flexibility -> unrestricted terrain access -> Precision -> explosive attack turns -> Craft.',
+    ids: ['A54','A54', 'A55','A55', 'A56','A56', 'A57', 'A58','A58', 'A59','A59', 'A60','A60', 'A61', 'A62','A62', 'A63','A63', 'A64', 'A65', 'C33','C33', 'C34','C34', 'C35','C35', 'C23', 'C05', 'C06', 'C14'],
+    heroIds: ['H25', 'H02', 'H21', 'H16'], // Chief Aircraft Engineer, Logistics Chief, Emergency Logistics Officer, Maneuver Commander
+  },
+  {
+    key: 'last-stand-sacrifice', name: '05 Last Stand Sacrifice',
+    flavor: 'Friendly destruction -> Last Stand value -> card / HQ conversion -> pressure.',
+    ids: ['I18','I18', 'I19','I19', 'I22','I22', 'I6','I6', 'I7','I7', 'I12','I12', 'I13','I13', 'I15','I15', 'I1','I1', 'I21', 'I17', 'C18','C18', 'C19','C19', 'C05', 'C24', 'C26', 'C03', 'C12', 'C11'],
+    heroIds: ['H14', 'H20', 'H08', 'H01'], // Graves Registration Officer, Ruthless Strategist, Infantry Commander, Quartermaster General
+  },
+  {
+    key: 'command-engine', name: '06 Command Engine',
+    flavor: 'Cheap Commands -> discounts -> card velocity -> Hero resets -> self-inflicted HQ pressure. 14 Units / 16 Commands.',
+    ids: ['I1','I1', 'I6','I6', 'I12','I12', 'T23','T23', 'AR40','AR40', 'AR43','AR43', 'A54','A54', 'C04','C04', 'C05','C05', 'C13','C13', 'C14','C14', 'C17','C17', 'C23','C23', 'C03', 'C11', 'C16', 'C21'],
+    heroIds: ['H09', 'H20', 'H21', 'H01'], // Command Specialist, Ruthless Strategist, Emergency Logistics Officer, Quartermaster General
+  },
+  {
+    key: 'combined-arms', name: '07 Combined Arms',
+    flavor: 'Mixed classes -> flexible answers -> Objective positioning -> universal support. All five Objectives, all four Maps.',
+    ids: ['I1','I1', 'I9','I9', 'I22','I22', 'T23','T23', 'T29','T29', 'T33','T33', 'AR43','AR43', 'AR50','AR50', 'A55','A55', 'A60','A60', 'C22','C22', 'C07', 'C03', 'C10', 'C16', 'C21', 'C05', 'C12', 'C14'],
+    heroIds: ['H04', 'H03', 'H10', 'H12'], // Objective Marshal, Tactical Commander, Conventional Warfare Commander, Fire Support Officer
+  },
+  {
+    key: 'objective-tempo', name: '08 Objective Tempo',
+    flavor: 'Contest early -> hold adjacency -> convert Objective control into HQ pressure and tempo.',
+    ids: ['I1','I1', 'I6','I6', 'I9','I9', 'T28','T28', 'T37','T37', 'AR50','AR50', 'AR51','AR51', 'A55','A55', 'A56','A56', 'A64','A64', 'C22','C22', 'C03','C03', 'C10', 'C12', 'C16', 'C21', 'C09', 'C23'],
+    heroIds: ['H04', 'H15', 'H17', 'H22'], // Objective Marshal, Strike Commander, HQ Assault Commander, Frontline Marshal
   },
 ];
 

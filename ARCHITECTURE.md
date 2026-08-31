@@ -305,16 +305,35 @@ generateGameCode() → string
 
 These are locked decisions — don't reinvent them.
 
+**Run 1 migration note (2026-08-31):** the table below reflects the current Set 1 truth-lock
+(SIGNAL Claude Handoff package, docs 00-09). The rules-engine mechanics themselves (this table)
+are implemented and unit-tested. The *content-wiring* layer in `game.js` — the per-Hero Active
+switch (`applyHeroPower`) and per-Command effect switch (`playInstantCommand`/
+`applyCommandEffect`) — still keys on the pre-migration numeric card ids (16, 92, 143, etc.)
+and has **not yet** been remapped to the new id scheme (`H01`-`H25`, `C01`-`C35`, `I1`-`A65`).
+Since ids changed type (number → string), every old `case <number>:` / `cardId === <number>`
+comparison now silently never matches rather than crashing — so no Hero Active or Command
+currently does anything at runtime, even though Guard/Precision/Blast/Barrage/Direct HQ/Last
+Stand/Breakthrough/Rally/Inspire/Muster/Suppression-HQ-damage are all correctly implemented
+underneath. This is the largest remaining Run 1 follow-up — see STATUS.md.
+
 | Keyword | How it resolves |
 |---|---|
-| **Guard** | UI enforces targeting: if a Guard unit is adjacent to the attacker, it must be the target. Guard is ignored if the unit is Suppressed. `resolveDeployment` trusts the caller passed a legal target. |
+| **Guard** | Attacker-specific legal-target priority (doc 01 §10, doc 02 Q92-Q100), NOT adjacency-based protection. `getAttackableTargets` (combat.js) computes each attacker's own raw candidate pool (adjacent, or row/column for Bombard), then restricts to Guard candidates if any exist — Suppressed Guards still count, Bombard no longer bypasses Guard, Double Attack's 2nd hit re-evaluates fresh (no more `skipGuard`). |
+| **Precision** | New (2026-08-31). Ignores Guard priority entirely; no range effect by itself. Checked first in `getAttackableTargets`. |
 | **Armor** | Absorbs 1 hit before state changes. Tracked via `armorHits` on BoardUnit. `applyHit` handles this. |
 | **Heavy Armor** | Absorbs 2 hits. Same mechanism as Armor, `maxArmorHits` returns 2. |
-| **Bombard** | Unit can attack any enemy in its entire row or column (not just adjacent). Bypasses Guard enforcement. Implemented in `getBombardTargets` in combat.js. |
-| **Double Attack** | After the first attack resolves, the unit stays selected and targeting mode re-enters automatically — player picks a second target. Guard is bypassed on the second hit (`skipGuard=true`). |
-| **Breakthrough** | After Destroying an enemy, unit can slide into the vacated tile and attack again. **Deferred — not implemented in Phase 1.** For now, Breakthrough is a stat card with no special mechanic. |
-| **Airborne** | Ignores terrain restrictions. **Terrain not implemented in Phase 1**, so Airborne has no mechanical effect yet. Card still shows keyword. |
-| **Inspire** | Adjacent friendly units gain +1 to all sides. **Deferred — not implemented in Phase 1.** Requires tracking adjacency every time a unit moves or is placed. |
+| **Bombard** | Unit can attack any enemy in its entire row or column (not just adjacent), no blocker check. Implemented in `getBombardTargets` in combat.js. No longer bypasses Guard (see Guard above). |
+| **Blast** | New (2026-08-31). On a successful primary Hit, also Hits enemies directly left/right of the target relative to attack direction. `blastSecondaryKeys`/`resolveSecondaryHits` in combat.js, wired into `resolveSingleAttack`. |
+| **Barrage** | New (2026-08-31). On a successful primary Hit, also Hits enemies farther along the forward ray beyond the target, no blocker check. `barrageSecondaryKeys` in combat.js. |
+| **Double Attack** | Persistent attack allowance = 2 instead of 1 (`persistentAllowance` in state.js). Sits on top of the new persistent+temporary attack-allowance model (`remainingAttacks`/`spendAttack`/`grantTempAttacks`/`resetPersistentAttacks`) — consumption order is locked persistent-then-temporary; an explicit reset restores persistent only. |
+| **Breakthrough** | Implemented 2026-08-31 via the shared destruction chain (`resolveDestructionChain`/`applyPostDestructionEffects` in combat.js) — triggers from the Unit that caused a destruction, after that destroyed Unit's own Last Stand resolves. |
+| **Rally** | Implemented 2026-08-31 (`checkRally` in combat.js). Triggers whenever a Rally Unit declares/executes an attack, success not required; never triggers on Direct HQ. |
+| **Inspire** | Implemented 2026-08-31 as a dynamic aura (`computeDynamicSideBonus`/`recalculateDynamicStats` in combat.js) — adjacent friendly Units get +1 all sides per adjacent Inspire source, recalculated after every placement/movement/destruction. Feeds `getSideValue` via a new `dynamicSideBonus` field. |
+| **Muster** | Implemented 2026-08-31, same dynamic-recalculation mechanism as Inspire — +1 all sides per OTHER friendly Infantry controlled, board-wide. |
+| **Last Stand** | Implemented 2026-08-31 as a Unit keyword via the shared destruction chain (distinct from the old same-named Command, which is now archived). |
+| **Maneuver / Escalate / Craft** | **Not yet built.** Doc 01 requires all three for the current 125-card pool (Maneuver: A55/A56/A61-A63/A65/H16; Escalate: C26/C27/C32/C34; Craft: H25) — flagged as remaining Run 1 work, not deferred by design. |
+| **Airborne** | Retired — not part of the new Set 1 truth (Aircraft has innate unrestricted terrain access instead; see `maps.js`). |
 
 ---
 

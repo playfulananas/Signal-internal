@@ -5,8 +5,8 @@
 // picks the best legal action. It does not touch the DOM — callers (selfplay_test.mjs,
 // bot_player.js) execute the chosen action via clicks.
 import { CARD_BY_ID } from "./cards.js";
-import { getAttackableTargets, resolveSingleAttack, canStrikeHQDirectly } from "./combat.js";
-import { getKeywords, maxArmorHits } from "./state.js";
+import { getAttackableTargets, resolveSingleAttack } from "./combat.js";
+import { getKeywords, applyHit, hasEscalated } from "./state.js";
 import { canPlaceOnTerrain, getTerrain } from "./maps.js";
 
 const W_HQ = 10;      // weight per point of HQ damage dealt/avoided
@@ -33,16 +33,14 @@ export function maxAttacksFor(unit) {
 }
 
 // Best attack available for a specific friendly unit already on the board. attackCount is
-// how many of its attacks it's already used this turn (0 for a fresh/hypothetical unit) —
-// needed so an Empty-Board HQ Strike (see combat.js) grants only the hits actually
-// remaining, not a fresh Double Attack's full 2 every time this is called.
+// how many of its attacks it's already used this turn (0 for a fresh/hypothetical unit).
+// A unit with no legal target simply has no attack to take right now — Direct HQ conversion
+// (doc 01 §19) is automatic at end of turn regardless of what the bot does this turn, so it
+// is not a bot decision/action and is not scored here (removed 2026-08-31, Run 1, along with
+// the old reactive mid-turn Empty-Board HQ Strike this used to model).
 export function bestAttackForUnit(state, unitKey, attackCount = 0) {
   const targets = getAttackableTargets(state, unitKey);
-  if (targets.length === 0) {
-    if (!canStrikeHQDirectly(state, unitKey)) return null;
-    const hits = maxAttacksFor(state.board[unitKey]) - attackCount;
-    return { targetKey: null, isHQStrike: true, hits, hqDamage: hits, score: hits * W_HQ, succeeded: true };
-  }
+  if (targets.length === 0) return null;
   let best = null;
   for (const t of targets) {
     const s = scoreAttack(state, unitKey, t.key);
@@ -65,6 +63,8 @@ export function bestExistingAttack(state, active, attackedMap = new Map()) {
 }
 
 // Does any legal, not-yet-exhausted attack right now drop the opponent's HQ to <= 0?
+// Direct HQ conversion is automatic at end of turn (doc 01 §19), not a bot action, so a
+// unit with no legal target is not a "lethal attack" option here — see bestAttackForUnit.
 export function findLethal(state, active, attackedMap = new Map()) {
   const opp = active === "p1" ? "p2" : "p1";
   for (const [key, unit] of Object.entries(state.board)) {
@@ -72,12 +72,7 @@ export function findLethal(state, active, attackedMap = new Map()) {
     const attackCount = attackedMap.get(key) ?? 0;
     if (attackCount >= maxAttacksFor(unit)) continue;
     const targets = getAttackableTargets(state, key);
-    if (targets.length === 0) {
-      if (!canStrikeHQDirectly(state, key)) continue;
-      const hits = maxAttacksFor(unit) - attackCount;
-      if (hits >= state[opp].hq) return { attackerKey: key, targetKey: null, isHQStrike: true };
-      continue;
-    }
+    if (targets.length === 0) continue;
     for (const t of targets) {
       const s = scoreAttack(state, key, t.key);
       if (s.succeeded && s.hqDamage >= state[opp].hq) return { attackerKey: key, targetKey: t.key };
@@ -174,19 +169,22 @@ function exposureRisk(state, unitKey) {
 }
 
 // Rough per-turn value of holding an objective, in the same points scale as W_HQ/W_MATERIAL.
-// HQ-damage figures mirror the payouts in game.js's applyObjectiveEffects (cardId -> level ->
-// direct HQ damage that objective deals its controller's opponent each turn held); everything
-// else an objective grants (fuel, card draw, unit buffs) is approximated with a flat constant
-// since it isn't denominated in HQ damage. Keep in sync if applyObjectiveEffects's numbers change.
+// Run 1 (2026-08-31): game.js's applyObjectiveEffects still switches on the OLD numeric
+// Objective ids (26-33) — verified by reading it directly — so for every currently-live
+// Objective (O1-O5, the only ids state.objectives can ever hold post-migration) that switch is
+// dead code and holding one pays out exactly 0 HQ damage right now, regardless of level. That's
+// not a guess or an oversight here: it's the same "Objective secondary effects — inert" gap
+// STATUS.md already documents as Run 2 scope (re-wiring against the locked 1/1/2/2 HQ backbone).
+// So OBJ_HQ_DMG is intentionally all-zero until that lands — scoring it as anything else would
+// have the bot value objective control for a payout the engine doesn't actually deliver today.
 const OBJ_HQ_DMG = {
-  26: { 1: 0, 2: 0, 3: 0, 4: 2 }, // Factory
-  27: { 1: 0, 2: 1, 3: 1, 4: 4 }, // Airfield
-  28: { 1: 0, 2: 0, 3: 0, 4: 2 }, // Supply Depot
-  31: { 1: 0, 2: 0, 3: 0, 4: 2 }, // City
-  32: { 1: 1, 2: 0, 3: 2, 4: 3 }, // Artillery Position (L2/L4 also land a bonus hit, not counted here)
-  33: { 1: 0, 2: 0, 3: 0, 4: 2 }, // Fortification
+  O1: { 1: 0, 2: 0, 3: 0, 4: 0 }, // Factory
+  O2: { 1: 0, 2: 0, 3: 0, 4: 0 }, // Airfield
+  O3: { 1: 0, 2: 0, 3: 0, 4: 0 }, // Supply Depot
+  O4: { 1: 0, 2: 0, 3: 0, 4: 0 }, // City
+  O5: { 1: 0, 2: 0, 3: 0, 4: 0 }, // Artillery Position
 };
-const OBJ_ECON_VALUE = 4; // flat value for fuel/draw/buff payouts that aren't direct HQ damage
+const OBJ_ECON_VALUE = 4; // flat value for board-presence/area-control alone, pending Run 2's real payouts
 
 function objectiveValue(cardId, level) {
   const hqDmg = OBJ_HQ_DMG[cardId]?.[level] ?? 0;
@@ -269,76 +267,64 @@ export function bestPlacement(state, active, handUnitCardIds, emptyTileKeys) {
   return best;
 }
 
-// For direct-damage commands (Artillery Barrage 16, Air Strike 20, Suppressing Fire 79):
-// prefer the enemy unit closest to being destroyed (best chance of securing a kill).
-export function bestDamageCommandTarget(state, active, candidateKeys) {
-  let best = null;
-  for (const key of candidateKeys) {
-    const unit = state.board[key];
-    if (!unit) continue;
-    const armor = maxArmorHits(unit);
-    const remaining = (armor - unit.armorHits) + (unit.state === "normal" ? 2 : unit.state === "suppressed" ? 1 : 0);
-    // Lower "remaining hits to destroy" = better target. Guard units are riskier to leave up.
-    const guardBonus = getKeywords(unit).includes("Guard") ? 1 : 0;
-    const score = -remaining + guardBonus;
-    if (!best || score > best.score) best = { targetKey: key, score };
-  }
-  return best;
-}
-
 // ── Command scoring ──────────────────────────────────────────────────────────
-// Rough static value for commands whose effect isn't worth simulating precisely — replaces the
-// old flat 0.1 placeholder every command used to get, with numbers roughly proportional to real
-// card power, so a strong utility play can beat a marginal attack/placement but a weak one still
-// won't crowd one out. Commands with real dynamic scoring below aren't listed here.
+// Rough static value for commands whose effect isn't worth simulating precisely — numbers are
+// roughly proportional to real card power, read off each command's actual current effect text in
+// cards.js (never assumed from an old id or a same-named old card — several new-truth commands
+// reuse an old name for a genuinely different effect, e.g. new C24 Suppressing Fire is a
+// permanent +1 buff, not the old id-79 direct-damage command of the same name). Commands with
+// real dynamic scoring below (see scoreCommand) aren't listed here. None of the old numeric
+// direct-damage commands (old Artillery Barrage/Air Strike/Suppressing Fire) survive in the new
+// 35-Command pool — their new-truth namesakes (C30/C33/C24) all grant keywords/attacks/buffs
+// instead, so that whole scoring path (damageCommandValue/bestDamageCommandTarget) is gone, not
+// remapped.
 const COMMAND_UTILITY_VALUE = {
-  19: 2,   // Tactical Withdrawal — card advantage + resets a unit
-  21: 0.1, // Coordinated Strike — not automated in-client (no multi-select targeting UI yet)
-  22: 3,   // Recon — 3 cards
-  49: 2,   // Smoke Screen — 1 turn of Guard on a chosen unit
-  50: 1.5, // Improvised Position — 1 turn of Armor on a vanilla unit
-  52: 2.5, // Forward Observer — card selection
-  53: 0.1, // Pincer Maneuver — not automated in-client (no multi-select targeting UI yet)
-  74: 2,   // Dig In — Guard + Armor near an objective we control
-  75: 2,   // Hold Position — Armor for up to 2 units near an objective we control
-  76: 1.5, // Industrial Surge — delayed fuel
-  78: 3,   // Combined Arms Doctrine — board-wide unsuppress + HQ heal
-  121: 1,  // Priority Orders — Hero Power discount
-  122: 1,  // Command Shuffle — Hero repositioning
-  123: 1,  // Radio Interference — opponent Hero Power tax
-  124: 1,  // Change Formation — rotate a unit
-  125: 2,  // Field Reserves — selective draw
-  126: 2,  // Coordinated Orders — extra Hero Power
-  139: 2,  // Grim Requisition — draw a Deathrattle Unit
-  140: 1,  // Sacrifice Play — situational (redirect 2 HQ damage), costs a unit
-  141: 1.5, // Scorched Earth Rally — board-wide buff, but costs a unit + 2 HQ
+  C04: 2.5, // Forward Observer — card selection (look at top 3, keep 1, arrange the other 2)
+  C05: 2,   // Recon — draw 2 cards
+  C06: 2.5, // Coordinated Strike — 2 friendly Units each gain 1 additional attack vs. a shared target (now automated — see game.js's startCoordinatedStrike)
+  C11: 1.5, // Tactical Withdrawal — card advantage (return a friendly Unit to hand), situational
+  C13: 1.5, // Industrial Surge — delayed +2 Fuel
+  C14: 1,   // Priority Orders — Hero Active discount
+  C15: 1,   // Command Shuffle — Hero repositioning
+  C16: 1,   // Change Formation — rotate a unit
+  C17: 2.5, // Coordinated Order — refreshes used Hero Actives for another activation this turn
+  C18: 1,   // Sacrifice Play — draw 2, but costs a friendly Unit
+  C20: 0.8, // Total Mobilization — +1 all sides, but buffs the enemy's Units too
+  C21: 2,   // Forced March — Maneuver + draw 1
+  C23: 1,   // Emergency Supply — +3 Fuel this turn for 2 self-HQ damage
+  C27: 2,   // Blitzkrieg Order — Maneuver a Tank + Armor (Escalate's 2nd Tank not modeled precisely)
+  C28: 1.5, // Field Repairs — Armor/Heavy Armor upgrade on a Tank
+  C35: 1.5, // Scramble — Maneuver an Aircraft + reset its attacks
 };
 
-// Direct-damage commands: Artillery Barrage (16, guaranteed armor-strip + suppress on 1 enemy),
-// Air Strike (20, 1 hit per friendly Aircraft), Suppressing Fire (79, 1 hit per friendly
-// Infantry). Approximates value from the same "how close to dead" signal bestDamageCommandTarget
-// ranks targets by, scaled by how many hits the command actually lands.
-function damageCommandValue(state, active, cardId) {
-  const hasTarget = Object.values(state.board).some(u => u && u.owner !== active && u.state !== "destroyed");
-  if (!hasTarget) return 0;
-  if (cardId === 16) return W_MATERIAL; // guarantees a suppress-equivalent step regardless of armor
-  const cls = cardId === 20 ? "Aircraft" : cardId === 79 ? "Infantry" : null;
-  if (!cls) return 0;
-  const hits = Object.values(state.board).filter(u => u && u.owner === active && u.state === "normal" && CARD_BY_ID[u.cardId]?.cls === cls).length;
-  return Math.min(hits, 2) * W_MATERIAL; // beyond 2 hits the target is already destroyed either way
+// Shared by any "buff N friendly Units of a class, board-wide" command whose real value depends
+// on how many qualifying Units are actually on the board right now (Suppressing Fire/Entrench/
+// General Offensive/Air Strike/Air Superiority) rather than a single best-target delta —
+// simulating exactly "which N units" for a multi-target buff isn't worth it precisely, so this
+// counts qualifying Units and scales by a flat per-unit weight instead. `hasEscalated` doubles
+// the estimate for Escalate-bearing commands since an Escalated play is this same effect at
+// roughly double strength (bigger bonus, or twice the target count) — harmless no-op for
+// commands that don't have an Escalate mode at all (the name was simply never marked used).
+function boardWideClassBuffValue(state, active, cls, cardName, perUnitWeight = 1) {
+  const count = Object.values(state.board).filter(u => u && u.owner === active && u.state !== "destroyed" && (!cls || CARD_BY_ID[u.cardId]?.cls === cls)).length;
+  if (count === 0) return 0;
+  const escalated = hasEscalated(state[active], cardName);
+  return count * perUnitWeight * (escalated ? 2 : 1);
 }
 
-// Shared by buff-before-attack commands (Rally Cry/Entrench) and Tactical Commander's Hero
-// Power (92, same "+1 all sides this turn" mechanic, but restricted to its own column): finds
-// the friendly unit — optionally restricted by class and/or column — whose best available attack
-// improves most from a +bonus all-sides buff. Returns { key, delta } (delta may be 0 if no
-// eligible unit's attack actually improves) or null if no eligible unit exists at all.
-function bestBuffTarget(state, active, bonus, attackedMap, { clsFilter = null, colFilter = null } = {}) {
+// Shared by buff-before-attack commands (Rally Cry C03/Hold Position C10/Improvised Position C02)
+// and Tactical Commander's Hero Power (H03, same "+N all sides" mechanic, but restricted to its
+// own column): finds the friendly unit — optionally restricted by class, column, and/or an
+// arbitrary predicate (e.g. "doesn't already have Armor") — whose best available attack improves
+// most from a +bonus all-sides buff. Returns { key, delta } (delta may be 0 if no eligible unit's
+// attack actually improves) or null if no eligible unit exists at all.
+function bestBuffTarget(state, active, bonus, attackedMap, { clsFilter = null, colFilter = null, filterFn = null } = {}) {
   let best = null;
   for (const [key, unit] of Object.entries(state.board)) {
     if (!unit || unit.owner !== active || unit.state !== "normal") continue;
     if (clsFilter && CARD_BY_ID[unit.cardId]?.cls !== clsFilter) continue;
     if (colFilter != null && Number(key.split(",")[1]) !== colFilter) continue;
+    if (filterFn && !filterFn(unit)) continue;
     const attackCount = attackedMap.get(key) ?? 0;
     if (attackCount >= maxAttacksFor(unit)) continue;
 
@@ -353,20 +339,66 @@ function bestBuffTarget(state, active, bonus, attackedMap, { clsFilter = null, c
   return best;
 }
 
-// Rally Cry (51, +1 all sides, any unit) / Entrench (80, +2 all sides, Infantry only) can turn a
-// losing or low-value attack into a much better one, or unlock lethal. Score by the marginal
-// improvement to the best available attack among units the buff could apply to — a plain attack
-// score without the buff would otherwise look better on its own and get played first, leaving
-// the buff's value on the table for a turn that can't recover it.
-function buffBeforeAttackValue(state, active, cardId, attackedMap) {
-  const bonus = cardId === 80 ? 2 : cardId === 51 ? 1 : 0;
-  if (bonus === 0) return 0;
-  const clsFilter = cardId === 80 ? "Infantry" : null;
-  return bestBuffTarget(state, active, bonus, attackedMap, { clsFilter })?.delta ?? 0;
+// Shared by keyword-granting Powers/Commands that pick 1 friendly Unit (optionally class- and/or
+// column-restricted) to hand a new keyword to for the rest of the turn (Fire Support Officer H12/
+// Artillery Commander H18's Bombard/Blast grants, Target Coordinates C31/Artillery Barrage C30's
+// Precision/Barrage grants): values it the same way bestBuffTarget values a stat buff — by how
+// much it improves that Unit's best available attack right now (Bombard/Blast/Barrage/Precision
+// can unlock or improve an attack that wasn't legal, or wasn't as good, before). Returns
+// { key, delta } or null if no eligible Unit exists.
+function bestKeywordGrantTarget(state, active, keyword, attackedMap, { clsFilter = null, colFilter = null } = {}) {
+  let best = null;
+  for (const [key, unit] of Object.entries(state.board)) {
+    if (!unit || unit.owner !== active || unit.state !== "normal") continue;
+    if (clsFilter && CARD_BY_ID[unit.cardId]?.cls !== clsFilter) continue;
+    if (colFilter != null && Number(key.split(",")[1]) !== colFilter) continue;
+    if (getKeywords(unit).includes(keyword)) continue; // already has it — no delta
+    const attackCount = attackedMap.get(key) ?? 0;
+    if (attackCount >= maxAttacksFor(unit)) continue;
+
+    const before = bestAttackForUnit(state, key, attackCount);
+    const grantedUnit = { ...unit, tempKeywords: [...(unit.tempKeywords || []), keyword] };
+    const hypoState = { ...state, board: { ...state.board, [key]: grantedUnit } };
+    const after = bestAttackForUnit(hypoState, key, attackCount);
+
+    const delta = (after?.score ?? 0) - (before?.score ?? 0);
+    if (!best || delta > best.delta) best = { key, delta };
+  }
+  return best;
 }
 
-// Overrun (73): +1 HQ damage per Suppress/Destroy this turn — valuable in proportion to how many
-// successful attacks are already lined up this turn, so it should be played before attacking.
+// Rally Cry (C03, +1 all sides, up to 2 Units) / Hold Position (C10, +2 all sides, up to 2
+// Units) / Improvised Position (C02, +2 all sides, 1 Unit without Armor) can turn a losing or
+// low-value attack into a much better one, or unlock lethal. Score by the marginal improvement to
+// the best available attack among units the buff could apply to. Approximates each "up to 2
+// Units" command by its single best target only — a real lower bound, not the true 2-target
+// value, but simulating every pair isn't worth it here.
+function buffBeforeAttackValue(state, active, cardId, attackedMap) {
+  const bonus = cardId === "C10" || cardId === "C02" ? 2 : 1; // C03 Rally Cry uses 1
+  const filterFn = cardId === "C02" ? (u => !getKeywords(u).includes("Armor") && !getKeywords(u).includes("Heavy Armor")) : null;
+  return bestBuffTarget(state, active, bonus, attackedMap, { filterFn })?.delta ?? 0;
+}
+
+// Second Wind (C08): remove Suppression from 1 friendly Unit AND give it +2 all sides until end
+// of turn. Same restore-to-normal step as bestUnsuppressTarget, plus the extra buff applied
+// before scoring its best attack — can't reuse bestBuffTarget for this since that helper only
+// ever considers already-normal Units, and this command's whole point is a suppressed one.
+function bestUnsuppressAndBuffTarget(state, active, bonus) {
+  let best = null;
+  for (const [key, unit] of Object.entries(state.board)) {
+    if (!unit || unit.owner !== active || unit.state !== "suppressed") continue;
+    const restored = { ...unit, state: "normal", tempSideBonus: (unit.tempSideBonus ?? 0) + bonus };
+    const hypoState = { ...state, board: { ...state.board, [key]: restored } };
+    const atk = bestAttackForUnit(hypoState, key, 0);
+    const score = atk?.succeeded ? atk.score : 0;
+    if (!best || score > best.score) best = { key, score };
+  }
+  return best;
+}
+
+// Overrun (C09): Suppress/Destroy landed after this resolves deal extra HQ damage — valuable in
+// proportion to how many successful attacks are already lined up this turn, so it should be
+// played before attacking.
 function overrunValue(state, active, attackedMap) {
   let count = 0;
   for (const [key, unit] of Object.entries(state.board)) {
@@ -379,26 +411,20 @@ function overrunValue(state, active, attackedMap) {
   return count * W_HQ;
 }
 
-// Blitzkrieg Order (17): lets one friendly Tank attack "as if just deployed." Only real value
-// when that Tank has ALREADY used its attack(s) this turn — otherwise the normal attack-scoring
-// path already finds the same attack for free, no command needed.
-function blitzkriegOrderValue(state, active, attackedMap) {
-  let best = 0;
-  for (const [key, unit] of Object.entries(state.board)) {
-    if (!unit || unit.owner !== active || unit.state !== "normal") continue;
-    if (CARD_BY_ID[unit.cardId]?.cls !== "Tank") continue;
-    const attackCount = attackedMap.get(key) ?? 0;
-    if (attackCount < maxAttacksFor(unit)) continue; // already has a free attack — command adds nothing
-    const atk = bestAttackForUnit(state, key, 0);
-    if (atk?.succeeded && atk.score > best) best = atk.score;
-  }
-  return best;
+// Armored Offensive (C29) / Command Specialist's Hero Power (H09, same "next X costs less"
+// shape) / Armored Commander's Hero Power (H07, same shape, column-scoped): only worth playing
+// ahead of time if the relevant card type is actually in hand to benefit from the discount.
+function handHasClass(state, active, cls) {
+  return state[active].hand.some(id => CARD_BY_ID[id]?.cls === cls);
+}
+function handHasType(state, active, type) {
+  return state[active].hand.some(id => CARD_BY_ID[id]?.type === type);
 }
 
-// Shared by Field Medic/Last Stand and Recovery Officer's Hero Power (100, same "remove
-// Suppression" mechanic, but restricted to its own column): finds the suppressed friendly unit
-// — optionally restricted by column — whose restored attack is most valuable. Returns
-// { key, score } or null if no suppressed friendly unit exists (in that column, if filtered).
+// Shared by Field Medic (C01) and Recovery Officer's Hero Power (H05, same "remove Suppression"
+// mechanic, but restricted to its own column): finds the suppressed friendly unit — optionally
+// restricted by column — whose restored attack is most valuable. Returns { key, score } or null
+// if no suppressed friendly unit exists (in that column, if filtered).
 function bestUnsuppressTarget(state, active, { colFilter = null } = {}) {
   let best = null;
   for (const [key, unit] of Object.entries(state.board)) {
@@ -413,38 +439,41 @@ function bestUnsuppressTarget(state, active, { colFilter = null } = {}) {
   return best;
 }
 
-// Field Medic (18) / Last Stand (54): removing Suppression restores a unit to "normal" and gives
-// it an attack again this turn — value it by that unit's best available attack once restored.
+// Field Medic (C01): removing Suppression restores a unit to "normal" and gives it an attack
+// again this turn — value it by that unit's best available attack once restored.
 function unsuppressValue(state, active) {
   return bestUnsuppressTarget(state, active)?.score ?? 0;
 }
 
-// Best available score for playing cardId right now. Dynamically-scored commands fall back to
-// a 0.1 floor (matching the old universal placeholder) when their situational value is zero —
-// e.g. Field Medic with nothing suppressed — so they're still played opportunistically rather
-// than never, same as before.
-export function scoreCommand(state, active, cardId, attackedMap = new Map()) {
-  if (cardId === 16 || cardId === 20 || cardId === 79) return damageCommandValue(state, active, cardId);
-  if (cardId === 51 || cardId === 80) return Math.max(buffBeforeAttackValue(state, active, cardId, attackedMap), 0.1);
-  if (cardId === 73) return Math.max(overrunValue(state, active, attackedMap), 0.1);
-  if (cardId === 17) return Math.max(blitzkriegOrderValue(state, active, attackedMap), 0.1);
-  if (cardId === 18 || cardId === 54) return Math.max(unsuppressValue(state, active), 0.1);
-  return COMMAND_UTILITY_VALUE[cardId] ?? 0.1;
+// Combined Arms Doctrine (C07): board-wide unsuppress + draw 1. Sums every suppressed friendly
+// unit's restored-attack value (not just the single best one, since ALL of them get unsuppressed)
+// plus a flat card-advantage bonus for the draw.
+function combinedArmsValue(state, active) {
+  let total = 1; // flat value for the draw
+  for (const [key, unit] of Object.entries(state.board)) {
+    if (!unit || unit.owner !== active || unit.state !== "suppressed") continue;
+    const restored = { ...unit, state: "normal" };
+    const hypoState = { ...state, board: { ...state.board, [key]: restored } };
+    const atk = bestAttackForUnit(hypoState, key, 0);
+    if (atk?.succeeded) total += atk.score;
+  }
+  return total;
 }
 
-// ── Hero Power activation ────────────────────────────────────────────────────
-// Only implemented, powerType:"active" Heroes have a real Power to activate — mirrors
-// heroTargetKeys()/applyHeroPower() in game.js, the authoritative rules being approximated here.
-// Static value for Powers not worth simulating precisely (87's draw and the two discount
-// enablers get a lighter dynamic nudge below); 92/99/100 are fully dynamic.
-const HERO_POWER_UTILITY_VALUE = {
-  87: 2,   // Quartermaster General — draw 1 card, instant, no target
-  144: 1.5, // Field Marshal — permanent escalating board-wide buff, instant, no target
-  145: 2,  // Sector Commander — +2 all sides to a whole column, instant, no per-unit target
-};
+// Scorched Earth Raid (C19): destroy 1 friendly Unit, deal 2 HQ damage instead of that Unit's
+// normal destruction result, bypassing Guard. Denominated directly in the same HQ/Material scale
+// as combat: 2 guaranteed HQ points minus the rough cost of losing a full Unit (its own
+// destruction is worth 2 material steps, same weight an enemy kill would score).
+function scorchedEarthRaidValue(state, active) {
+  const hasFriendlyUnit = Object.values(state.board).some(u => u && u.owner === active && u.state !== "destroyed");
+  if (!hasFriendlyUnit) return 0;
+  return 2 * W_HQ - 2 * W_MATERIAL;
+}
 
-// Garrison Commander (99): friendly units adjacent to (not on) an Objective, board-wide — same
-// candidate rule as heroTargetKeys() case 99 in game.js.
+// Objective Push (C22) / (previously) Garrison Commander's Hero Power: friendly Units orthogonally
+// adjacent to an Objective. Approximates the multi-target buff by counting how many friendly
+// Units are currently adjacent to ANY Objective (a real per-Objective choice exists in the UI,
+// but this is a fair proxy for "is there a good Objective to push right now").
 function friendlyUnitsAdjacentToObjective(state, active) {
   const keys = [];
   for (const [key, unit] of Object.entries(state.board)) {
@@ -456,20 +485,87 @@ function friendlyUnitsAdjacentToObjective(state, active) {
   return keys;
 }
 
-// Best target for a targeted Hero Power (92 Tactical Commander, 99 Garrison Commander, 100
-// Recovery Officer). Returns { key } (or { key, delta }/{ key, score } from the shared helpers)
-// or null if no legal target exists. 87/103/107 are instant/boardwide-effect Powers with no
-// target to pick, so they return null here (handled by flat/dynamic scoring in scoreHeroPower
-// instead) — callers should only invoke this for 92/99/100.
-export function bestHeroPowerTarget(state, active, heroId, col, attackedMap = new Map()) {
-  if (heroId === 92) return bestBuffTarget(state, active, 1, attackedMap, { colFilter: col });
-  if (heroId === 100) return bestUnsuppressTarget(state, active, { colFilter: col });
-  if (heroId === 99) {
-    const candidates = friendlyUnitsAdjacentToObjective(state, active);
-    if (candidates.length === 0) return null;
-    const withoutGuard = candidates.find(k => !getKeywords(state.board[k]).includes("Guard"));
-    return { key: withoutGuard ?? candidates[0] };
+// Best available score for playing cardId right now. Dynamically-scored commands fall back to
+// a 0.1 floor (matching the old universal placeholder) when their situational value is zero —
+// e.g. Field Medic with nothing suppressed — so they're still played opportunistically rather
+// than never, same as before.
+export function scoreCommand(state, active, cardId, attackedMap = new Map()) {
+  const card = CARD_BY_ID[cardId];
+  if (cardId === "C01") return Math.max(unsuppressValue(state, active), 0.1);
+  if (cardId === "C02" || cardId === "C03" || cardId === "C10") return Math.max(buffBeforeAttackValue(state, active, cardId, attackedMap), 0.1);
+  if (cardId === "C07") return combinedArmsValue(state, active);
+  if (cardId === "C08") return Math.max(bestUnsuppressAndBuffTarget(state, active, 2)?.score ?? 0, 0.1);
+  if (cardId === "C09") return Math.max(overrunValue(state, active, attackedMap), 0.1);
+  if (cardId === "C12") return Math.max(bestKeywordGrantTarget(state, active, "Guard", attackedMap)?.delta ?? 0, 0.1);
+  if (cardId === "C19") return Math.max(scorchedEarthRaidValue(state, active), 0.1);
+  if (cardId === "C22") return Math.max(friendlyUnitsAdjacentToObjective(state, active).length * 0.5, 0.1);
+  if (cardId === "C24") return Math.max(boardWideClassBuffValue(state, active, "Infantry", card?.name, 0.3), 0.1); // single-target permanent +1, approximated as a small per-Infantry-on-board nudge
+  if (cardId === "C25") return Math.max(boardWideClassBuffValue(state, active, "Infantry", card?.name, 0.5), 0.1);
+  if (cardId === "C26") return Math.max(boardWideClassBuffValue(state, active, "Infantry", card?.name, 0.6), 0.1);
+  if (cardId === "C29") return handHasClass(state, active, "Tank") ? 1.5 : 0.5;
+  if (cardId === "C30") return Math.max(bestKeywordGrantTarget(state, active, "Barrage", attackedMap, { clsFilter: "Artillery" })?.delta ?? 0, 0.1);
+  if (cardId === "C31") return Math.max(bestKeywordGrantTarget(state, active, "Precision", attackedMap, { clsFilter: "Artillery" })?.delta ?? 0, 0.1);
+  if (cardId === "C32") return Math.max(bestKeywordGrantTarget(state, active, "Blast", attackedMap, { clsFilter: "Artillery" })?.delta ?? 0, 0.1) + 0.5; // + flat nudge for the accompanying Barrage grant
+  if (cardId === "C33") return Math.max(boardWideClassBuffValue(state, active, "Aircraft", card?.name, W_MATERIAL * 0.5), 0.1);
+  if (cardId === "C34") return Math.max(boardWideClassBuffValue(state, active, "Aircraft", card?.name, 0.6), 0.1);
+  return COMMAND_UTILITY_VALUE[cardId] ?? 0.1;
+}
+
+// ── Hero Power activation ────────────────────────────────────────────────────
+// Only implemented, powerType:"active" Heroes have a real Power to activate — mirrors
+// heroTargetKeys()/applyHeroPower() in game.js, the authoritative rules being approximated here.
+// Static value for Powers not worth simulating precisely; H03/H05/H07/H09/H10/H12/H15/H18/H22/
+// H23 are dynamic below.
+const HERO_POWER_UTILITY_VALUE = {
+  H01: 2,    // Quartermaster General — draw 1 card, instant, no target
+  H11: 0.5,  // Field Coordinator — rotate a Unit in column; direction doesn't affect scoring
+  H16: 1,    // Maneuver Commander — Maneuver + reset attacks in column; repositioning utility
+  H17: W_HQ, // HQ Assault Commander — 1 guaranteed enemy-HQ damage, same currency as combat
+  H24: 1.5,  // Long War Commander — escalating permanent buff; Power-level scaling not modeled precisely
+  H25: 2,    // Chief Aircraft Engineer — Craft, card/board advantage via the 3-candidate picker
+};
+
+// Strike Commander (H15): direct Hit on an enemy Unit in this Hero's column, bypassing attack
+// comparison entirely (see applyHit in state.js — the same Suppress/Destroy ladder combat uses).
+function bestHeroHitTarget(state, active, col) {
+  const opp = active === "p1" ? "p2" : "p1";
+  let best = null;
+  for (const [key, unit] of Object.entries(state.board)) {
+    if (!unit || unit.owner !== opp || unit.state === "destroyed") continue;
+    if (Number(key.split(",")[1]) !== col) continue;
+    const { newUnit, hqDamage } = applyHit(unit);
+    const score = severityStep(unit, newUnit) * W_MATERIAL + hqDamage * W_HQ;
+    if (!best || score > best.score) best = { key, score };
   }
+  return best;
+}
+
+// Frontline Marshal (H22): +2 all sides to a whole column, friendly AND enemy — net value
+// depends on who has more presence in that column right now; a simple friendly-minus-enemy
+// unit-count differential is a fair proxy for "does this help us more than it helps them."
+function columnNetPresence(state, active, col) {
+  let friendly = 0, enemy = 0;
+  for (let row = 0; row < 4; row++) {
+    const u = state.board[`${row},${col}`];
+    if (!u || u.state === "destroyed") continue;
+    if (u.owner === active) friendly++; else enemy++;
+  }
+  return friendly - enemy;
+}
+
+// Best target for a targeted Hero Power (H03 Tactical Commander, H05 Recovery Officer, H10
+// Conventional Warfare Commander, H12 Fire Support Officer, H15 Strike Commander, H18 Artillery
+// Commander). Returns { key } (or { key, delta }/{ key, score } from the shared helpers) or null
+// if no legal target exists. Instant/board-wide-effect Powers have no target to pick, so they
+// return null here (handled by flat/dynamic scoring in scoreHeroPower instead) — callers should
+// only invoke this for the targeted Powers listed above.
+export function bestHeroPowerTarget(state, active, heroId, col, attackedMap = new Map()) {
+  if (heroId === "H03") return bestBuffTarget(state, active, 1, attackedMap, { colFilter: col });
+  if (heroId === "H05") return bestUnsuppressTarget(state, active, { colFilter: col });
+  if (heroId === "H10") return bestBuffTarget(state, active, 3, attackedMap, { filterFn: u => !CARD_BY_ID[u.cardId]?.keyword });
+  if (heroId === "H12") return bestKeywordGrantTarget(state, active, "Bombard", attackedMap, { colFilter: col });
+  if (heroId === "H15") return bestHeroHitTarget(state, active, col);
+  if (heroId === "H18") return bestKeywordGrantTarget(state, active, "Blast", attackedMap, { clsFilter: "Artillery", colFilter: col });
   return null;
 }
 
@@ -478,12 +574,18 @@ export function bestHeroPowerTarget(state, active, heroId, col, attackedMap = ne
 // Recovery Officer with nothing suppressed in its column) — still played opportunistically, same
 // spirit as scoreCommand's floor.
 export function scoreHeroPower(state, active, heroId, col, attackedMap = new Map()) {
-  if (heroId === 92) return Math.max(bestBuffTarget(state, active, 1, attackedMap, { colFilter: col })?.delta ?? 0, 0.1);
-  if (heroId === 100) return Math.max(bestUnsuppressTarget(state, active, { colFilter: col })?.score ?? 0, 0.1);
-  if (heroId === 99) return friendlyUnitsAdjacentToObjective(state, active).length > 0 ? 1.5 : 0.1;
-  if (heroId === 103) return state[active].hand.some(id => CARD_BY_ID[id]?.cls === "Tank") ? 1.5 : 0.5;
-  if (heroId === 107) return state[active].hand.some(id => CARD_BY_ID[id]?.type === "command") ? 1.5 : 0.5;
-  return HERO_POWER_UTILITY_VALUE[heroId] ?? 0.1; // 87 (instant draw) and any future implemented Hero
+  if (heroId === "H03") return Math.max(bestBuffTarget(state, active, 1, attackedMap, { colFilter: col })?.delta ?? 0, 0.1);
+  if (heroId === "H05") return Math.max(bestUnsuppressTarget(state, active, { colFilter: col })?.score ?? 0, 0.1);
+  if (heroId === "H07") return handHasClass(state, active, "Tank") ? 1.5 : 0.5;
+  if (heroId === "H09") return handHasType(state, active, "command") ? 1.5 : 0.5;
+  if (heroId === "H10") return Math.max(bestBuffTarget(state, active, 3, attackedMap, { filterFn: u => !CARD_BY_ID[u.cardId]?.keyword })?.delta ?? 0, 0.1);
+  if (heroId === "H12") return Math.max(bestKeywordGrantTarget(state, active, "Bombard", attackedMap, { colFilter: col })?.delta ?? 0, 0.1);
+  if (heroId === "H15") return Math.max(bestHeroHitTarget(state, active, col)?.score ?? 0, 0.1);
+  if (heroId === "H18") return Math.max(bestKeywordGrantTarget(state, active, "Blast", attackedMap, { clsFilter: "Artillery", colFilter: col })?.delta ?? 0, 0.1);
+  if (heroId === "H19") return Math.max(state[active].hand.filter(id => { const c = CARD_BY_ID[id]; return c?.type === "unit" && (c.cost === 1 || c.cost === 2); }).length, 0.1);
+  if (heroId === "H22") return Math.max(columnNetPresence(state, active, col) * 1.5, 0.1);
+  if (heroId === "H23") return Math.max(Object.values(state.board).filter(u => u && u.owner === active && u.state !== "destroyed").length * 0.4, 0.1);
+  return HERO_POWER_UTILITY_VALUE[heroId] ?? 0.1;
 }
 
 // ── Hero deployment ──────────────────────────────────────────────────────────

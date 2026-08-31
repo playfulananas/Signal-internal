@@ -1,5 +1,6 @@
 // Unit tests for the primitives the Hero layer is built on. Run: node --test tests/
 // These are pure functions — no DOM, no Firebase.
+// Updated 2026-08-31 (Run 1, Set 1 surgical update) for the new 25-Hero pool and card id scheme.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { columnKeys, unitsInColumn, unitsOnBoard } from '../js/combat.js';
@@ -13,7 +14,7 @@ function boardWith(entries) {
   for (let r = 0; r < 4; r++) for (let c = 0; c < 4; c++) board[`${r},${c}`] = null;
   return { ...board, ...entries };
 }
-const unit = (owner, state = 'normal') => ({ cardId: 1, owner, state, armorHits: 0 });
+const unit = (owner, state = 'normal') => ({ cardId: 'I1', owner, state, armorHits: 0 });
 
 test('columnKeys returns the 4 tiles of a column, top to bottom', () => {
   assert.deepEqual(columnKeys(0), ['0,0', '1,0', '2,0', '3,0']);
@@ -55,13 +56,13 @@ test('unitsOnBoard filters by owner and excludes destroyed units, same as unitsI
 });
 
 test('getKeywords deduplicates — a unit with innate Guard that also gets granted Guard shows it once', () => {
-  const guardCard = 62; // Bunker Crew — innate Guard (see cards.js)
+  const guardCard = 'I6'; // Shield Bearers — innate Guard (see cards.js)
   const unitWithGrant = { cardId: guardCard, tempKeywords: [], grantedKeywords: ['Guard'] };
   assert.deepEqual(getKeywords(unitWithGrant), ['Guard']);
 });
 
 test('getKeywords still returns distinct keywords from different sources untouched', () => {
-  const unitMixed = { cardId: 62, tempKeywords: ['Armor'], grantedKeywords: ['Guard'] };
+  const unitMixed = { cardId: 'I6', tempKeywords: ['Armor'], grantedKeywords: ['Guard'] };
   assert.deepEqual(getKeywords(unitMixed), ['Guard', 'Armor']);
 });
 
@@ -88,31 +89,28 @@ test('unsuppressOnBoard is a no-op on a destroyed unit and on an empty tile', ()
 });
 
 test('every hero carries an authoritative scope and implemented flag', () => {
-  // Scope must never be inferred from ability wording — hero 93 reads "this Hero's column"
-  // only after a 2026-08-01 rewording, and text matching had misread it as board-scoped.
+  // Scope must never be inferred from ability wording.
   const heroes = CARDS.filter(c => c.type === 'hero');
-  // 30 as of 2026-08-19 — Week 3 batch added 6 (142-147); Weird AirCraft (250) deliberately
-  // not added — parked, see cards.js header.
-  assert.equal(heroes.length, 30);
+  // 25 as of 2026-08-31 (Run 1, Set 1 truth-lock) — replaces the pre-migration 30-Hero pool.
+  assert.equal(heroes.length, 25);
   for (const h of heroes) {
     assert.ok(['column', 'board'].includes(h.scope), `${h.name} has no valid scope`);
     assert.equal(typeof h.implemented, 'boolean', `${h.name} has no implemented flag`);
   }
-  // 18 implemented as of 2026-08-19 — all 6 Week 3 heroes shipped implemented.
-  assert.equal(heroes.filter(h => h.implemented).length, 18);
-  // 16 column / 14 board as of 2026-08-19 — Week 3 added 2 column (142, 145) + 4 board
-  // (143, 144, 146, 147).
-  assert.equal(heroes.filter(h => h.scope === 'column').length, 16);
+  // All 25 are implemented in Run 1 — no partial/parked Tier-1 subset anymore.
+  assert.equal(heroes.filter(h => h.implemented).length, 25);
+  // 12 column / 13 board — see cards.js's Hero list.
+  assert.equal(heroes.filter(h => h.scope === 'column').length, 12);
+  assert.equal(heroes.filter(h => h.scope === 'board').length, 13);
 });
 
-test('implemented heroes cover both scopes, both power types, and all 3 Commons', () => {
+test('implemented heroes cover both scopes and multiple power types', () => {
   const impl = CARDS.filter(c => c.type === 'hero' && c.implemented);
-  // 10 active as of 2026-08-19 — Week 3 added 3 active (142, 144, 145).
-  assert.equal(impl.filter(h => h.powerType === 'active').length, 10);
-  // 8 passive as of 2026-08-19 — Week 3 added 3 passive (143, 146, 147).
+  assert.equal(impl.length, 25);
+  assert.equal(impl.filter(h => h.powerType === 'active').length, 16);
   assert.equal(impl.filter(h => h.powerType === 'passive').length, 8);
+  assert.equal(impl.filter(h => h.powerType === 'hybrid').length, 1); // Long War Commander (H24)
   assert.ok(impl.some(h => h.scope === 'board') && impl.some(h => h.scope === 'column'));
-  assert.equal(impl.filter(h => h.rarity === 'Common').length, 3);
 });
 
 test('a retired hero is never also marked implemented', () => {
@@ -121,8 +119,7 @@ test('a retired hero is never also marked implemented', () => {
 });
 
 test('every starter deck roster uses only implemented heroes', async () => {
-  // A deck stocked with deferred Heroes looks fine but plays as if it had none — the aggro
-  // deck shipped that way until 2026-08-03. Assert it so it can't regress silently.
+  // A deck stocked with deferred Heroes looks fine but plays as if it had none.
   const { STARTER_DECKS } = await import('../js/decks.js');
   const byId = Object.fromEntries(CARDS.map(c => [c.id, c]));
   for (const d of STARTER_DECKS) {

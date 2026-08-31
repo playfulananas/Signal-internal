@@ -12,7 +12,7 @@ function boardWith(entries) {
   for (let r = 0; r < 4; r++) for (let c = 0; c < 4; c++) board[`${r},${c}`] = null;
   return { ...board, ...entries };
 }
-const unit = (owner, cardId = 1, extra = {}) => ({ cardId, owner, state: 'normal', armorHits: 0, ...extra });
+const unit = (owner, cardId = 'I1', extra = {}) => ({ cardId, owner, state: 'normal', armorHits: 0, ...extra });
 
 test('canStrikeHQDirectly is false on Turn 1 even with an empty opponent board', () => {
   const state = { turn: 1, board: boardWith({ '0,0': unit('p1') }) };
@@ -36,7 +36,7 @@ test('canStrikeHQDirectly is true when the opponent\'s only unit is destroyed (n
 });
 
 test('resolveEmptyBoardStrike with hits=1 damages only the opponent and names the unit', () => {
-  const state = { turn: 3, board: boardWith({ '0,0': unit('p1', 1) }) }; // Rifle Squad
+  const state = { turn: 3, board: boardWith({ '0,0': unit('p1', 'I1') }) }; // Rifle Squad
   const result = resolveEmptyBoardStrike(state, '0,0', 1);
   assert.deepEqual(result.boardMutations, []);
   assert.equal(result.hqDamageToP1, 0);
@@ -46,11 +46,11 @@ test('resolveEmptyBoardStrike with hits=1 damages only the opponent and names th
 });
 
 test('resolveEmptyBoardStrike with hits=2 (Double Attack, single call) deals 2 damage', () => {
-  const state = { turn: 3, board: boardWith({ '0,0': unit('p2', 8) }) }; // Tank Hunter, Double Attack
+  const state = { turn: 3, board: boardWith({ '0,0': unit('p2', 'T36') }) }; // Flak Halftrack, Double Attack
   const result = resolveEmptyBoardStrike(state, '0,0', 2);
   assert.equal(result.hqDamageToP1, 2);
   assert.equal(result.hqDamageToP2, 0);
-  assert.match(result.logEntries[0], /Tank Hunter/);
+  assert.match(result.logEntries[0], /Flak Halftrack/);
   assert.match(result.logEntries[0], /2 HQ damage/);
 });
 
@@ -58,13 +58,13 @@ test('resolveEmptyBoardStrike never applies Overrun itself — that is a game.js
   // Overrun lives on PlayerState (p1.overrun), not on the board unit or in combat.js's pure
   // functions — resolveEmptyBoardStrike has no access to it and must not need to, since
   // applying it here would risk double-counting once game.js's own Overrun check also runs.
-  const state = { turn: 3, board: boardWith({ '0,0': unit('p1', 1) }), p1: { overrun: true } };
+  const state = { turn: 3, board: boardWith({ '0,0': unit('p1', 'I1') }), p1: { overrun: true } };
   const result = resolveEmptyBoardStrike(state, '0,0', 1);
   assert.equal(result.hqDamageToP2, 1, 'exactly hits, no accidental +1');
 });
 
 test('boardMutations is always empty, so a caller\'s wasDestroyed check correctly treats an HQ strike as no kill', () => {
-  const state = { turn: 3, board: boardWith({ '0,0': unit('p1', 1) }) };
+  const state = { turn: 3, board: boardWith({ '0,0': unit('p1', 'I1') }) };
   const result = resolveEmptyBoardStrike(state, '0,0', 1);
   const wasDestroyed = result.boardMutations.some(m => m.newUnit === null);
   assert.equal(wasDestroyed, false);

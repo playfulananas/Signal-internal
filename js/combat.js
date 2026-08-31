@@ -1,5 +1,6 @@
-import { CARD_BY_ID } from './cards.js?v=1787180674';
-import { getSideValue, getKeywords, attackBeats, applyHit, oppositeDir, unsuppressOnBoard, drawCards, addDiscount } from './state.js?v=1787180674';
+import { CARD_BY_ID, registerGeneratedCard } from './cards.js?v=1788180619';
+import { getSideValue, getKeywords, attackBeats, applyHit, oppositeDir, unsuppressOnBoard, drawCards, addDiscount, remainingAttacks, spendAttack, grantTempAttacks, resetPersistentAttacks, fuelCapOf, gainFuel } from './state.js?v=1788180619';
+import { canPlaceOnTerrain, getTerrain } from './maps.js?v=1788180619';
 
 // Orthogonal directions and their row/col offsets.
 const DIRS = ["n", "e", "s", "w"];
@@ -95,305 +96,422 @@ export function resolveEmptyBoardStrike(state, attackerKey, hits) {
   };
 }
 
-// ── Hero passives — triggered on unit placement ─────────────────────────────
-// Objective Marshal (94), Infantry Commander (104), Combined Arms General (109), and
-// Conventional Warfare Commander (110) each grant "+1 all sides until your next turn" to
-// the first qualifying Unit their controller plays each turn. Each gates on
-// heroTriggeredThisTurn so it fires once per owner turn no matter how many cards are
-// played. grantedSideBonus/sideBonusTurns:1 clears at the owner's next startOfTurn — see
-// the field comment in state.js.
-// Pure: takes/returns state, does no DOM or CARD_BY_ID lookups beyond names for the log.
-// hasColumnFreedom / inHeroScope: Supreme Commander (143) — "your other Heroes' column-scoped
-// powers affect your whole board instead of just their own column." Shared by every
-// column-scoped Hero check (here and heroTargetKeys/applyHeroPower's 91/92/100/142/145 cases in
-// game.js) so there's one definition of what "column freedom" means, not one per Hero.
-export function hasColumnFreedom(playerState) {
-  return (playerState.heroZones ?? []).includes(143);
+// ── Direct HQ (doc 01 §19, doc 02 Q104-Q106) ────────────────────────────────
+// Automatic FINAL end-of-turn pressure — NOT a normal Action-phase attack, and NOT a rewire
+// of the old "Empty-Board HQ Strike" (which fired reactively mid-turn, only when the whole
+// opponent board was empty). Direct HQ replaces that mechanic entirely: it runs exactly once,
+// at end of turn, and evaluates EVERY unit independently regardless of whether the opponent's
+// board is fully empty — a cornered unit with no reachable target converts even with other
+// enemy units alive elsewhere on the board (something the old mechanic never covered).
+//
+// Per unit, in fixed board scan order:
+//   - Suppressed/destroyed units are skipped unconditionally — they cannot attack at all,
+//     checked BEFORE remaining-attacks/legal-target computation (doc 01 §9).
+//   - remainingAttacks(unit) (state.js) already reflects the locked persistent-then-temporary
+//     consumption model.
+//   - getAttackableTargets already includes current temporary Bombard/Precision (via
+//     getKeywords' tempKeywords/grantedKeywords) and a legal target blocks conversion even if
+//     the attacker would lose the stat comparison (getAttackableTargets never checks
+//     attackBeats — only resolveSingleAttack does).
+//   - If no legal target: every remaining attack converts to 1 HQ damage, sequentially,
+//     stopping immediately once the opponent's HQ would reach 0 (checked after each point of
+//     damage, matching doc 01 §19 step 7's "check victory after each damage instance").
+// Turn-1 lock: only the player who moves first can ever be active during state.turn === 1
+// (turn is a global counter that only advances via endTurn's initiative swap), so checking
+// `state.turn === 1` correctly and exclusively targets "Player 1's own first turn" — the
+// second player's first turn is necessarily state.turn === 2 and is never blocked here.
+// Does not call resolveSingleAttack/applyHit and never touches boardMutations/kill-tracking,
+// so it cannot trigger Rally (which requires an actual attack against an enemy Unit).
+export function evaluateDirectHQ(state, activePlayer) {
+  if (state.turn === 1) return { state, log: [], hqDamageToP1: 0, hqDamageToP2: 0 };
+
+  const opponent = activePlayer === 'p1' ? 'p2' : 'p1';
+  let s = state;
+  const log = [];
+  let hqDamageToP1 = 0, hqDamageToP2 = 0;
+
+  for (const key of fixedScanOrder(Object.keys(s.board))) {
+    const unit = s.board[key];
+    if (!unit || unit.owner !== activePlayer || unit.state !== 'normal') continue;
+    const remaining = remainingAttacks(unit);
+    if (remaining <= 0) continue;
+    if (getAttackableTargets(s, key).length > 0) continue; // legal target blocks conversion
+
+    const card = CARD_BY_ID[unit.cardId];
+    let u = unit;
+    let currentOppHq = opponent === 'p1' ? s.p1.hq - hqDamageToP1 : s.p2.hq - hqDamageToP2;
+    for (let i = 0; i < remaining && currentOppHq > 0; i++) {
+      u = spendAttack(u);
+      if (opponent === 'p1') hqDamageToP1 += 1; else hqDamageToP2 += 1;
+      currentOppHq -= 1;
+      log.push(`${card?.name ?? 'Unit'} strikes ${opponent.toUpperCase()}'s HQ directly — 1 HQ damage (no legal target)`);
+    }
+    s = { ...s, board: { ...s.board, [key]: u } };
+  }
+
+  return { state: s, log, hqDamageToP1, hqDamageToP2 };
 }
 
+// ── Hero column-freedom (Supreme Commander, H13) ────────────────────────────
+// "Your other Heroes ignore their Column restrictions" — every other column-scoped Hero
+// check consults this shared helper so there's one definition of what "column freedom" means.
+export function hasColumnFreedom(playerState) {
+  return (playerState.heroZones ?? []).includes('H13');
+}
+
+function inHeroScope(ps, heroId, col) {
+  const zones = ps.heroZones ?? [null, null, null, null];
+  if (!zones.includes(heroId)) return false;
+  return hasColumnFreedom(ps) ? true : zones[col] === heroId;
+}
+
+// ── Hero passives — triggered on unit placement ─────────────────────────────
+// H04 Objective Marshal and H08 Infantry Commander each grant a temporary bonus to the first
+// qualifying Unit their controller plays each turn (gated on heroTriggeredThisTurn so each
+// fires once per owner turn). grantedSideBonus/sideBonusTurns:1 clears at the owner's next
+// startOfTurn — see the field comment in state.js. H21 Emergency Logistics Officer is
+// board-wide and fires on the first Unit played each turn regardless of column/class,
+// resolving AFTER that Unit's own On Play per doc 01 §22 (this function is already only
+// ever called after the placed Unit's own On Play resolves, matching that ordering).
 export function checkHeroPassivesOnPlace(s, active, col, key, card) {
   const ps = s[active];
-  const zones = ps.heroZones ?? [null, null, null, null];
   const triggered = ps.heroTriggeredThisTurn ?? {};
-  const freedom = hasColumnFreedom(ps);
-  const inScope = heroId => freedom ? zones.includes(heroId) : zones[col] === heroId;
   const log = [];
 
-  const fire = (heroId, heroName, reason) => {
+  const fire = (heroId, amount, reason) => {
     const u = s.board[key];
     s = {
       ...s,
-      board: { ...s.board, [key]: { ...u, grantedSideBonus: (u.grantedSideBonus || 0) + 1, sideBonusTurns: 1 } },
+      board: { ...s.board, [key]: { ...u, grantedSideBonus: (u.grantedSideBonus || 0) + amount, sideBonusTurns: 1 } },
       [active]: { ...s[active], heroTriggeredThisTurn: { ...s[active].heroTriggeredThisTurn, [heroId]: true } },
     };
-    log.push(`${heroName}: ${card.name} +1 all sides (until your next turn) — ${reason}`);
+    log.push(`${CARD_BY_ID[heroId].name}: ${card.name} +${amount} all sides (until your next turn) — ${reason}`);
   };
 
-  if (inScope(94) && !triggered[94]) { // Objective Marshal — on/adjacent to an Objective
+  if (inHeroScope(ps, 'H04', col) && !triggered['H04']) { // Objective Marshal — adjacent to an Objective
     const [row, colNum] = tileCoords(key);
     const onOrAdjacent = s.objectives[key] || adjacentTiles(row, colNum).some(({ key: k }) => s.objectives[k]);
-    if (onOrAdjacent) fire(94, CARD_BY_ID[94].name, 'on/adjacent to Objective');
+    if (onOrAdjacent) fire('H04', 1, 'adjacent to Objective');
   }
-  if (inScope(104) && !triggered[104] && card.cls === 'Infantry') { // Infantry Commander
-    fire(104, CARD_BY_ID[104].name, 'first Infantry this turn');
+  if (inHeroScope(ps, 'H08', col) && !triggered['H08'] && card.cls === 'Infantry') { // Infantry Commander
+    fire('H08', 2, 'first Infantry this turn');
   }
-  if (inScope(110) && !triggered[110] && !card.keyword) { // Conventional Warfare Commander
-    fire(110, CARD_BY_ID[110].name, 'first vanilla Unit this turn');
-  }
-  if (zones.includes(109) && !triggered[109] && ps.lastUnitClass != null && ps.lastUnitClass !== card.cls) {
-    fire(109, CARD_BY_ID[109].name, 'mixed-class army'); // Combined Arms General — board-wide
+  if ((ps.heroZones ?? []).includes('H21') && !triggered['H21']) { // Emergency Logistics Officer
+    const fueled = gainFuel(s[active], 1); // normal capped gain (respects Logistics Chief via fuelCapOf), not "this turn" temp Fuel
+    s = {
+      ...s,
+      [active]: { ...fueled, hq: fueled.hq - 1, heroTriggeredThisTurn: { ...fueled.heroTriggeredThisTurn, H21: true } },
+    };
+    log.push(`${CARD_BY_ID['H21'].name}: +1 Fuel, 1 damage to own HQ — first Unit played this turn`);
   }
 
-  s = { ...s, [active]: { ...s[active], lastUnitClass: card.cls } };
   return { state: s, log };
 }
 
-// Pending stat buffs queued by Deathrattle: Convoy Escort (138) — "your next Naval Unit played
-// gets +1 all sides." Mirrors discountFor/consumeDiscounts' one-shot-list shape but for a stat
-// bonus rather than a Fuel discount (see pendingUnitBuffs in state.js). Call at the same
-// placement site as checkHeroPassivesOnPlace/checkUnitOnPlayAbility.
-// Sums ALL queued buffs matching this Unit's class and applies them together to the one
-// Unit being placed, then clears all of them — not just the first match. This is what makes
-// a doubled Deathrattle (Graves Registration Officer, 147, on Convoy Escort 138) stack onto
-// a single next Naval Unit (+2) rather than spreading across the next two (+1 each) — per
-// Filip 2026-08-19. Mirrors discountFor's own "sum every matching entry" behavior, just for
-// a stat bonus instead of a Fuel discount. The QUEUED buff never expires on its own (still
-// valid however many turns pass) but is fully consumed by the FIRST matching Unit played,
-// never split further. The bonus, once APPLIED to that Unit, is PERMANENT — sideBonusTurns:99
-// (same "effectively never expires in a real match" convention as Field Marshal 144), not
-// "until your next turn" — corrected 2026-08-20, per Filip: was wrongly given a 1-turn limit
-// like Veteran Battery (134), which is meant to be temporary; Convoy Escort's isn't.
-export function checkPendingUnitBuff(s, active, key, card) {
-  const ps = s[active];
-  const pending = ps.pendingUnitBuffs ?? [];
-  const matching = pending.filter(b => b.appliesTo === card.cls);
-  if (!matching.length) return { state: s, log: [] };
-  const total = matching.reduce((sum, b) => sum + b.amount, 0);
-  const remaining = pending.filter(b => b.appliesTo !== card.cls);
-  const u = s.board[key];
-  const newState = {
-    ...s,
-    board: { ...s.board, [key]: { ...u, grantedSideBonus: (u.grantedSideBonus || 0) + total, sideBonusTurns: 99 } },
-    [active]: { ...ps, pendingUnitBuffs: remaining },
-  };
-  return { state: newState, log: [`${card.name} +${total} all sides (permanent) — queued bonus`] };
-}
-
-// ── Hero passive — Counteroffensive General (101) ───────────────────────────
-// "The first friendly Unit that gets Suppressed each turn gets +1 all sides until END OF
-// TURN" — tempSideBonus (cleared by endTurn for everyone), not grantedSideBonus like the
-// "until your next turn" passives above. Board-wide (no column gate) — call this after any
-// hit that transitions a unit's state to 'suppressed' (see applyHitAndCheckHero below).
-// Owner is read from the hit unit itself, not passed in, so each player's own
-// Counteroffensive General (if deployed) is checked independently.
+// ── Hero passive — Counteroffensive General (H06) ───────────────────────────
+// "The first friendly Unit that becomes Suppressed each turn gets +1 all sides until END OF
+// YOUR NEXT TURN" — grantedSideBonus/sideBonusTurns:1 (clears at owner's next startOfTurn),
+// NOT tempSideBonus (which would clear this same end of turn) — this is a longer-lasting
+// grant than the old prototype's "until end of turn" version. Board-wide (no column gate).
+// Owner is read from the hit unit itself so each player's own H06 (if deployed) is independent.
 export function checkCounteroffensiveGeneral(s, key) {
   const unit = s.board[key];
   if (!unit) return { state: s, log: [] };
   const owner = unit.owner;
   const ps = s[owner];
   const zones = ps.heroZones ?? [null, null, null, null];
-  if (!zones.includes(101) || (ps.heroTriggeredThisTurn ?? {})[101]) return { state: s, log: [] };
+  if (!zones.includes('H06') || (ps.heroTriggeredThisTurn ?? {})['H06']) return { state: s, log: [] };
 
   const card = CARD_BY_ID[unit.cardId];
   const state = {
     ...s,
-    board: { ...s.board, [key]: { ...unit, tempSideBonus: (unit.tempSideBonus || 0) + 1 } },
-    [owner]: { ...ps, heroTriggeredThisTurn: { ...ps.heroTriggeredThisTurn, 101: true } },
+    board: { ...s.board, [key]: { ...unit, grantedSideBonus: (unit.grantedSideBonus || 0) + 1, sideBonusTurns: 1 } },
+    [owner]: { ...ps, heroTriggeredThisTurn: { ...ps.heroTriggeredThisTurn, H06: true } },
   };
-  return { state, log: [`${CARD_BY_ID[101].name}: ${card?.name ?? 'unit'} +1 all sides (end of turn) — first Suppression this turn`] };
+  return { state, log: [`${CARD_BY_ID['H06'].name}: ${card?.name ?? 'unit'} +1 all sides (until your next turn) — first Suppression this turn`] };
 }
 
 // Single funnel for "remove Suppression from this tile" so every command/Hero power that
-// heals Suppression (Recovery Officer, Field Medic, Tactical Withdrawal... — see call sites
-// in game.js) shares one hook point instead of four inline call sites. Mirrors
-// unsuppressOnBoard's own comment in state.js. No longer checks Counteroffensive General —
-// that passive now triggers on Suppression being applied, not removed (see
-// checkCounteroffensiveGeneral call sites in game.js/combat.js instead).
+// heals Suppression shares one hook point. Mirrors unsuppressOnBoard's own comment in state.js.
 export function removeSuppression(s, key) {
   const { board, changed } = unsuppressOnBoard(s.board, key);
   if (!changed) return { state: s, log: [], changed: false };
   return { state: { ...s, board }, log: [], changed: true };
 }
 
-// ── Unit on-play abilities ───────────────────────────────────────────────────
-// Auto-resolving "On Play" triggers for the new v0.4 launch-filler units. Anything needing
-// a player choice (Mobile Command Halftrack's optional Hero move, Radio Operator's top-2
-// look) is handled separately in game.js via a modal, not here.
-export function checkUnitOnPlayAbility(s, active, col, key, card) {
-  const ps = s[active];
-  const log = [];
+// ── Dynamic stat recalculation — Inspire / Muster ───────────────────────────
+// Doc 01 §16: dynamic stat effects recalculate immediately whenever relevant battlefield
+// state changes (Unit enters/leaves, movement, destruction). Rather than change getSideValue's
+// signature everywhere it's called (many call sites need only a boardUnit+dir, not full board
+// context), dynamic bonuses are precomputed into a `dynamicSideBonus` field on each BoardUnit
+// whenever the board changes, and getSideValue sums it in exactly like tempSideBonus etc.
+// (see state.js). Callers must call recalculateDynamicStats(state) after every placement,
+// movement, or destruction — the 3 events that can change adjacency/board-Infantry-count.
+//
+// Inspire: the SOURCE unit (Motivator/Sergeant/Company Leader/Commanding Infantry) grants +1
+// all sides to each ADJACENT friendly Unit while it remains on the battlefield. Multiple
+// adjacent Inspire sources stack additively. A Suppressed Inspire source still projects its
+// aura (doc 01 §9 — continuous/passive functions remain active while Suppressed).
+// Muster: a Muster-keyword Unit gets +1 all sides for each OTHER friendly Infantry it
+// controls, board-wide (not adjacency-based).
+export function computeDynamicSideBonus(state, key) {
+  const unit = state.board[key];
+  if (!unit || unit.state === 'destroyed') return 0;
+  const card = CARD_BY_ID[unit.cardId];
+  if (!card) return 0;
+  let bonus = 0;
 
-  if (card.id === 119) { // Veteran Signal Corps — draw 1 if a Hero Power was activated last turn
-    if (ps.heroActivatedLastTurn) {
-      s = { ...s, [active]: drawCards(ps, 1) };
-      log.push(`${card.name}: activated a Hero Power last turn — draw 1 card`);
-    }
-  }
-
-  if (card.id === 112) { // Combat Engineers — if a friendly Hero is in this column, heal another unit here
-    const zones = ps.heroZones ?? [null, null, null, null];
-    if (zones[col] != null) {
-      const candidate = unitsInColumn(s, col, active).find(({ key: k, unit }) => k !== key && unit.state === 'suppressed');
-      if (candidate) {
-        const result = removeSuppression(s, candidate.key);
-        s = result.state;
-        const healedName = CARD_BY_ID[s.board[candidate.key]?.cardId]?.name ?? 'unit';
-        log.push(`${card.name}: ${healedName} un-suppressed`, ...result.log);
-      }
-    }
-  }
-
-  return { state: s, log };
-}
-
-// ── Deathrattle ──────────────────────────────────────────────────────────────
-// Fires whenever a Unit carrying the Deathrattle keyword transitions to state:"destroyed" —
-// by combat (resolveSingleAttack, Artillery Position, Air Strike/Suppressing Fire) or by a
-// self-destroy Command (Sacrifice Play 140, Scorched Earth Rally 141). NOT triggered by
-// Suppression alone, and not by leaving the board un-destroyed (Tactical Withdrawal).
-// Callers must call this AFTER the destroy mutation is already committed to `s` — `key`'s
-// tile should be empty (or about to be overwritten by a summon effect) when this runs, and
-// `dyingUnit` is a snapshot of the unit taken BEFORE the mutation (for cardId/owner).
-// Graves Registration Officer (147) doubles the effect — runs runDeathrattleEffect twice.
-// `usedTargets` accumulates the board key each single-unit-target application picked (133/
-// 134/135), so the SECOND application of a doubled resolution excludes it — per Filip
-// 2026-08-19: a doubled effect must not land on the same card twice.
-export function checkDeathrattle(s, key, dyingUnit) {
-  if (!dyingUnit) return { state: s, log: [] };
-  const card = CARD_BY_ID[dyingUnit.cardId];
-  if (!card || !getKeywords(dyingUnit).includes('Deathrattle')) return { state: s, log: [] };
-  const owner = dyingUnit.owner;
-  const doubled = (s[owner]?.heroZones ?? []).includes(147);
-  const log = [];
-  const usedTargets = new Set();
-  for (let i = 0; i < (doubled ? 2 : 1); i++) {
-    const result = runDeathrattleEffect(s, key, dyingUnit, card, owner, usedTargets);
-    s = result.state;
-    log.push(...result.log);
-    if (result.targetKey) usedTargets.add(result.targetKey);
-  }
-  return { state: s, log };
-}
-
-// Picks the first LIVE friendly unit adjacent to `key` (deterministic — the brainstorm text
-// for this effect (135) didn't say "random", unlike 132/133/134/137 which explicitly do),
-// excluding any key already used earlier in the same (possibly doubled) resolution.
-function firstAdjacentFriendly(s, key, owner, excludeKeys = new Set()) {
+  // Inspire received from adjacent friendly sources.
   const [row, col] = tileCoords(key);
-  return adjacentTiles(row, col)
-    .map(({ key: k }) => k)
-    .find(k => {
-      if (excludeKeys.has(k)) return false;
-      const u = s.board[k];
-      return u && u.owner === owner && u.state !== 'destroyed';
-    }) ?? null;
+  for (const { key: adjKey } of adjacentTiles(row, col)) {
+    const adj = state.board[adjKey];
+    if (!adj || adj.state === 'destroyed' || adj.owner !== unit.owner) continue;
+    if (getKeywords(adj).includes('Inspire')) bonus += 1;
+  }
+
+  // Muster: +1 for each OTHER friendly Infantry, if this Unit itself has Muster.
+  if (getKeywords(unit).includes('Muster')) {
+    const otherFriendlyInfantry = unitsOnBoard(state, unit.owner).filter(
+      ({ key: k, unit: u }) => k !== key && CARD_BY_ID[u.cardId]?.cls === 'Infantry'
+    ).length;
+    bonus += otherFriendlyInfantry;
+  }
+
+  return bonus;
 }
 
-// Picks a RANDOM live friendly unit of the given class (132/133/134/137 all say "random").
-// General rule (per Filip 2026-08-19): if `avoidKeyword` is given, skip any unit that already
-// carries it (no point granting a keyword a unit already has) — do nothing if none qualify.
-// `excludeKeys` additionally skips units already targeted earlier in the same doubled
-// resolution (Graves Registration Officer, 147), so a double-trigger can't hit one card twice.
-function randomFriendlyOfClass(s, owner, cls, { avoidKeyword = null, excludeKeys = new Set() } = {}) {
-  const list = unitsOnBoard(s, owner).filter(({ key, unit }) => {
-    if (CARD_BY_ID[unit.cardId]?.cls !== cls) return false;
-    if (excludeKeys.has(key)) return false;
-    if (avoidKeyword && getKeywords(unit).includes(avoidKeyword)) return false;
-    return true;
-  });
-  if (!list.length) return null;
-  return list[Math.floor(Math.random() * list.length)];
+export function recalculateDynamicStats(state) {
+  const board = { ...state.board };
+  for (const key of Object.keys(board)) {
+    const unit = board[key];
+    if (!unit || unit.state === 'destroyed') continue;
+    board[key] = { ...unit, dynamicSideBonus: computeDynamicSideBonus(state, key) };
+  }
+  return { ...state, board };
 }
 
-// Removes one random matching card from `owner`'s deck and places it as a fresh Unit on `key`
-// (132/137: "summon ... from the deck onto this tile"). The summoned unit does NOT get a
-// placement attack or trigger on-play/Hero-passive checks — it enters via a Deathrattle, not
-// by being played from hand, so justPlaced stays false.
-function summonRandomFromDeck(s, owner, key, predicate) {
-  const deck = s[owner].deck;
-  const candidates = deck.map((id, i) => ({ id, i })).filter(({ id }) => predicate(CARD_BY_ID[id]));
-  if (!candidates.length) return { state: s, log: [] };
-  const pick = candidates[Math.floor(Math.random() * candidates.length)];
-  const newDeck = [...deck.slice(0, pick.i), ...deck.slice(pick.i + 1)];
-  const newUnit = {
-    cardId: pick.id, owner, state: 'normal', armorHits: 0,
-    tempKeywords: [], grantedKeywords: [], tempSideBonus: 0, justPlaced: false, rotation: 0,
-  };
-  const newState = { ...s, board: { ...s.board, [key]: newUnit }, [owner]: { ...s[owner], deck: newDeck } };
-  return { state: newState, log: [`Summoned ${CARD_BY_ID[pick.id].name} from deck`] };
-}
-
-// Per-card Deathrattle effect dispatch — mirrors applyHeroPower's switch-by-id pattern in
-// game.js. Returns { state, log, targetKey } — targetKey (133/134/135 only) is the board key
-// a single-unit-target effect picked, fed back into checkDeathrattle's excludeKeys for a
-// doubled resolution's second application.
-function runDeathrattleEffect(s, key, dyingUnit, card, owner, excludeKeys = new Set()) {
+// ── Rally ────────────────────────────────────────────────────────────────────
+// Rally triggers whenever a Unit carrying the Rally keyword DECLARES/EXECUTES an attack
+// against an enemy Unit — success not required (doc 01 §15). Direct HQ is NOT an attack
+// against an enemy Unit and must never call this. Per-card effect dispatch by id, mirroring
+// the destruction-chain / Hero-power switch pattern elsewhere in this codebase.
+export function checkRally(s, attackerKey) {
+  const unit = s.board[attackerKey];
+  if (!unit) return { state: s, log: [] };
+  if (!getKeywords(unit).includes('Rally')) return { state: s, log: [] };
+  const card = CARD_BY_ID[unit.cardId];
+  const owner = unit.owner;
   const log = [];
-  const tag = `${card.name} (Deathrattle):`;
+  const tag = `${card.name} (Rally):`;
 
   switch (card.id) {
-    case 131: { // Forward Gun Crew — draw 1
+    case 'I12': // Assault Trooper — draw 1
       s = { ...s, [owner]: drawCards(s[owner], 1) };
       log.push(`${tag} draw 1 card`);
       break;
-    }
-    case 132: { // Salvage Battery — summon a random 1-cost friendly Artillery from deck
-      const r = summonRandomFromDeck(s, owner, key, c => c?.type === 'unit' && c.cls === 'Artillery' && c.cost === 1);
-      s = r.state;
-      log.push(r.log.length ? `${tag} ${r.log[0]}` : `${tag} no 1-cost Artillery in deck`);
+    case 'I13': { // Combat Engager — random other friendly Infantry +1 all sides permanently
+      const others = unitsOnBoard(s, owner).filter(({ key, unit: u }) => key !== attackerKey && CARD_BY_ID[u.cardId]?.cls === 'Infantry');
+      if (others.length) {
+        const pick = others[Math.floor(Math.random() * others.length)];
+        const u = s.board[pick.key];
+        s = { ...s, board: { ...s.board, [pick.key]: { ...u, grantedSideBonus: (u.grantedSideBonus || 0) + 1, sideBonusTurns: 99 } } };
+        log.push(`${tag} ${CARD_BY_ID[u.cardId].name} +1 all sides (permanent)`);
+      }
       break;
     }
-    case 133: { // Ranging Section — give a random friendly Artillery (that doesn't already
-      // have it) Bombard until your next turn. Was "until end of turn" via tempKeywords;
-      // switched to grantedKeywords (2026-08-19, per Filip) — grantedKeywords already clears
-      // at the OWNER'S next startOfTurn (see state.js), giving exactly "until your next turn."
-      const pick = randomFriendlyOfClass(s, owner, 'Artillery', { avoidKeyword: 'Bombard', excludeKeys });
-      if (!pick) { log.push(`${tag} no friendly Artillery to target`); break; }
-      const u = s.board[pick.key];
-      s = { ...s, board: { ...s.board, [pick.key]: { ...u, grantedKeywords: [...(u.grantedKeywords || []), 'Bombard'] } } };
-      log.push(`${tag} ${CARD_BY_ID[u.cardId].name} gains Bombard (until your next turn)`);
-      return { state: s, log, targetKey: pick.key };
-    }
-    case 134: { // Veteran Battery — give a random friendly Artillery +3 all sides, until
-      // END of your next turn (sideBonusTurns:2 — same "2 turns" convention as Rally Cry 51,
-      // NOT the sideBonusTurns:1 "clears right as your next turn starts" convention most other
-      // grants use). Corrected 2026-08-20, per Filip — was +1, sideBonusTurns:1.
-      const pick = randomFriendlyOfClass(s, owner, 'Artillery', { excludeKeys });
-      if (!pick) { log.push(`${tag} no friendly Artillery to target`); break; }
-      const u = s.board[pick.key];
-      s = { ...s, board: { ...s.board, [pick.key]: { ...u, grantedSideBonus: (u.grantedSideBonus || 0) + 3, sideBonusTurns: 2 } } };
-      log.push(`${tag} ${CARD_BY_ID[u.cardId].name} +3 all sides (until end of your next turn)`);
-      return { state: s, log, targetKey: pick.key };
-    }
-    case 135: { // Rearguard Squad — adjacent friendly unit +1 all sides
-      const adjKey = firstAdjacentFriendly(s, key, owner, excludeKeys);
-      if (!adjKey) { log.push(`${tag} no adjacent friendly Unit`); break; }
-      const u = s.board[adjKey];
-      s = { ...s, board: { ...s.board, [adjKey]: { ...u, grantedSideBonus: (u.grantedSideBonus || 0) + 1, sideBonusTurns: 1 } } };
-      log.push(`${tag} ${CARD_BY_ID[u.cardId].name} +1 all sides (until your next turn)`);
-      return { state: s, log, targetKey: adjKey };
-    }
-    case 136: { // Salvage Crew — next Tank costs 1 less Fuel
-      s = { ...s, [owner]: addDiscount(s[owner], { appliesTo: 'Tank', column: null, amount: 1, min: 0 }) };
-      log.push(`${tag} next Tank costs 1 less Fuel`);
-      break;
-    }
-    case 137: { // Squadron Reserve — summon a random 2-cost friendly Aircraft from deck
-      const r = summonRandomFromDeck(s, owner, key, c => c?.type === 'unit' && c.cls === 'Aircraft' && c.cost === 2);
-      s = r.state;
-      log.push(r.log.length ? `${tag} ${r.log[0]}` : `${tag} no 2-cost Aircraft in deck`);
-      break;
-    }
-    case 138: { // Convoy Escort — next Naval Unit played gets +1 all sides, permanently
-      s = { ...s, [owner]: { ...s[owner], pendingUnitBuffs: [...(s[owner].pendingUnitBuffs || []), { appliesTo: 'Naval', amount: 1 }] } };
-      log.push(`${tag} next Naval Unit played gets +1 all sides (permanent)`);
+    case 'I21': { // Commanding Infantry — all OTHER friendly Infantry +1 all sides permanently
+      const others = unitsOnBoard(s, owner).filter(({ key, unit: u }) => key !== attackerKey && CARD_BY_ID[u.cardId]?.cls === 'Infantry');
+      for (const { key: k } of others) {
+        const u = s.board[k];
+        s = { ...s, board: { ...s.board, [k]: { ...u, grantedSideBonus: (u.grantedSideBonus || 0) + 1, sideBonusTurns: 99 } } };
+      }
+      if (others.length) log.push(`${tag} all other friendly Infantry +1 all sides (permanent)`);
       break;
     }
     default:
-      log.push(`${tag} not automated yet`);
+      break; // I14 Veteran Raider (all adjacent friendly Units +1 permanently) — TODO, not yet wired
+  }
+  return { state: s, log };
+}
+
+// ── Shared destruction chain (doc 01 §9) ────────────────────────────────────
+// Single funnel for EVERY destruction source (normal combat kills, self-destroy Commands,
+// Overrun-modified events) so Last Stand / Breakthrough / HQ-damage-replacement can never
+// diverge between call sites. Chain: mark destroyed -> remove from board -> recalc dynamic
+// state -> apply normal-or-replacement HQ damage -> recalc -> resolve destroyed Unit's Last
+// Stand -> recalc -> resolve Breakthrough (if sourceUnitKey is still alive) -> recalc.
+//
+// options:
+//   sourceUnitKey        — the attacking/causing Unit's board key, if any (for Breakthrough).
+//   cause                — free-text tag for the log ('combat' | 'command' | 'overrun' | ...).
+//   hqResultReplacement  — { targetHq: 'p1'|'p2', amount } to REPLACE the normal
+//                           destruction-HQ result (e.g. Scorched Earth Raid); when present,
+//                           the unit's owner's own-destruction HQ damage is skipped entirely
+//                           and this amount is dealt to targetHq instead — applies even if
+//                           the unit has Guard.
+// Returns { state, log, hqDamageToP1, hqDamageToP2 }.
+export function resolveDestructionChain(s, { unitKey, sourceUnitKey = null, cause = 'combat', hqResultReplacement = null }) {
+  const dyingUnit = s.board[unitKey];
+  if (!dyingUnit || dyingUnit.state === 'destroyed') return { state: s, log: [], hqDamageToP1: 0, hqDamageToP2: 0 };
+  const card = CARD_BY_ID[dyingUnit.cardId];
+  const owner = dyingUnit.owner;
+  const log = [];
+  let hqDamageToP1 = 0, hqDamageToP2 = 0;
+
+  // 1-2. Mark destroyed, remove from board.
+  s = { ...s, board: { ...s.board, [unitKey]: { ...dyingUnit, state: 'destroyed' } } };
+  s = recalculateDynamicStats(s);
+
+  // 3. Normal-or-replacement HQ damage. Normal: destroying a Unit deals 2 to its OWNER's HQ
+  // (whether destroyed by an enemy or by its own controller) unless Guard reduces it to 0,
+  // or an explicit replacement overrides both.
+  const isGuard = getKeywords(dyingUnit).includes('Guard');
+  if (hqResultReplacement) {
+    const { targetHq, amount } = hqResultReplacement;
+    if (targetHq === 'p1') hqDamageToP1 += amount; else hqDamageToP2 += amount;
+    log.push(`${card?.name ?? 'Unit'} destroyed — HQ result replaced (${amount} to ${targetHq.toUpperCase()})`);
+  } else if (!isGuard) {
+    if (owner === 'p1') hqDamageToP1 += 2; else hqDamageToP2 += 2;
+    log.push(`${card?.name ?? 'Unit'} destroyed — 2 HQ damage to ${owner.toUpperCase()}`);
+  } else {
+    log.push(`${card?.name ?? 'Unit'} (Guard) destroyed — 0 HQ damage`);
+  }
+  s = recalculateDynamicStats(s);
+
+  // 4. Last Stand.
+  if (getKeywords(dyingUnit).includes('Last Stand')) {
+    const doubled = (s[owner]?.heroZones ?? []).includes('H14'); // Graves Registration Officer
+    const usedTargets = new Set();
+    for (let i = 0; i < (doubled ? 2 : 1); i++) {
+      const r = runLastStandEffect(s, unitKey, dyingUnit, card, owner, usedTargets);
+      s = r.state;
+      log.push(...r.log);
+      if (r.targetKey) usedTargets.add(r.targetKey);
+    }
+    s = recalculateDynamicStats(s);
+  }
+
+  // 5. Breakthrough (from the source Unit, if it's still alive and has Breakthrough).
+  if (sourceUnitKey) {
+    const sourceUnit = s.board[sourceUnitKey];
+    if (sourceUnit && sourceUnit.state !== 'destroyed' && getKeywords(sourceUnit).includes('Breakthrough')) {
+      const sourceCard = CARD_BY_ID[sourceUnit.cardId];
+      const r = runBreakthroughEffect(s, sourceUnitKey, sourceUnit, sourceCard);
+      s = r.state;
+      log.push(...r.log);
+      s = recalculateDynamicStats(s);
+    }
+  }
+
+  return { state: s, log, hqDamageToP1, hqDamageToP2 };
+}
+
+// Lighter-weight sibling of resolveDestructionChain, for callers where the destroy mutation
+// AND normal HQ damage have already been applied by something else (normal combat's own
+// applyHit/resolveSingleAttack, which computes the correct 2-HQ-on-destroy result itself and
+// would double-count if resolveDestructionChain's own HQ step also ran). Runs ONLY steps 4-5
+// (Last Stand, then Breakthrough) plus dynamic-state recalculation — never touches HQ.
+// `dyingUnit` is a snapshot of the unit taken immediately BEFORE it was removed/marked
+// destroyed (for cardId/owner/keywords); `unitKey`'s tile should already reflect the destroy.
+export function applyPostDestructionEffects(s, { unitKey, dyingUnit, sourceUnitKey = null }) {
+  if (!dyingUnit) return { state: s, log: [] };
+  const card = CARD_BY_ID[dyingUnit.cardId];
+  const owner = dyingUnit.owner;
+  const log = [];
+
+  if (getKeywords(dyingUnit).includes('Last Stand')) {
+    const doubled = (s[owner]?.heroZones ?? []).includes('H14'); // Graves Registration Officer
+    const usedTargets = new Set();
+    for (let i = 0; i < (doubled ? 2 : 1); i++) {
+      const r = runLastStandEffect(s, unitKey, dyingUnit, card, owner, usedTargets);
+      s = r.state;
+      log.push(...r.log);
+      if (r.targetKey) usedTargets.add(r.targetKey);
+    }
+    s = recalculateDynamicStats(s);
+  }
+
+  if (sourceUnitKey) {
+    const sourceUnit = s.board[sourceUnitKey];
+    if (sourceUnit && sourceUnit.state !== 'destroyed' && getKeywords(sourceUnit).includes('Breakthrough')) {
+      const sourceCard = CARD_BY_ID[sourceUnit.cardId];
+      const r = runBreakthroughEffect(s, sourceUnitKey, sourceUnit, sourceCard);
+      s = r.state;
+      log.push(...r.log);
+      s = recalculateDynamicStats(s);
+    }
   }
 
   return { state: s, log };
+}
+
+function runLastStandEffect(s, key, dyingUnit, card, owner, excludeKeys) {
+  const log = [];
+  const tag = `${card.name} (Last Stand):`;
+  switch (card.id) {
+    case 'I18': // Last Stand Soldier — draw 1
+      s = { ...s, [owner]: drawCards(s[owner], 1) };
+      log.push(`${tag} draw 1 card`);
+      return { state: s, log };
+    case 'I19': { // Final Defender — random friendly Infantry +1 all sides permanently
+      const list = unitsOnBoard(s, owner).filter(({ key: k, unit: u }) => !excludeKeys.has(k) && CARD_BY_ID[u.cardId]?.cls === 'Infantry');
+      if (!list.length) { log.push(`${tag} no friendly Infantry to target`); return { state: s, log }; }
+      const pick = list[Math.floor(Math.random() * list.length)];
+      const u = s.board[pick.key];
+      s = { ...s, board: { ...s.board, [pick.key]: { ...u, grantedSideBonus: (u.grantedSideBonus || 0) + 1, sideBonusTurns: 99 } } };
+      log.push(`${tag} ${CARD_BY_ID[u.cardId].name} +1 all sides (permanent)`);
+      return { state: s, log, targetKey: pick.key };
+    }
+    case 'I22': { // Field Commander — adjacent friendly Infantry +1 all sides until end of turn
+      const [row, col] = tileCoords(key);
+      let any = false;
+      for (const { key: adjKey } of adjacentTiles(row, col)) {
+        const u = s.board[adjKey];
+        if (!u || u.state === 'destroyed' || u.owner !== owner || CARD_BY_ID[u.cardId]?.cls !== 'Infantry') continue;
+        s = { ...s, board: { ...s.board, [adjKey]: { ...u, tempSideBonus: (u.tempSideBonus || 0) + 1 } } };
+        any = true;
+      }
+      if (any) log.push(`${tag} adjacent friendly Infantry +1 all sides (until end of turn)`);
+      return { state: s, log };
+    }
+    default:
+      return { state: s, log: [`${tag} not automated yet`] };
+  }
+}
+
+function runBreakthroughEffect(s, key, unit, card) {
+  const log = [];
+  const tag = `${card.name} (Breakthrough):`;
+  switch (card.id) {
+    case 'T32': case 'T38': // Tank Hunter / Armored Spearhead — this Unit +1 all sides permanently
+      s = { ...s, board: { ...s.board, [key]: { ...unit, grantedSideBonus: (unit.grantedSideBonus || 0) + 1, sideBonusTurns: 99 } } };
+      log.push(`${tag} +1 all sides (permanent)`);
+      return { state: s, log };
+    case 'T33': { // Tank Destroyer — your next Tank costs 1 Fuel (set-cost; see discountFor's
+      // `setCost` handling in state.js — other reductions can still stack on top, down to 0).
+      s = { ...s, [unit.owner]: addDiscount(s[unit.owner], { appliesTo: 'Tank', column: null, setCost: 1 }) };
+      log.push(`${tag} next Tank costs 1 Fuel`);
+      return { state: s, log };
+    }
+    case 'T34': { // Breakthrough Tank — gains Armor
+      const kws = getKeywords(unit);
+      if (!kws.includes('Armor') && !kws.includes('Heavy Armor')) {
+        s = { ...s, board: { ...s.board, [key]: { ...unit, grantedKeywords: [...(unit.grantedKeywords || []), 'Armor'] } } };
+        log.push(`${tag} gains Armor`);
+      }
+      return { state: s, log };
+    }
+    case 'T35': { // Ace Tank — gains Double Attack
+      const kws = getKeywords(unit);
+      if (!kws.includes('Double Attack')) {
+        s = { ...s, board: { ...s.board, [key]: { ...unit, grantedKeywords: [...(unit.grantedKeywords || []), 'Double Attack'] } } };
+        log.push(`${tag} gains Double Attack`);
+      }
+      return { state: s, log };
+    }
+    default:
+      return { state: s, log: [] };
+  }
 }
 
 // ── Bombard targeting ────────────────────────────────────────────────────────
@@ -412,15 +530,24 @@ function getBombardTargets(row, col) {
 }
 
 // ── getAttackableTargets ──────────────────────────────────────────────────────
-
-// Returns { key, dir }[] of tiles the attacker at attackerKey can legally target.
-// Filters out: friendly tiles, empty tiles, destroyed units.
-// Guard enforcement: if any adjacent enemy has Guard keyword AND is not Suppressed,
-//   only those Guard units are returned — attacker must hit them first.
-//   skipGuard bypasses this (used for Double Attack's second hit).
-//
-// Bombard units target any enemy in the same row or column and bypass Guard enforcement.
-export function getAttackableTargets(state, attackerKey, skipGuard = false) {
+// Rewritten 2026-08-31 (Run 1, Set 1 truth-lock) per doc 01 §10 / doc 02 Q92-Q100 — Guard is
+// now ATTACKER-SPECIFIC LEGAL-TARGET PRIORITY, not adjacency-based protection:
+//   1. Compute the attacker's raw candidate pool (adjacent enemies normally; same row/column
+//      for Bombard) — filtered only to enemy-owned, NOT DESTROYED. Suppressed enemies remain
+//      eligible candidates (doc 01 §9: Suppressed Units remain legal targets).
+//   2. If the attacker has Precision, return the raw pool unfiltered — Precision ignores
+//      Guard priority entirely and applies uniformly, including to Bombard attackers (the old
+//      "Bombard always bypasses Guard" behavior is REMOVED — doc 02 Q100 is explicit that
+//      Bombard obeys Guard like any other attacker unless it also has Precision).
+//   3. Otherwise: if the pool contains any Guard candidate — SUPPRESSED OR NOT (doc 01 §9:
+//      Suppressed Units keep their passive/continuous functions, including Guard) — restrict
+//      to Guard candidates only. Guards do not protect other Guards in any special sense: a
+//      Guard-vs-Guard attacker still just sees "the pool is all Guard," which is already the
+//      correct legal-target set with no extra logic needed.
+// Double Attack's second hit now recomputes this fresh (no more `skipGuard` bypass) — doc 02
+// Q92-96 describes Guard as computed per-attack from the attacker's CURRENT legal-target set,
+// with no keyword- or hit-number-based exception.
+export function getAttackableTargets(state, attackerKey) {
   const [row, col] = tileCoords(attackerKey);
   const attacker = state.board[attackerKey];
   if (!attacker) return [];
@@ -431,32 +558,223 @@ export function getAttackableTargets(state, attackerKey, skipGuard = false) {
   const kws = getKeywords(attacker);
   const owner = attacker.owner;
 
-  // Bombard: all enemies in same row or column, bypasses Guard enforcement.
-  if (kws.includes("Bombard")) {
-    return getBombardTargets(row, col).filter(({ key }) => {
-      const tile = state.board[key];
-      return tile && tile.owner !== owner && tile.state !== "destroyed";
-    });
-  }
+  const rawCandidates = kws.includes("Bombard")
+    ? getBombardTargets(row, col)
+    : adjacentTiles(row, col);
 
-  // Default / Double Attack: all adjacent enemies that are alive.
-  const candidates = adjacentTiles(row, col).filter(({ key }) => {
+  const candidates = rawCandidates.filter(({ key }) => {
     const tile = state.board[key];
     return tile && tile.owner !== owner && tile.state !== "destroyed";
   });
 
   if (candidates.length === 0) return [];
+  if (kws.includes("Precision")) return candidates;
 
-  if (skipGuard) return candidates;
+  const guardCandidates = candidates.filter(({ key }) => getKeywords(state.board[key]).includes("Guard"));
+  return guardCandidates.length > 0 ? guardCandidates : candidates;
+}
 
-  // Guard enforcement: if any alive adjacent enemy has Guard, restrict to Guard-only.
-  const guardUnits = candidates.filter(({ key }) => {
-    const tile = state.board[key];
-    const tileKws = getKeywords(tile);
-    return tileKws.includes("Guard") && tile.state !== "suppressed";
+// ── Craft (H25 Chief Aircraft Engineer, doc 01 §28) ─────────────────────────
+// Stats pool has 3 slots: one fixed 6/6/6/6, two independent random-27 rolls (so a random
+// line is twice as likely as the fixed one per candidate, matching the literal 3-item pool).
+// Keyword: one of Bombard/Double Attack/Armor. Drawback: one of the 3 below. Each candidate
+// picks independently across all three pools.
+function randomStatsTotaling27() {
+  // Stick-breaking: 3 random cut points in [0,27] split the range into 4 non-negative parts
+  // summing to exactly 27 — satisfies doc 01's "min 0 each side, no max" constraint; the
+  // exact distribution algorithm is implementation-defined per doc 05 §20.
+  const cuts = [0, 27, Math.floor(Math.random() * 28), Math.floor(Math.random() * 28), Math.floor(Math.random() * 28)].sort((a, b) => a - b);
+  return { n: cuts[1] - cuts[0], e: cuts[2] - cuts[1], s: cuts[3] - cuts[2], w: cuts[4] - cuts[3] };
+}
+
+const CRAFT_KEYWORD_POOL = ['Bombard', 'Double Attack', 'Armor'];
+const CRAFT_DRAWBACK_POOL = ['rotateAll', 'ownHqDamage', 'suppressRandomFriendly'];
+
+export function generateCraftCandidates() {
+  const candidates = [];
+  for (let i = 0; i < 3; i++) {
+    const statsRoll = Math.floor(Math.random() * 3); // 0 = fixed 6/6/6/6, 1-2 = random27
+    const stats = statsRoll === 0 ? { n: 6, e: 6, s: 6, w: 6 } : randomStatsTotaling27();
+    const keyword = CRAFT_KEYWORD_POOL[Math.floor(Math.random() * CRAFT_KEYWORD_POOL.length)];
+    const drawback = CRAFT_DRAWBACK_POOL[Math.floor(Math.random() * CRAFT_DRAWBACK_POOL.length)];
+    candidates.push({ stats, keyword, drawback });
+  }
+  return candidates;
+}
+
+const DRAWBACK_LABEL = {
+  rotateAll: 'Rotate every friendly Unit (including itself) randomly left/right',
+  ownHqDamage: 'Deal 3 damage to own HQ',
+  suppressRandomFriendly: 'Suppress 1 random friendly Unit',
+};
+
+// Registers the chosen candidate as a real card (js/cards.js's CARD_BY_ID) and returns it.
+// Does not add it to hand — caller does that (mirrors normal draw/discard handling so
+// hand-overflow rules apply identically to a Craft pick).
+export function craftCandidateToCard(candidate) {
+  return registerGeneratedCard({
+    name: 'Crafted Aircraft', cls: 'Aircraft', rarity: 'Common', type: 'unit',
+    cost: 1, copies: Infinity, keyword: candidate.keyword,
+    n: candidate.stats.n, e: candidate.stats.e, s: candidate.stats.s, w: candidate.stats.w,
+    ability: `On Play: ${DRAWBACK_LABEL[candidate.drawback]}.`,
+    craftDrawback: candidate.drawback,
   });
+}
 
-  return guardUnits.length > 0 ? guardUnits : candidates;
+// Resolves a crafted Aircraft's On Play drawback — fires immediately after it enters the
+// battlefield (doc 01 §28's "drawback timing"). The crafted Aircraft is itself a friendly
+// Unit by this point, so "each/a random friendly Unit" can select it unless noted otherwise.
+export function resolveCraftDrawback(s, ownerRole, unitKey, drawback) {
+  const log = [];
+  if (drawback === 'rotateAll') {
+    let board = { ...s.board };
+    for (const key of fixedScanOrder(Object.keys(board))) {
+      const u = board[key];
+      if (!u || u.owner !== ownerRole || u.state === 'destroyed') continue;
+      const dir = Math.random() < 0.5 ? 90 : -90;
+      board[key] = { ...u, rotation: (((u.rotation ?? 0) + dir) % 360 + 360) % 360 };
+    }
+    s = { ...s, board };
+    log.push('Craft drawback: every friendly Unit independently rotates 90° left or right');
+  } else if (drawback === 'ownHqDamage') {
+    s = { ...s, [ownerRole]: { ...s[ownerRole], hq: s[ownerRole].hq - 3 } };
+    log.push('Craft drawback: 3 damage to own HQ');
+  } else if (drawback === 'suppressRandomFriendly') {
+    const list = unitsOnBoard(s, ownerRole).filter(({ unit }) => unit.state === 'normal');
+    if (list.length) {
+      const pick = list[Math.floor(Math.random() * list.length)];
+      s = { ...s, board: { ...s.board, [pick.key]: { ...pick.unit, state: 'suppressed' } } };
+      log.push(`Craft drawback: ${CARD_BY_ID[pick.unit.cardId]?.name ?? 'a friendly Unit'} suppressed`);
+    }
+  }
+  return { state: recalculateDynamicStats(s), log };
+}
+
+// H25's activation-cost progression: 5 -> 4 -> 3 -> 2 -> 1 -> 1... (min 1), never resets
+// except via a full match restart. Stored on PlayerState as `nextCraftCost` (starts at 5).
+export function nextCraftCost(playerState) {
+  return playerState.nextCraftCost ?? 5;
+}
+export function advanceCraftCost(playerState) {
+  return { ...playerState, nextCraftCost: Math.max(1, nextCraftCost(playerState) - 1) };
+}
+
+// ── Hand-instance stat buff (Training Officer, H19) ─────────────────────────
+// "Give all 1- and 2-cost Units currently in hand +1 all sides permanently." Hand is a bare
+// array of card ids (no per-instance state), so a card already in hand can't be buffed in
+// place without giving every hand card an instance identity — a real architecture change this
+// plan avoids making just for one Hero. Instead, reuse the same registration mechanism Craft
+// already uses: replace each qualifying hand slot's id with a freshly-registered clone of that
+// card with +1 all sides, permanently. Two copies of the same printed card in hand become two
+// independent clones — correct, since each is buffed as its own instance.
+export function applyHandBuff(playerState, amount, filterFn) {
+  const log = [];
+  const newHand = playerState.hand.map(cardId => {
+    const card = CARD_BY_ID[cardId];
+    if (!card || card.type !== 'unit' || !filterFn(card)) return cardId;
+    const buffed = registerGeneratedCard({
+      ...card, n: card.n + amount, e: card.e + amount, s: card.s + amount, w: card.w + amount,
+    });
+    log.push(`${card.name} +${amount} all sides (permanent)`);
+    return buffed.id;
+  });
+  return { playerState: { ...playerState, hand: newHand }, log };
+}
+
+// ── Maneuver (doc 01 §6) ─────────────────────────────────────────────────────
+// Move the chosen Unit to any other legal, EMPTY battlefield tile — no distance/adjacency/
+// row/column limit. Terrain restrictions still apply (Tank can't Maneuver into Forest, etc.
+// — reuses the same canPlaceOnTerrain check as deployment). Preserves orientation and
+// attack-used state (persistentSpent/tempExtraAttacks carry over unchanged). Does not
+// retrigger On Play. Does not reset attacks — H16/C35-style effects that DO reset attacks
+// call resetPersistentAttacks (state.js) explicitly afterward; that reset is not intrinsic
+// to Maneuver itself.
+export function getManeuverTargets(state, unitKey) {
+  const unit = state.board[unitKey];
+  if (!unit) return [];
+  const card = CARD_BY_ID[unit.cardId];
+  if (!card) return [];
+  const targets = [];
+  for (let r = 0; r < 4; r++) {
+    for (let c = 0; c < 4; c++) {
+      const key = tileKey(r, c);
+      if (key === unitKey) continue;
+      if (state.board[key] !== null && state.board[key] !== undefined) continue; // occupied
+      if (state.objectives?.[key]) continue; // Objective tiles are never occupiable
+      const terrain = getTerrain(state.mapId, r, c);
+      if (!canPlaceOnTerrain(card, terrain)) continue;
+      targets.push(key);
+    }
+  }
+  return targets;
+}
+
+// Moves the unit, preserving orientation/attack-state/keywords/buffs — everything except
+// board position. Caller is responsible for validating destKey via getManeuverTargets first.
+export function resolveManeuver(state, unitKey, destKey) {
+  const unit = state.board[unitKey];
+  if (!unit) return { state, log: [] };
+  const card = CARD_BY_ID[unit.cardId];
+  const newBoard = { ...state.board, [unitKey]: null, [destKey]: unit };
+  const newState = recalculateDynamicStats({ ...state, board: newBoard });
+  return { state: newState, log: [`${card?.name ?? 'Unit'} maneuvered to ${destKey}`] };
+}
+
+// ── Blast / Barrage secondary targeting ─────────────────────────────────────
+// Both trigger only after a successful primary Hit (doc 01 §13-14). Neither is blocked by
+// intervening Units (matches Bombard's own no-blocker convention). Guard does NOT redirect
+// or prevent either — they hit whatever enemy Units occupy the computed secondary tiles,
+// full stop. Multiple secondary targets resolve in fixed board scan order (leftmost column
+// top->bottom, then next columns), each fully resolved before the next.
+const PERPENDICULAR = { n: ['e', 'w'], s: ['e', 'w'], e: ['n', 's'], w: ['n', 's'] };
+
+function blastSecondaryKeys(targetKey, dir) {
+  const [r, c] = tileCoords(targetKey);
+  return PERPENDICULAR[dir]
+    .map(side => { const [dr, dc] = DIR_OFFSET[side]; return [r + dr, c + dc]; })
+    .filter(([r, c]) => r >= 0 && r < 4 && c >= 0 && c < 4)
+    .map(([r, c]) => tileKey(r, c));
+}
+
+function barrageSecondaryKeys(targetKey, dir) {
+  const [r, c] = tileCoords(targetKey);
+  const [dr, dc] = DIR_OFFSET[dir];
+  const keys = [];
+  let nr = r + dr, nc = c + dc;
+  while (nr >= 0 && nr < 4 && nc >= 0 && nc < 4) {
+    keys.push(tileKey(nr, nc));
+    nr += dr; nc += dc;
+  }
+  return keys;
+}
+
+function fixedScanOrder(keys) {
+  return [...keys].sort((a, b) => {
+    const [ar, ac] = tileCoords(a), [br, bc] = tileCoords(b);
+    return ac !== bc ? ac - bc : ar - br;
+  });
+}
+
+// Resolves Hits against every enemy Unit found at `keys` (owner-filtered, not-destroyed),
+// in fixed board scan order, folding each into boardMutations/hqDamage/log. Does not apply
+// Guard (secondary AoE ignores Guard priority per doc 01 §13-14) and does not chain further
+// Blast/Barrage off a secondary Hit.
+function resolveSecondaryHits(state, keys, attackerOwner) {
+  const boardMutations = [];
+  let hqDamageToP1 = 0, hqDamageToP2 = 0;
+  const logEntries = [];
+  for (const key of fixedScanOrder(keys)) {
+    const tile = state.board[key];
+    if (!tile || tile.owner === attackerOwner || tile.state === 'destroyed') continue;
+    const { newUnit, hqDamage } = applyHit(tile);
+    const finalUnit = newUnit.state === 'destroyed' ? null : newUnit;
+    boardMutations.push({ key, newUnit: finalUnit });
+    if (tile.owner === 'p1') hqDamageToP1 += hqDamage; else hqDamageToP2 += hqDamage;
+    const name = CARD_BY_ID[tile.cardId]?.name ?? '?';
+    const label = finalUnit === null ? 'Destroyed' : newUnit.state === 'suppressed' ? 'Suppressed' : 'armor absorbed';
+    logEntries.push(`  (secondary) -> ${name}: ${label}`);
+  }
+  return { boardMutations, hqDamageToP1, hqDamageToP2, logEntries };
 }
 
 // ── resolveSingleAttack ───────────────────────────────────────────────────────
@@ -537,12 +855,24 @@ export function resolveSingleAttack(state, attackerKey, targetKey) {
     hitUnit.state === "suppressed" ? "Suppressed" :
     "armor absorbed";
 
-  return {
-    boardMutations,
-    hqDamageToP1,
-    hqDamageToP2,
-    logEntries: [
-      `${attackerName} → ${defenderName}: ${stateLabel} (${attackerSide} vs ${defenderSide})`
-    ],
-  };
+  const logEntries = [
+    `${attackerName} → ${defenderName}: ${stateLabel} (${attackerSide} vs ${defenderSide})`
+  ];
+
+  // Blast / Barrage: only after a successful primary Hit (this point is unreachable otherwise
+  // — attackBeats already returned false above). Primary target has already resolved above.
+  const attackerKws = getKeywords(attacker);
+  const secondaryKeys = [
+    ...(attackerKws.includes('Blast') ? blastSecondaryKeys(targetKey, dir) : []),
+    ...(attackerKws.includes('Barrage') ? barrageSecondaryKeys(targetKey, dir) : []),
+  ];
+  if (secondaryKeys.length) {
+    const secondary = resolveSecondaryHits(state, secondaryKeys, attacker.owner);
+    boardMutations.push(...secondary.boardMutations);
+    hqDamageToP1 += secondary.hqDamageToP1;
+    hqDamageToP2 += secondary.hqDamageToP2;
+    logEntries.push(...secondary.logEntries);
+  }
+
+  return { boardMutations, hqDamageToP1, hqDamageToP2, logEntries };
 }

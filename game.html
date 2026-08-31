@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <title>SIGNAL — Digital Prototype</title>
-  <link rel="stylesheet" href="css/game.css?v=1787148530">
+  <link rel="stylesheet" href="css/game.css?v=1788180619">
 </head>
 <body>
   <!-- Sets the theme before anything paints — see the matching script/comment in index.html.
@@ -120,6 +120,13 @@
     <div class="fo-subtitle">Rotate the unit 90° — pick a direction</div>
     <button class="btn btn-primary" id="rotate-cw-btn">↻ Clockwise</button>
     <button class="btn btn-primary" id="rotate-ccw-btn">↺ Counter-Clockwise</button>
+  </div>
+
+  <!-- ── CRAFT PICKER MODAL — Chief Aircraft Engineer (H25) ── -->
+  <div id="craft-picker-modal" style="display:none;">
+    <div class="fo-title">CRAFT AN AIRCRAFT</div>
+    <div class="fo-subtitle">Choose 1 of 3 rolled candidates to add to your hand</div>
+    <div class="fo-cards" id="craft-picker-cards"></div>
   </div>
 
   <!-- ── HERO DEPLOY MODAL ── -->
@@ -343,7 +350,7 @@
 
   </div>
 
-  <script type="module" src="./js/game.js?v=1787148530"></script>
+  <script type="module" src="./js/game.js?v=1788180619"></script>
 
 </body>
 </html>

@@ -45,13 +45,26 @@
 //   debugSideBonus: number,     — +/-N to all sides from the debug panel; persists until the tester
 //                                 changes it back to 0, NOT cleared by normal turn logic
 //   justPlaced: boolean,        — true only on the turn deployed; cleared by endTurn
-//   rotation: number,           — 0/90/180/270, clockwise, set by Change Formation (124) and
-//                                 Field Engineer (91). Which of the card's own N/E/S/W values
-//                                 lines up with a given physical board side — see rotatedDir.
-//                                 Persists until explicitly rotated again; never auto-clears.
+//   rotation: number,           — 0/90/180/270, clockwise, set by Rotate-granting cards.
+//                                 Which of the card's own N/E/S/W values lines up with a given
+//                                 physical board side — see rotatedDir. Persists until
+//                                 explicitly rotated again; never auto-clears.
+//   persistentSpent: number,    — persistent attacks (Double Attack ? 2 : 1) used this turn;
+//                                 reset to 0 at the owner's Refresh (startOfTurn) or by an
+//                                 explicit attack-reset effect. See remainingAttacks/spendAttack.
+//   tempExtraAttacks: number,   — additional attacks granted "this turn"/"until end of turn"
+//                                 (Coordinated Strike, Air Strike, etc.); cleared at endTurn.
+//   tempExtraAttacksSpent: number, — spent temporary extras; NOT recreated by an explicit
+//                                 attack-reset (doc 01 §8 — reset restores persistent only).
+//                                 Cleared alongside tempExtraAttacks at endTurn.
 // }
+//
+// ATTACK-ALLOWANCE CONSUMPTION ORDER (locked, Run 1 correction 2026-08-31): an attack always
+// draws from the persistent pool first, then the temporary pool — see spendAttack. An explicit
+// "reset attacks" effect (e.g. Maneuver Commander, Scramble) zeroes persistentSpent only and
+// never recreates an already-spent temporary extra attack.
 
-import { CARD_BY_ID } from './cards.js?v=1787173232';
+import { CARD_BY_ID } from './cards.js?v=1788180619';
 
 // ── State factory ────────────────────────────────────────────────────────────
 
@@ -185,6 +198,7 @@ export function startOfTurn(state) {
         objSideBonus: 0,
         grantedSideBonus: turnsLeft > 0 ? u.grantedSideBonus : 0,
         sideBonusTurns: turnsLeft > 0 ? turnsLeft : 0,
+        persistentSpent: 0, // Refresh (doc 01 §8): persistent attack allowance restores here
       }];
     })
   );
@@ -193,11 +207,13 @@ export function startOfTurn(state) {
 }
 
 // Swaps initiative, increments turn counter.
-// Clears justPlaced, tempKeywords, tempSideBonus on all board units.
+// Clears justPlaced, tempKeywords, tempSideBonus, and temporary extra-attack grants (both
+// granted and spent counters — doc 01 §8: "this turn" attack grants expire at cleanup, after
+// Direct HQ has had a chance to use them) on all board units.
 export function endTurn(state) {
   const newBoard = Object.fromEntries(
     Object.entries(state.board).map(([k, v]) =>
-      [k, v ? { ...v, justPlaced: false, tempKeywords: [], tempSideBonus: 0 } : null]
+      [k, v ? { ...v, justPlaced: false, tempKeywords: [], tempSideBonus: 0, tempExtraAttacks: 0, tempExtraAttacksSpent: 0 } : null]
     )
   );
   return {
@@ -256,6 +272,17 @@ export function spendFuel(playerState, amount) {
   return { ...playerState, fuel: Math.max(0, playerState.fuel - amount) };
 }
 
+// Expires any unused portion of "this turn" temporary Fuel grants (Emergency Supply, doc 01
+// §3) at end-of-turn cleanup, after Direct HQ. Fuel is a single fungible pool, so this can't
+// know WHICH units of fuel came from the temp grant — it removes min(grant, currentFuel),
+// which correctly handles both "never spent, remove the full grant" and "already spent below
+// the grant amount through other means, remove only what's left."
+export function expireTempFuelGrant(playerState) {
+  const grant = playerState.tempFuelGrant ?? 0;
+  if (grant <= 0) return playerState;
+  return { ...playerState, fuel: Math.max(0, playerState.fuel - grant), tempFuelGrant: 0 };
+}
+
 export function gainFuel(playerState, amount, cap = true) {
   const newFuel = playerState.fuel + amount;
   // Cap is per-player so a Hero can raise it (Logistics Chief: 11 instead of 9).
@@ -263,10 +290,10 @@ export function gainFuel(playerState, amount, cap = true) {
   return { ...playerState, fuel: cap ? Math.min(fuelCapOf(playerState), newFuel) : newFuel };
 }
 
-// Base cap is 9, but Logistics Chief (89) raises it to 11 while deployed in any Hero Zone.
+// Base cap is 9, but Logistics Chief (H02) raises it to 11 while deployed in any Hero Zone.
 export function fuelCapOf(playerState) {
   const base = playerState.fuelCap ?? 9;
-  const hasLogisticsChief = (playerState.heroZones ?? []).includes(89);
+  const hasLogisticsChief = (playerState.heroZones ?? []).includes('H02');
   return hasLogisticsChief ? Math.max(base, 11) : base;
 }
 
@@ -290,32 +317,46 @@ function discountMatches(d, card, col) {
   return true;
 }
 
-// Total Fuel reduction available to this card, capped so the cost never falls below the
-// most restrictive `min` among the matching entries.
+// Total Fuel reduction available to this card, relative to its PRINTED cost.
+// Doc 01 §3: "If an effect sets a cost to a specific value, apply the set-cost first, then
+// other reductions; normal minimum remains 0 unless explicitly overridden." A `setCost` entry
+// (Breakthrough: Tank Destroyer) replaces the baseline cost outright; ordinary subtractive
+// entries then apply against THAT baseline (floor 0 unless a matching entry sets a higher
+// `min`) — so a set-cost is not itself a floor other discounts are blocked by.
 export function discountFor(playerState, card, col = null) {
   const matches = (playerState.pendingDiscounts ?? []).filter(d => discountMatches(d, card, col));
   if (!matches.length) return 0;
-  const total = matches.reduce((sum, d) => sum + d.amount, 0);
-  const floor = matches.reduce((m, d) => Math.max(m, d.min ?? 0), 0);
-  return Math.max(0, Math.min(total, (card.cost ?? 0) - floor));
+  const setCostEntry = matches.find(d => d.setCost != null);
+  const baseCost = setCostEntry ? setCostEntry.setCost : (card.cost ?? 0);
+  const reductionEntries = matches.filter(d => d.setCost == null);
+  const total = reductionEntries.reduce((sum, d) => sum + d.amount, 0);
+  const floor = reductionEntries.reduce((m, d) => Math.max(m, d.min ?? 0), 0);
+  const reduction = Math.max(0, Math.min(total, baseCost - floor));
+  return ((card.cost ?? 0) - baseCost) + reduction;
 }
 
-// Spends `used` Fuel worth of discount, draining matching entries in order and dropping
-// any that reach zero.
+// Spends `used` Fuel worth of discount, draining matching subtractive entries in order and
+// dropping any that reach zero. A matching `setCost` entry is always fully consumed (one-shot)
+// once this card is actually played, regardless of `used`.
 export function consumeDiscounts(playerState, card, col, used) {
-  if (used <= 0) return playerState;
-  let left = used;
   const out = [];
   for (const d of playerState.pendingDiscounts ?? []) {
+    if (discountMatches(d, card, col) && d.setCost != null) continue; // one-shot, drop it
+    out.push(d);
+  }
+  if (used <= 0) return { ...playerState, pendingDiscounts: out };
+  let left = used;
+  const final = [];
+  for (const d of out) {
     if (left > 0 && discountMatches(d, card, col)) {
       const take = Math.min(left, d.amount);
       left -= take;
-      if (d.amount - take > 0) out.push({ ...d, amount: d.amount - take });
+      if (d.amount - take > 0) final.push({ ...d, amount: d.amount - take });
       continue;
     }
-    out.push(d);
+    final.push(d);
   }
-  return { ...playerState, pendingDiscounts: out };
+  return { ...playerState, pendingDiscounts: final };
 }
 
 export function addDiscount(playerState, entry) {
@@ -360,7 +401,7 @@ export function getSideValue(boardUnit, dir) {
   const card = CARD_BY_ID[boardUnit.cardId];
   if (!card || card.type !== "unit") return 0;
   const d = rotatedDir(dir, boardUnit.rotation);
-  return card[d] + (boardUnit.tempSideBonus || 0) + (boardUnit.grantedSideBonus || 0) + (boardUnit.objSideBonus || 0) + (boardUnit.debugSideBonus || 0);
+  return card[d] + (boardUnit.tempSideBonus || 0) + (boardUnit.grantedSideBonus || 0) + (boardUnit.objSideBonus || 0) + (boardUnit.debugSideBonus || 0) + (boardUnit.dynamicSideBonus || 0);
 }
 
 // Returns card's base keyword(s) + tempKeywords + grantedKeywords.
@@ -388,7 +429,9 @@ export function hitsToDestroy(boardUnit) {
 
 // Applies one hit following the sequence:
 //   armorHits < maxArmorHits → absorb (hqDamage = 0, state unchanged)
-//   state === "normal"       → "suppressed" (hqDamage = 1)
+//   state === "normal"       → "suppressed" (hqDamage = 0 — Set 1 truth, locked 2026-08-31:
+//                               Suppression never deals HQ damage by default. This replaces
+//                               the old "Suppress = 1, Destroy = 2, total 3 per kill" model.)
 //   state === "suppressed"   → "destroyed"  (hqDamage = 2)
 // hqDamage is dealt to the unit owner's HQ (the one being attacked).
 export function applyHit(boardUnit) {
@@ -402,7 +445,7 @@ export function applyHit(boardUnit) {
 
   if (unit.state === "normal") {
     unit.state = "suppressed";
-    return { newUnit: unit, hqDamage: 1 };
+    return { newUnit: unit, hqDamage: 0 };
   }
 
   if (unit.state === "suppressed") {
@@ -412,6 +455,61 @@ export function applyHit(boardUnit) {
 
   // Already destroyed — safe fallback.
   return { newUnit: unit, hqDamage: 0 };
+}
+
+// ── Attack allowance (persistent + temporary) ───────────────────────────────
+// Doc 01 §8: persistent allowance (Double Attack ? 2 : 1) and temporary additional attacks
+// are tracked separately. Consumption order is locked: persistent first, then temporary.
+// A unit's own On Play / normal battlefield presence never grants attacks by itself — this
+// only ever grows via Double Attack (persistent) or an explicit "gains 1 additional legal
+// attack" effect (temporary).
+
+export function persistentAllowance(boardUnit) {
+  return getKeywords(boardUnit).includes('Double Attack') ? 2 : 1;
+}
+
+// Total attacks this unit can still use right now, across both pools.
+export function remainingAttacks(boardUnit) {
+  const persistentLeft = Math.max(0, persistentAllowance(boardUnit) - (boardUnit.persistentSpent ?? 0));
+  const tempLeft = Math.max(0, (boardUnit.tempExtraAttacks ?? 0) - (boardUnit.tempExtraAttacksSpent ?? 0));
+  return persistentLeft + tempLeft;
+}
+
+// Spends one attack: persistent pool first, then temporary. Returns the updated unit;
+// caller is responsible for checking remainingAttacks(unit) > 0 first.
+export function spendAttack(boardUnit) {
+  const persistentLeft = persistentAllowance(boardUnit) - (boardUnit.persistentSpent ?? 0);
+  if (persistentLeft > 0) {
+    return { ...boardUnit, persistentSpent: (boardUnit.persistentSpent ?? 0) + 1 };
+  }
+  return { ...boardUnit, tempExtraAttacksSpent: (boardUnit.tempExtraAttacksSpent ?? 0) + 1 };
+}
+
+// Grants N additional temporary attacks (Coordinated Strike, Air Strike, Airfield L4, ...).
+// These survive through Direct HQ and clear at endTurn cleanup (see endTurn below).
+export function grantTempAttacks(boardUnit, n = 1) {
+  return { ...boardUnit, tempExtraAttacks: (boardUnit.tempExtraAttacks ?? 0) + n };
+}
+
+// Explicit attack reset (Maneuver Commander, Scramble): restores persistent allowance only.
+// Never recreates an already-spent temporary extra attack — doc 01 §8, Run 1 correction.
+export function resetPersistentAttacks(boardUnit) {
+  return { ...boardUnit, persistentSpent: 0 };
+}
+
+// ── Escalate (doc 01 §29) ────────────────────────────────────────────────────
+// Tracked by Command NAME, per player, per match. Two physical copies of the same Command
+// share the count; the opponent's count is independent. Current Escalate Commands: General
+// Offensive, Blitzkrieg Order, Fire for Effect, Air Superiority (C26/C27/C32/C34).
+
+export function hasEscalated(playerState, commandName) {
+  return !!(playerState.escalateUses ?? {})[commandName];
+}
+
+// Marks this Command name as used at least once this match — the NEXT play of the same name
+// resolves its Escalate clause. Idempotent past the first call.
+export function markEscalateUse(playerState, commandName) {
+  return { ...playerState, escalateUses: { ...(playerState.escalateUses ?? {}), [commandName]: true } };
 }
 
 // Compares attacker's side value vs defender's opposite side. Tie = attacker wins.

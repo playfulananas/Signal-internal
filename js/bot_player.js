@@ -5,9 +5,8 @@
 // unmodified click handlers, so no game logic needed to change to add this feature.
 import { CARD_BY_ID } from "./cards.js";
 import { discountFor } from "./state.js";
-import { bestPlacement, bestExistingAttack, findLethal, findCombinedLethal, bestAttackForUnit, bestDamageCommandTarget, scoreCommand, scoreHeroPower, bestHeroPowerTarget } from "./bot_ai.js";
+import { bestPlacement, bestExistingAttack, findLethal, findCombinedLethal, bestAttackForUnit, scoreCommand, scoreHeroPower, bestHeroPowerTarget } from "./bot_ai.js";
 
-const DAMAGE_COMMAND_IDS = new Set([16, 20, 79]);
 const CLICK_DELAY_MS = 350; // pacing so a human watching can follow what the bot is doing
 
 function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
@@ -35,8 +34,11 @@ async function handleForwardObserver() {
   await sleep(CLICK_DELAY_MS);
 }
 
-// Radio Operator (111) on-play: look at top 2 of the deck, put one on top. Binary choice,
-// resolves on a single click — no separate Confirm button (see game.js's showRadioOperatorModal).
+// Radio Operator on-play: look at top 2 of the deck, put one on top. Binary choice, resolves on
+// a single click — no separate Confirm button (see game.js's showRadioOperatorModal). Note: the
+// old numeric-id Radio Operator card this was built for isn't in the new 125-card pool — kept
+// since the underlying modal/mechanic (js/game.js's showRadioOperatorModal) is still live code,
+// just currently unreachable from any Run-1 card; harmless to leave wired.
 async function handleRadioOperator() {
   const modal = document.getElementById("radio-op-modal");
   if (!modal || modal.style.display === "none") return;
@@ -50,12 +52,23 @@ async function handleArtyTargeting() {
   await sleep(CLICK_DELAY_MS);
 }
 
-// Change Formation (124) / Field Engineer (91): rotation direction doesn't affect the bot's
-// evaluation (scoreCommand/scoreHeroPower don't model it), so it always picks clockwise.
+// Change Formation (C16) / Field Coordinator's Hero Power (H11): rotation direction doesn't
+// affect the bot's evaluation (scoreCommand/scoreHeroPower don't model it), so it always picks
+// clockwise.
 async function handleRotateDirection() {
   const modal = document.getElementById("rotate-direction-modal");
   if (!modal || modal.style.display === "none") return;
   document.getElementById("rotate-cw-btn")?.click();
+  await sleep(CLICK_DELAY_MS);
+}
+
+// Chief Aircraft Engineer (H25) Craft: 3 freshly-rolled candidates, no existing heuristic
+// scores them (they don't exist until rolled), so the bot always takes the first one — same
+// "don't overthink it" simplification as handleRotateDirection's fixed clockwise choice.
+async function handleCraftPicker() {
+  const modal = document.getElementById("craft-picker-modal");
+  if (!modal || modal.style.display === "none") return;
+  document.querySelector("#craft-picker-cards .fo-pos-btn")?.click();
   await sleep(CLICK_DELAY_MS);
 }
 
@@ -70,7 +83,7 @@ async function flushPendingUiState(debug) {
   return readDebug();
 }
 
-async function resolveTargetingSmart({ attackerKey = null, isDamageCommand = false, heroPower = null } = {}, maxSteps = 3) {
+async function resolveTargetingSmart({ attackerKey = null, heroPower = null } = {}, maxSteps = 3) {
   for (let i = 0; i < maxSteps; i++) {
     const targetTiles = [...document.querySelectorAll(".tile.targetable, .tile.cmd-target")];
     if (targetTiles.length === 0) return;
@@ -79,10 +92,7 @@ async function resolveTargetingSmart({ attackerKey = null, isDamageCommand = fal
     const debug = readDebug();
     let chosenKey = keys[0];
     if (debug?.state) {
-      if (isDamageCommand) {
-        const best = bestDamageCommandTarget(debug.state, debug.state.initiative, keys);
-        if (best) chosenKey = best.targetKey;
-      } else if (heroPower) {
+      if (heroPower) {
         const best = bestHeroPowerTarget(debug.state, debug.state.initiative, heroPower.heroId, heroPower.col);
         if (best && keys.includes(best.key)) chosenKey = best.key;
       } else if (attackerKey) {
@@ -105,6 +115,7 @@ async function playBotTurnSteps() {
     await handleForwardObserver();
     await handleRadioOperator();
     await handleRotateDirection();
+    await handleCraftPicker();
     if (isGameOver()) return;
 
     let debug = await flushPendingUiState(readDebug());
@@ -210,8 +221,8 @@ async function playBotTurnSteps() {
       const handBefore = ps.hand.length;
       clickHandCard(choice.cardId);
       await sleep(CLICK_DELAY_MS);
-      await resolveTargetingSmart({ isDamageCommand: DAMAGE_COMMAND_IDS.has(choice.cardId) });
-      await handleRotateDirection(); // Change Formation (124) — direction modal, see game.js
+      await resolveTargetingSmart();
+      await handleRotateDirection(); // Change Formation (C16) — direction modal, see game.js
       const afterDebug = readDebug();
       const handAfter = afterDebug?.state?.[active]?.hand?.length ?? handBefore;
       if (handAfter === handBefore) deadThisTurn.add(choice.cardId); // no-op: card never left hand
@@ -224,6 +235,7 @@ async function playBotTurnSteps() {
       await sleep(CLICK_DELAY_MS);
       await resolveTargetingSmart({ heroPower: { heroId: choice.heroId, col: choice.col } });
       await handleRotateDirection(); // Field Engineer (91) — direction modal, see game.js
+      await handleCraftPicker(); // Chief Aircraft Engineer (H25) — 3-candidate modal, see game.js
       const afterDebug = readDebug();
       const nowActivated = afterDebug?.state?.[active]?.heroesActivatedThisTurn ?? [];
       if (!nowActivated.includes(choice.heroId)) deadThisTurn.add(`hero:${choice.heroId}`); // no-op: no legal target

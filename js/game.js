@@ -1,4 +1,4 @@
-import { CARD_BY_ID, CARDS } from './cards.js?v=1787173232';
+import { CARD_BY_ID, CARDS } from './cards.js?v=1788180619';
 import {
   createInitialState,
   startOfTurn,
@@ -19,15 +19,22 @@ import {
   consumeDiscounts,
   addDiscount,
   shuffle,
-} from './state.js?v=1787173232';
-import { getAttackableTargets, resolveSingleAttack, tileKey, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkUnitOnPlayAbility, checkCounteroffensiveGeneral, canStrikeHQDirectly, resolveEmptyBoardStrike, checkDeathrattle, checkPendingUnitBuff, hasColumnFreedom } from './combat.js?v=1787173232';
-import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1787173232';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1787173232';
-import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1787173232';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1787173232';
-import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1787173232';
-import { runBotTurn } from './bot_player.js?v=1787173232';
-import { bestHeroDeployment } from './bot_ai.js?v=1787173232';
+  remainingAttacks,
+  spendAttack,
+  grantTempAttacks,
+  resetPersistentAttacks,
+  hasEscalated,
+  markEscalateUse,
+  expireTempFuelGrant,
+} from './state.js?v=1788180619';
+import { getAttackableTargets, resolveSingleAttack, tileKey, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkCounteroffensiveGeneral, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff } from './combat.js?v=1788180619';
+import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1788180619';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1788180619';
+import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1788180619';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1788180619';
+import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1788180619';
+import { runBotTurn } from './bot_player.js?v=1788180619';
+import { bestHeroDeployment } from './bot_ai.js?v=1788180619';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
@@ -80,7 +87,11 @@ function renderDeckGrid() {
 renderDeckGrid();
 
 // Bridge (29), Radar Station (30), Fortification (33) excluded — effects not automated yet.
-const WORKING_OBJECTIVE_IDS = [26, 27, 28, 31, 32];
+// Updated 2026-08-31 (Run 1) to the new O1-O5 objective id scheme (Factory/Airfield/Supply
+// Depot/City/Artillery Position) — see cards.js. All 5 are the new truth's full Objective
+// list (Bridge/Radar Station/Fortification are cut entirely, not just excluded from this
+// pool, and are archived in js/archive/legacy_cards.js).
+const WORKING_OBJECTIVE_IDS = ['O1', 'O2', 'O3', 'O4', 'O5'];
 
 // Objective tile positions are fixed per map (MAPS[mapId].objectiveSlots — see maps.js);
 // the CARD assigned to each position is randomized from the auto-resolving pool at match
@@ -320,7 +331,7 @@ function renderMulliganCards(hand) {
     if (!card) return;
     const div = document.createElement('div');
     div.className = `hand-card mulligan-card${mulliganSelected.has(i) ? ' mulligan-discard' : ''}`;
-    const CLS_ABBR = { Infantry:'INF', Tank:'TNK', Artillery:'ART', Aircraft:'AIR', Commander:'CMD', Naval:'NAV' };
+    const CLS_ABBR = { Infantry:'INF', Tank:'TNK', Artillery:'ART', Aircraft:'AIR' };
     if (card.type === 'unit') {
       div.innerHTML = `
         <div class="hc-header">${card.name}</div>
@@ -732,6 +743,37 @@ function redraw() {
       if (el) el.classList.add('cmd-target');
     }
   }
+  if (uiState === 'hero-maneuver-destination' && pendingHeroManeuverSource) {
+    for (const key of getManeuverTargets(state, pendingHeroManeuverSource.key)) {
+      const el = document.querySelector(`[data-key="${key}"]`);
+      if (el) el.classList.add('cmd-target');
+    }
+  }
+  if (uiState === 'command-maneuver-source' && pendingCommandId) {
+    const sources = getCommandManeuverSources(pendingCommandId, pendingCommandManeuverSource?.excludeKey ?? null);
+    for (const key of sources ?? []) {
+      const el = document.querySelector(`[data-key="${key}"]`);
+      if (el) el.classList.add('cmd-target');
+    }
+  }
+  if (uiState === 'command-maneuver-destination' && pendingCommandManeuverSource?.key) {
+    for (const key of getManeuverTargets(state, pendingCommandManeuverSource.key)) {
+      const el = document.querySelector(`[data-key="${key}"]`);
+      if (el) el.classList.add('cmd-target');
+    }
+  }
+  if (uiState === 'command-coordstrike-first') {
+    for (const key of getCoordStrikeFirstCandidates()) {
+      const el = document.querySelector(`[data-key="${key}"]`);
+      if (el) el.classList.add('cmd-target');
+    }
+  }
+  if (uiState === 'command-coordstrike-second' && pendingCoordStrikeFirst) {
+    for (const key of getCoordStrikeSecondCandidates(pendingCoordStrikeFirst)) {
+      const el = document.querySelector(`[data-key="${key}"]`);
+      if (el) el.classList.add('cmd-target');
+    }
+  }
 
   if (uiState === 'arty-targeting') {
     const active = state.initiative;
@@ -749,7 +791,8 @@ function redraw() {
 
   const cancelBtn = document.getElementById('btn-cancel');
   if (cancelBtn) {
-    const rallyCryAlreadyPicked = pendingCommandId === 51 && pendingRallyCryCount < 2;
+    const rallyCryAlreadyPicked = ((pendingCommandId === 'C03' || pendingCommandId === 'C10') && pendingRallyCryCount < 2)
+    || (pendingCommandId === 'C32' && pendingRallyCryCount === 1);
     cancelBtn.textContent = rallyCryAlreadyPicked ? 'Done' : 'Cancel';
   }
 
@@ -907,63 +950,133 @@ function scopedUnits(s, role, col, filterFn) {
   return filterFn ? list.filter(filterFn) : list;
 }
 
+// Enemy-owned equivalent of scopedUnits, for Heroes whose Power targets the OPPONENT
+// (Strike Commander, H15) — same column-freedom rule, opposite ownership filter.
+function scopedEnemyUnits(s, role, col, filterFn) {
+  const opp = role === 'p1' ? 'p2' : 'p1';
+  const list = hasColumnFreedom(s[role]) ? unitsOnBoard(s, opp) : unitsInColumn(s, col, opp);
+  return filterFn ? list.filter(filterFn) : list;
+}
+
 // Tile keys a column-scoped active power can legally target. null = no target needed
 // (an instant), [] = needs a target but none exists right now.
+// Run 1 (2026-08-31): rewired to the new H01-H25 id scheme. Heroes not listed here are
+// either passive (no Active Power — H02/H04/H06/H08/H13/H14/H20 fire from other hooks, see
+// combat.js) or genuinely not yet wired (H16 Maneuver Commander needs a 2-step
+// source-then-destination flow — see resolveHeroTargeting/pendingHeroManeuverSource; H19
+// Training Officer needs a hand-instance-buff data model this prototype doesn't have yet —
+// both left logging "not automated yet" via tryActivateHero's implemented-flag path... but
+// since all 25 are `implemented:true` in cards.js (per the new truth), they instead fall
+// through applyHeroPower's default case below with an explicit "not automated" log line).
 function heroTargetKeys(s, role, col, hero) {
   switch (hero.id) {
-    case 92: // Tactical Commander — any friendly unit in the column
+    case 'H03': // Tactical Commander — any friendly unit in the column
       return scopedUnits(s, role, col).map(u => u.key);
-    case 99: // Garrison Commander — friendly unit adjacent to (not on) an Objective, board-wide
-      return unitsOnBoard(s, role)
-        .filter(({ key }) => getAdjacentKeys(key).some(k => s.objectives[k]))
-        .map(u => u.key);
-    case 100: // Recovery Officer — only a suppressed friendly unit is worth targeting
+    case 'H05': // Recovery Officer — only a suppressed friendly unit is worth targeting
       return scopedUnits(s, role, col, ({ unit }) => unit.state === 'suppressed').map(u => u.key);
-    case 91: // Field Engineer — any unsuppressed friendly unit in the column (rotates it)
-      return scopedUnits(s, role, col, ({ unit }) => unit.state === 'normal').map(u => u.key);
-    case 142: // Fire Support Officer — any friendly unit in the column (grants Bombard)
+    case 'H10': // Conventional Warfare Commander — friendly Vanilla (no-keyword) unit, board-wide
+      return unitsOnBoard(s, role).filter(({ unit }) => !CARD_BY_ID[unit.cardId]?.keyword).map(u => u.key);
+    case 'H11': // Field Coordinator — any friendly unit in the column (rotates it; legal even Suppressed)
       return scopedUnits(s, role, col).map(u => u.key);
+    case 'H12': // Fire Support Officer — any friendly unit in the column (grants Bombard)
+      return scopedUnits(s, role, col).map(u => u.key);
+    case 'H15': // Strike Commander — an ENEMY unit in the column
+      return scopedEnemyUnits(s, role, col).map(u => u.key);
+    case 'H16': // Maneuver Commander — pick the friendly unit to move (2nd click picks the destination)
+      return scopedUnits(s, role, col).map(u => u.key);
+    case 'H18': // Artillery Commander — friendly Artillery in the column
+      return scopedUnits(s, role, col, ({ unit }) => CARD_BY_ID[unit.cardId]?.cls === 'Artillery').map(u => u.key);
     default:
       return null;
   }
 }
 
 // Applies an activated Hero Power. `s` must already have the Fuel deducted.
+// Run 1 (2026-08-31): rewired to the new H01-H25 id scheme against doc 03's actual ability
+// text per Hero (not reused from old cases by id-position — several old/new Heroes share a
+// name but not an effect, e.g. old board-wide Armored Commander vs. new column-scoped H07).
 function applyHeroPower(s, role, col, hero, targetKey) {
   const log = [];
   const nameOf = key => CARD_BY_ID[s.board[key]?.cardId]?.name ?? 'unit';
+  const opp = role === 'p1' ? 'p2' : 'p1';
 
   switch (hero.id) {
-    case 87: // Quartermaster General — draw 1
+    case 'H01': // Quartermaster General — draw 1
       s = { ...s, [role]: drawCards(s[role], 1) };
       log.push(`${hero.name}: draw 1 card`);
       break;
 
-    case 103: // Armored Commander — next Tank anywhere on board costs 3 less
-      s = { ...s, [role]: addDiscount(s[role], { appliesTo: 'Tank', column: null, amount: 3, min: 0 }) };
-      log.push(`${hero.name}: next Tank costs 3 less Fuel`);
+    case 'H07': // Armored Commander — next Tank in THIS COLUMN costs 3 less
+      s = { ...s, [role]: addDiscount(s[role], { appliesTo: 'Tank', column: col, amount: 3, min: 0 }) };
+      log.push(`${hero.name}: next Tank played in column ${col + 1} costs 3 less Fuel`);
       break;
 
-    case 107: // Command Specialist — next Command costs 2 less (board-wide)
+    case 'H09': // Command Specialist — next Command costs 2 less (board-wide)
       s = { ...s, [role]: addDiscount(s[role], { appliesTo: 'command', column: null, amount: 2, min: 0 }) };
       log.push(`${hero.name}: next Command costs 2 less Fuel`);
       break;
 
-    case 92: { // Tactical Commander — +1 all sides this turn
-      const u = s.board[targetKey];
-      log.push(`${hero.name}: ${nameOf(targetKey)} +1 all sides this turn`);
-      s = { ...s, board: { ...s.board, [targetKey]: { ...u, tempSideBonus: (u.tempSideBonus || 0) + 1 } } };
+    case 'H17': // HQ Assault Commander — deal 1 damage to enemy HQ
+      s = { ...s, [opp]: { ...s[opp], hq: s[opp].hq - 1 } };
+      log.push(`${hero.name}: 1 damage to ${opp.toUpperCase()}'s HQ`);
+      break;
+
+    case 'H22': { // Frontline Marshal — ALL units in this column, friendly AND enemy, +2 permanent
+      const keys = hasColumnFreedom(s[role]) ? Object.keys(s.board) : columnKeys(col);
+      const newBoard = { ...s.board };
+      let count = 0;
+      for (const k of keys) {
+        const u = newBoard[k];
+        if (!u || u.state === 'destroyed') continue;
+        newBoard[k] = { ...u, grantedSideBonus: (u.grantedSideBonus || 0) + 2, sideBonusTurns: 99 };
+        count++;
+      }
+      s = { ...s, board: newBoard };
+      log.push(`${hero.name}: ${count} unit(s) in column ${col + 1} +2 all sides (permanent, friendly and enemy)`);
       break;
     }
 
-    case 99: { // Garrison Commander — Guard until your next turn
-      const u = s.board[targetKey];
-      log.push(`${hero.name}: ${nameOf(targetKey)} gains Guard (until your next turn)`);
-      s = { ...s, board: { ...s.board, [targetKey]: { ...u, grantedKeywords: [...(u.grantedKeywords || []), 'Guard'] } } };
+    case 'H23': { // Army Group Commander — all friendly units +1 all sides permanently
+      const newBoard = { ...s.board };
+      let count = 0;
+      for (const [k, u] of Object.entries(newBoard)) {
+        if (!u || u.owner !== role || u.state === 'destroyed') continue;
+        newBoard[k] = { ...u, grantedSideBonus: (u.grantedSideBonus || 0) + 1, sideBonusTurns: 99 };
+        count++;
+      }
+      s = { ...s, board: newBoard };
+      log.push(`${hero.name}: ${count} friendly unit(s) +1 all sides (permanent)`);
       break;
     }
 
-    case 100: { // Recovery Officer — remove Suppression
+    case 'H24': { // Long War Commander — repeat current Power times: random friendly unit in
+      // column gets +1 to a random side, permanently. Each repetition independent (doc 01
+      // §21/doc 02 Q117) — may all land on the same Unit.
+      const power = s[role].longWarPower?.[hero.id] ?? 1;
+      const pool = scopedUnits(s, role, col);
+      let count = 0;
+      if (pool.length) {
+        const dirs = ['n', 'e', 's', 'w'];
+        for (let i = 0; i < power; i++) {
+          const pick = pool[Math.floor(Math.random() * pool.length)];
+          const dir = dirs[Math.floor(Math.random() * 4)];
+          const u = s.board[pick.key];
+          s = { ...s, board: { ...s.board, [pick.key]: { ...u, [`perm_${dir}`]: (u[`perm_${dir}`] ?? 0) + 1 } } };
+          count++;
+        }
+      }
+      log.push(`${hero.name}: ${count} repetition(s) of +1 permanent to a random side on a random friendly Unit in column ${col + 1}`);
+      break;
+    }
+
+    case 'H03': { // Tactical Commander — +1 all sides permanently
+      const u = s.board[targetKey];
+      log.push(`${hero.name}: ${nameOf(targetKey)} +1 all sides (permanent)`);
+      s = { ...s, board: { ...s.board, [targetKey]: { ...u, grantedSideBonus: (u.grantedSideBonus || 0) + 1, sideBonusTurns: 99 } } };
+      break;
+    }
+
+    case 'H05': { // Recovery Officer — remove Suppression
       log.push(`${hero.name}: ${nameOf(targetKey)} un-suppressed`);
       const result = removeSuppression(s, targetKey);
       s = result.state;
@@ -971,41 +1084,59 @@ function applyHeroPower(s, role, col, hero, targetKey) {
       break;
     }
 
-    case 142: { // Fire Support Officer — grant Bombard until end of turn
+    case 'H10': { // Conventional Warfare Commander — +3 all sides until end of turn
+      const u = s.board[targetKey];
+      log.push(`${hero.name}: ${nameOf(targetKey)} +3 all sides (until end of turn)`);
+      s = { ...s, board: { ...s.board, [targetKey]: { ...u, tempSideBonus: (u.tempSideBonus || 0) + 3 } } };
+      break;
+    }
+
+    case 'H12': { // Fire Support Officer — grant Bombard until end of turn
       const u = s.board[targetKey];
       log.push(`${hero.name}: ${nameOf(targetKey)} gains Bombard (until end of turn)`);
       s = { ...s, board: { ...s.board, [targetKey]: { ...u, tempKeywords: [...(u.tempKeywords || []), 'Bombard'] } } };
       break;
     }
 
-    case 144: { // Field Marshal — all friendly units +N all sides (permanent), N escalates
-      // per activation; doubled if Grand Marshal (146) is also deployed.
-      const usesBefore = s[role].fieldMarshalUses ?? 0;
-      const baseAmount = usesBefore + 1;
-      const doubled = (s[role].heroZones ?? []).includes(146);
-      const amount = doubled ? baseAmount * 2 : baseAmount;
-      const newBoard = { ...s.board };
-      let count = 0;
-      for (const [k, u] of Object.entries(newBoard)) {
-        if (!u || u.owner !== role || u.state === 'destroyed') continue;
-        newBoard[k] = { ...u, grantedSideBonus: (u.grantedSideBonus || 0) + amount, sideBonusTurns: 99 };
-        count++;
-      }
-      s = { ...s, board: newBoard, [role]: { ...s[role], fieldMarshalUses: baseAmount } };
-      log.push(`${hero.name}: ${count} friendly unit(s) +${amount} all sides (permanent)${doubled ? ' — doubled by Grand Marshal' : ''}`);
+    case 'H18': { // Artillery Commander — grant Blast until end of turn
+      const u = s.board[targetKey];
+      log.push(`${hero.name}: ${nameOf(targetKey)} gains Blast (until end of turn)`);
+      s = { ...s, board: { ...s.board, [targetKey]: { ...u, tempKeywords: [...(u.tempKeywords || []), 'Blast'] } } };
       break;
     }
 
-    case 145: { // Sector Commander — all friendly units in this column +2 all sides
-      const cols = scopedUnits(s, role, col);
-      const newBoard = { ...s.board };
-      for (const { key: k, unit: u } of cols) {
-        newBoard[k] = { ...u, grantedSideBonus: (u.grantedSideBonus || 0) + 2, sideBonusTurns: 1 };
+    case 'H15': { // Strike Commander — Hit 1 enemy unit in this Hero's column (direct Hit
+      // ladder, not attack comparison — doc 01's own note on this Hero).
+      const before = s.board[targetKey];
+      const beforeName = CARD_BY_ID[before?.cardId]?.name ?? 'unit';
+      const { newUnit, hqDamage } = applyHit(before);
+      const finalUnit = newUnit.state === 'destroyed' ? null : newUnit;
+      s = { ...s, board: { ...s.board, [targetKey]: finalUnit }, [opp]: { ...s[opp], hq: s[opp].hq - hqDamage } };
+      log.push(`${hero.name}: Hit ${beforeName} — ${finalUnit === null ? 'Destroyed' : newUnit.state}`);
+      if (finalUnit === null) {
+        const pd = applyPostDestructionEffects(s, { unitKey: targetKey, dyingUnit: before, sourceUnitKey: null });
+        s = pd.state;
+        log.push(...pd.log);
       }
-      s = { ...s, board: newBoard };
-      log.push(`${hero.name}: ${cols.length} friendly unit(s) +2 all sides (until your next turn)`);
+      s = recalculateDynamicStats(s);
       break;
     }
+
+    case 'H19': { // Training Officer — all 1- and 2-cost Units currently in hand +1 all sides
+      // permanently. See applyHandBuff (combat.js) for how this works without a hand-instance
+      // rewrite: qualifying hand slots get replaced with a freshly-registered buffed clone.
+      const { playerState, log: buffLog } = applyHandBuff(s[role], 1, c => c.cost === 1 || c.cost === 2);
+      s = { ...s, [role]: playerState };
+      log.push(`${hero.name}: ${buffLog.length} Unit(s) in hand +1 all sides (permanent)`);
+      log.push(...buffLog);
+      break;
+    }
+
+    // H16 Maneuver Commander is handled specially in resolveHeroTargeting (2-step
+    // source-then-destination flow) — it never reaches this switch with a final targetKey.
+
+    // H25 Chief Aircraft Engineer (Craft) is handled specially in tryActivateHero (opens the
+    // 3-candidate picker modal instead of resolving instantly) — it never reaches this switch.
 
     default:
       log.push(`${hero.name}: power not automated yet`);
@@ -1060,6 +1191,21 @@ function tryActivateHero(role, col) {
   const targets = heroTargetKeys(state, role, col, hero);
 
   if (targets === null) { // instant — no target to pick
+    if (hero.id === 'H25') { // Chief Aircraft Engineer — Craft: pay/lock now, resolve the
+      // 3-candidate picker via modal (see showCraftPickerModal) rather than applyHeroPower.
+      const activatedBefore = ps.heroesActivatedThisTurn ?? [];
+      const paid = {
+        ...state,
+        [role]: {
+          ...spendCostMods(ps),
+          fuel: ps.fuel - cost,
+          heroesActivatedThisTurn: activatedBefore.includes(hero.id) ? activatedBefore : [...activatedBefore, hero.id],
+        },
+      };
+      commitState(paid, costModLog);
+      showCraftPickerModal(role);
+      return true;
+    }
     const paid = { ...state, [role]: { ...spendCostMods(ps), fuel: ps.fuel - cost } };
     const { state: next, log } = applyHeroPower(paid, role, col, hero, null);
     commitState(next, [...costModLog, ...log]);
@@ -1085,6 +1231,10 @@ function tryActivateHero(role, col) {
   return true;
 }
 
+// Maneuver Commander (H16) needs a 2nd click (destination) after the 1st (source unit) —
+// set while resolveHeroTargeting hands off to the destination-picking step below.
+let pendingHeroManeuverSource = null;
+
 function resolveHeroTargeting(clickedKey) {
   if (!pendingHeroTargets?.has(clickedKey)) return;
   const role = state.initiative;
@@ -1094,13 +1244,43 @@ function resolveHeroTargeting(clickedKey) {
   pendingHeroColumn = null;
   pendingHeroTargets = null;
   preCommandState = null;
-  uiState = 'idle';
-  if (hero.id === 91) { // Field Engineer — rotate, direction chosen via modal (see Change Formation)
+  if (hero.id === 'H11') { // Field Coordinator — rotate, direction chosen via modal
+    uiState = 'idle';
     showRotateDirectionModal({ kind: 'hero', targetKey: clickedKey, cardName: hero.name, s: state, log: [], role, heroId: hero.id });
     return;
   }
+  if (hero.id === 'H16') { // Maneuver Commander — this click picked the source unit; now pick a destination
+    pendingHeroManeuverSource = { key: clickedKey, role, hero };
+    uiState = 'hero-maneuver-destination';
+    appendLog([`${hero.name}: choose a destination tile for ${CARD_BY_ID[state.board[clickedKey]?.cardId]?.name ?? 'the unit'}`]);
+    redraw();
+    return;
+  }
+  uiState = 'idle';
   const { state: next, log } = applyHeroPower(state, role, col, hero, clickedKey);
   commitState(next, log);
+}
+
+// H16 Maneuver Commander's 2nd click: destination tile. Maneuvers the unit and resets its
+// persistent attacks (doc 01's own note: this Hero's reset is explicit, not intrinsic to
+// Maneuver itself — see resetPersistentAttacks in state.js).
+function resolveHeroManeuverDestination(destKey) {
+  if (!pendingHeroManeuverSource) return;
+  const { key: sourceKey, role, hero } = pendingHeroManeuverSource;
+  const legalTargets = getManeuverTargets(state, sourceKey);
+  if (!legalTargets.includes(destKey)) return;
+  pendingHeroManeuverSource = null;
+  uiState = 'idle';
+  const { state: afterManeuver, log } = resolveManeuver(state, sourceKey, destKey);
+  const movedUnit = afterManeuver.board[destKey];
+  const reset = { ...afterManeuver, board: { ...afterManeuver.board, [destKey]: resetPersistentAttacks(movedUnit) } };
+  const activatedBefore = reset[role].heroesActivatedThisTurn ?? [];
+  const next = {
+    ...reset,
+    [role]: { ...reset[role], heroesActivatedThisTurn: activatedBefore.includes(hero.id) ? activatedBefore : [...activatedBefore, hero.id] },
+  };
+  commitState(next, [...log, `${hero.name}: attacks reset`]);
+  checkWin();
 }
 
 // Mobile Command Halftrack (114) on-play: column index awaiting an optional Hero move into
@@ -1150,9 +1330,9 @@ function handleHeroZoneClick(role, col, shiftKey = false) {
   if (state.initiative !== role) return;                 // only on your own turn
   if (isOnline && myRole !== role) return;               // and only your own heroes
   if (uiState === 'hero-targeting') return;              // finish the current power first
-  // Command Shuffle (122): reuses this exact pick-up/drop flow, but must not activate a
+  // Command Shuffle (C15): reuses this exact pick-up/drop flow, but must not activate a
   // power on pick-up and must not spend (or require) the normal Hero Phase reposition.
-  const shuffleActive = pendingCommandId === 122;
+  const shuffleActive = pendingCommandId === 'C15';
   const ps = state[role];
   const zones = ps.heroZones ?? [null, null, null, null];
 
@@ -1182,10 +1362,14 @@ function handleHeroZoneClick(role, col, shiftKey = false) {
     ? `${prefix}${moved} swaps with ${swappedWith} (columns ${from + 1} ↔ ${col + 1})`
     : `${prefix}${moved} repositions to column ${col + 1}`;
 
-  commitState(
-    { ...state, [role]: { ...ps, heroZones: next, heroRepositioned: shuffleActive ? ps.heroRepositioned : true } },
-    [msg],
-  );
+  let afterMove = { ...state, [role]: { ...ps, heroZones: next, heroRepositioned: shuffleActive ? ps.heroRepositioned : true } };
+  const msgs = [msg];
+  if (shuffleActive) { // C15 is a true Command play — H20 checks here, not on a normal Hero reposition
+    const rs = applyRuthlessStrategistIfPresent(afterMove, role);
+    afterMove = rs.state;
+    msgs.push(...rs.log);
+  }
+  commitState(afterMove, msgs);
   if (shuffleActive) { pendingCommandId = null; preCommandState = null; }
 }
 
@@ -1245,8 +1429,12 @@ document.getElementById('p1-hand').addEventListener('click', e => {
       redraw();
       return;
     }
-    if (cardId === 123) { // Radio Interference — targets an enemy Hero Zone, not a board tile
-      startEnemyHeroTargeting(cardId);
+    if (COMMAND_MANEUVER_SOURCE_FILTER[cardId]) { // C21/C27/C35 — 2-step Maneuver flow
+      startCommandManeuver(cardId);
+      return;
+    }
+    if (cardId === 'C06') { // Coordinated Strike — 2-unit multi-select
+      startCoordinatedStrike(cardId);
       return;
     }
     if (!playInstantCommand(cardId)) {
@@ -1311,10 +1499,13 @@ document.getElementById('board').addEventListener('click', e => {
       newS = coGen.state;
       log.push(...coGen.log);
     } else if (finalUnit === null) {
-      const dr = checkDeathrattle(newS, clickedKey, unit);
-      newS = dr.state;
-      log.push(...dr.log);
+      // Last Stand / Breakthrough (shared destruction chain) — no source Unit for
+      // Breakthrough attribution since this Hit came from the Objective, not a Unit attack.
+      const pd = applyPostDestructionEffects(newS, { unitKey: clickedKey, dyingUnit: unit, sourceUnitKey: null });
+      newS = pd.state;
+      log.push(...pd.log);
     }
+    newS = recalculateDynamicStats(newS);
     const artyTransitionFlags = new Map();
     if (finalUnit === null) artyTransitionFlags.set(clickedKey, 'destroyed');
     else if (newUnit.state === 'suppressed') artyTransitionFlags.set(clickedKey, 'suppressed');
@@ -1387,22 +1578,19 @@ document.getElementById('board').addEventListener('click', e => {
       state = afterHeroPassives;
     }
 
-    // Veteran Signal Corps / Combat Engineers — the unit's own "On Play" ability.
-    const { state: afterOnPlay, log: onPlayLog } = checkUnitOnPlayAbility(state, active, c, clickedKey, card);
-    if (onPlayLog.length > 0) {
-      state = { ...afterOnPlay, log: [...(afterOnPlay.log ?? []), ...onPlayLog] };
-      appendLog(onPlayLog);
-    } else {
-      state = afterOnPlay;
-    }
-
-    // Deathrattle: Convoy Escort (138) — a queued "next Naval Unit +1 all sides" bonus.
-    const { state: afterUnitBuff, log: unitBuffLog } = checkPendingUnitBuff(state, active, clickedKey, card);
-    if (unitBuffLog.length > 0) {
-      state = { ...afterUnitBuff, log: [...(afterUnitBuff.log ?? []), ...unitBuffLog] };
-      appendLog(unitBuffLog);
-    } else {
-      state = afterUnitBuff;
+    // Unit's own "On Play" ability. Run 1 (2026-08-31): the old per-old-numeric-id dispatcher
+    // (checkUnitOnPlayAbility, Veteran Signal Corps 119 / Combat Engineers 112 — both archived,
+    // no new-truth equivalent) and the Deathrattle-only checkPendingUnitBuff (Convoy Escort 138,
+    // also archived) are both removed. Only a generic hook remains: a Craft-generated Aircraft's
+    // drawback (doc 01 §28), which fires immediately on entering the battlefield regardless of
+    // which specific crafted card it is. On-Play effects for the current 125-card pool's actual
+    // Units (Aircraft "Maneuver 1 other friendly Unit" On Plays: A55/A56/A61/A62/A63/A65) are
+    // NOT yet wired — they need the same 2-step source-then-destination targeting flow H16 uses
+    // (see resolveHeroManeuverDestination) applied to unit placement, not yet built.
+    if (card.generated && card.craftDrawback) {
+      const { state: afterDrawback, log: drawbackLog } = resolveCraftDrawback(state, active, clickedKey, card.craftDrawback);
+      state = { ...afterDrawback, log: [...(afterDrawback.log ?? []), ...drawbackLog] };
+      appendLog(drawbackLog);
     }
 
     // Mobile Command Halftrack (114) — on-play, offers to move a Hero into this (empty)
@@ -1436,23 +1624,14 @@ document.getElementById('board').addEventListener('click', e => {
 
     selectedHandCardId = null;
 
+    // Direct HQ (doc 01 §19) is evaluated once at end of turn (see the End Turn handler),
+    // never reactively on placement — removed 2026-08-31 (Run 1) along with the other 2
+    // reactive Empty-Board HQ Strike call sites below. A newly-placed unit with no immediate
+    // target simply stays idle; unused attacks convert to HQ damage only at end of turn.
     const targets = getAttackableTargets(state, clickedKey);
     if (targets.length > 0) {
       uiState = "targeting";
       pendingAttackerKey = clickedKey;
-    } else if (canStrikeHQDirectly(state, clickedKey)) {
-      const hits = getKeywords(state.board[clickedKey]).includes('Double Attack') ? 2 : 1;
-      const result = resolveEmptyBoardStrike(state, clickedKey, hits);
-      state = {
-        ...state,
-        p1: { ...state.p1, hq: state.p1.hq - result.hqDamageToP1 },
-        p2: { ...state.p2, hq: state.p2.hq - result.hqDamageToP2 },
-        log: [...(state.log ?? []), ...result.logEntries],
-      };
-      attackedThisTurn.set(clickedKey, hits);
-      appendLog(result.logEntries);
-      uiState = "idle";
-      pendingAttackerKey = null;
     } else {
       uiState = "idle";
       pendingAttackerKey = null;
@@ -1477,72 +1656,66 @@ document.getElementById('board').addEventListener('click', e => {
     }
     if (!targets.some(t => t.key === clickedKey)) return;
 
-    const result = resolveSingleAttack(state, pendingAttackerKey, clickedKey);
-    const newBoard = applyMutations(state.board, result.boardMutations);
+    // Rally triggers on the declared attack itself, success not required (doc 01 §15) — must
+    // fire before resolveSingleAttack so it isn't skipped on a failed comparison.
+    const rally = checkRally(state, pendingAttackerKey);
+    let rallyState = rally.state;
+    const rallyLog = rally.log;
+
+    const result = resolveSingleAttack(rallyState, pendingAttackerKey, clickedKey);
+    const newBoard = applyMutations(rallyState.board, result.boardMutations);
 
     // Overrun bonus: attacker's Overrun flag adds +1 HQ damage per hit that deals damage
-    const attacker = state.initiative;
+    const attacker = rallyState.initiative;
     let dmgP1 = result.hqDamageToP1;
     let dmgP2 = result.hqDamageToP2;
     const overrunLog = [];
-    if (attacker === 'p1' && dmgP2 > 0 && state.p1.overrun) { dmgP2++; overrunLog.push('Overrun: +1 HQ damage'); }
-    if (attacker === 'p2' && dmgP1 > 0 && state.p2.overrun) { dmgP1++; overrunLog.push('Overrun: +1 HQ damage'); }
+    if (attacker === 'p1' && dmgP2 > 0 && rallyState.p1.overrun) { dmgP2++; overrunLog.push('Overrun: +1 HQ damage'); }
+    if (attacker === 'p2' && dmgP1 > 0 && rallyState.p2.overrun) { dmgP1++; overrunLog.push('Overrun: +1 HQ damage'); }
 
     let newState = {
-      ...state,
+      ...rallyState,
       board: newBoard,
-      p1: { ...state.p1, hq: state.p1.hq - dmgP1 },
-      p2: { ...state.p2, hq: state.p2.hq - dmgP2 },
+      p1: { ...rallyState.p1, hq: rallyState.p1.hq - dmgP1 },
+      p2: { ...rallyState.p2, hq: rallyState.p2.hq - dmgP2 },
     };
 
     const attackerKey = pendingAttackerKey;
-    const attackerUnit = state.board[attackerKey];
+    const attackerUnit = rallyState.board[attackerKey];
     attackedThisTurn.set(attackerKey, (attackedThisTurn.get(attackerKey) ?? 0) + 1);
     const attackCount = attackedThisTurn.get(attackerKey);
     const isDoubleAttack = getKeywords(attackerUnit).includes('Double Attack');
+    if (newState.board[attackerKey]) {
+      newState = { ...newState, board: { ...newState.board, [attackerKey]: spendAttack(newState.board[attackerKey]) } };
+    }
 
     // Track first DA hit so second hit can always re-target it
     if (isDoubleAttack && attackCount === 1) lastDATargetKey = clickedKey;
     else if (!isDoubleAttack || attackCount >= 2) lastDATargetKey = null;
 
-    const postAttackTargets = getAttackableTargets({ ...state, board: newBoard }, attackerKey, isDoubleAttack);
+    const postAttackTargets = getAttackableTargets({ ...rallyState, board: newBoard }, attackerKey);
 
-    // Kill tracking + mission check
+    // Kill tracking, then Last Stand / Breakthrough via the shared post-destruction hook
+    // (doc 01 §9 destruction chain) — HQ damage for the kill was already correctly computed
+    // by applyHit inside resolveSingleAttack above, so this only runs the remaining steps.
     const wasDestroyed = result.boardMutations.some(m => m.newUnit === null);
-    const bonusLog = [];
+    let postDestroyLog = [];
     if (wasDestroyed) {
       newState = { ...newState, [attacker]: {
         ...newState[attacker],
         killsThisTurn: (newState[attacker].killsThisTurn ?? 0) + 1,
         totalKills: (newState[attacker].totalKills ?? 0) + 1,
       }};
-      // Strategic Bomber (120) — draw 1 the first time THIS unit destroys an enemy.
-      // Attacker survives on newBoard[attackerKey] unless it also died (defender-only kill
-      // check here, so it's still there) — hasScoredKill lives on the board unit instance,
-      // not the card, so a second copy on the board tracks its own kill independently.
-      if (attackerUnit.cardId === 120 && !attackerUnit.hasScoredKill && newBoard[attackerKey]) {
-        newState = {
-          ...newState,
-          board: { ...newState.board, [attackerKey]: { ...newState.board[attackerKey], hasScoredKill: true } },
-          [attacker]: drawCards(newState[attacker], 1),
-        };
-        bonusLog.push(`${CARD_BY_ID[120].name}: first kill for this unit — draw 1 card`);
-      }
-    }
-
-    // Deathrattle — the destroyed unit (if any) gets its on-death effect. `state` (the outer
-    // module var) is still the PRE-mutation snapshot here — commitState() hasn't run yet.
-    let deathrattleLog = [];
-    if (wasDestroyed) {
       const dyingKey = result.boardMutations.find(m => m.newUnit === null)?.key;
       if (dyingKey) {
-        const dr = checkDeathrattle(newState, dyingKey, state.board[dyingKey]);
-        newState = dr.state;
-        deathrattleLog = dr.log;
+        const pd = applyPostDestructionEffects(newState, { unitKey: dyingKey, dyingUnit: rallyState.board[dyingKey], sourceUnitKey: attackerKey });
+        newState = pd.state;
+        postDestroyLog = pd.log;
       }
     }
+    newState = recalculateDynamicStats(newState);
 
-    // Counteroffensive General (101) — first friendly unit to get Suppressed this turn
+    // Counteroffensive General (H06) — first friendly unit to get Suppressed this turn
     let coGenLog = [];
     if (newState.board[clickedKey]?.state === 'suppressed') {
       const coGen = checkCounteroffensiveGeneral(newState, clickedKey);
@@ -1550,26 +1723,12 @@ document.getElementById('board').addEventListener('click', e => {
       coGenLog = coGen.log;
     }
 
-    // Double Attack's 2nd hit had a real target a moment ago (postAttackTargets was computed
-    // above) but the 1st hit just emptied the board — don't lose the 2nd attack, resolve it as
-    // an Empty-Board HQ Strike instead of dropping straight to idle. hits=1 (not re-derived
-    // from the keyword) since the 1st hit already consumed one of this unit's two attacks.
-    // Applied directly to newState.p1/p2.hq, deliberately AFTER the Overrun-bonus block above
-    // (which only covers the 1st hit's damage) — an HQ strike isn't a Suppress/Destroy event,
-    // so it must never pass back through that check.
-    let hqStrikeLog = [];
-    if (isDoubleAttack && attackCount < 2 && postAttackTargets.length === 0 && canStrikeHQDirectly(newState, attackerKey)) {
-      const strikeResult = resolveEmptyBoardStrike(newState, attackerKey, 1);
-      newState = {
-        ...newState,
-        p1: { ...newState.p1, hq: newState.p1.hq - strikeResult.hqDamageToP1 },
-        p2: { ...newState.p2, hq: newState.p2.hq - strikeResult.hqDamageToP2 },
-      };
-      hqStrikeLog = strikeResult.logEntries;
-      attackedThisTurn.set(attackerKey, 2);
-      uiState = "idle";
-      pendingAttackerKey = null;
-    } else if (isDoubleAttack && attackCount < 2 && postAttackTargets.length > 0) {
+    // Double Attack's 2nd hit: if a real target existed a moment ago (postAttackTargets,
+    // computed above) but the 1st hit just removed it, the 2nd hit simply has nothing to do
+    // right now — it stays available and converts via Direct HQ at end of turn if it's still
+    // unused and still has no legal target then (doc 01 §19). No mid-turn conversion here
+    // (removed 2026-08-31, Run 1) — see the End Turn handler for the actual Direct HQ sweep.
+    if (isDoubleAttack && attackCount < 2 && postAttackTargets.length > 0) {
       uiState = "targeting";
       pendingAttackerKey = attackerKey;
     } else {
@@ -1587,7 +1746,7 @@ document.getElementById('board').addEventListener('click', e => {
       else if (newUnit.state === 'suppressed') transitionFlags.set(clickedKey, 'suppressed');
     }
 
-    commitState(newState, [...result.logEntries, ...overrunLog, ...bonusLog, ...deathrattleLog, ...coGenLog, ...hqStrikeLog], transitionFlags);
+    commitState(newState, [...rallyLog, ...result.logEntries, ...overrunLog, ...postDestroyLog, ...coGenLog], transitionFlags);
     checkWin();
     return;
   }
@@ -1606,6 +1765,32 @@ document.getElementById('board').addEventListener('click', e => {
     return;
   }
 
+  // HERO MANEUVER DESTINATION (H16 Maneuver Commander's 2nd click)
+  if (uiState === 'hero-maneuver-destination') {
+    resolveHeroManeuverDestination(clickedKey);
+    return;
+  }
+
+  // COMMAND MANEUVER (C21/C27/C35): 1st click picks the source unit, 2nd picks the destination
+  if (uiState === 'command-maneuver-source') {
+    resolveCommandManeuverSource(clickedKey);
+    return;
+  }
+  if (uiState === 'command-maneuver-destination') {
+    resolveCommandManeuverDestination(clickedKey);
+    return;
+  }
+
+  // COORDINATED STRIKE (C06): 1st click picks unit A, 2nd click picks unit B (shared target)
+  if (uiState === 'command-coordstrike-first') {
+    resolveCoordStrikeFirst(clickedKey);
+    return;
+  }
+  if (uiState === 'command-coordstrike-second') {
+    resolveCoordStrikeSecond(clickedKey);
+    return;
+  }
+
   // IDLE: select a friendly unit to attack
   if (uiState === "idle") {
     const unit = state.board[clickedKey];
@@ -1618,19 +1803,9 @@ document.getElementById('board').addEventListener('click', e => {
 
     const targets = getAttackableTargets(state, clickedKey);
     if (targets.length === 0) {
-      if (canStrikeHQDirectly(state, clickedKey)) {
-        const hits = maxAttacks - (attackedThisTurn.get(clickedKey) ?? 0);
-        const result = resolveEmptyBoardStrike(state, clickedKey, hits);
-        const newState = {
-          ...state,
-          p1: { ...state.p1, hq: state.p1.hq - result.hqDamageToP1 },
-          p2: { ...state.p2, hq: state.p2.hq - result.hqDamageToP2 },
-        };
-        attackedThisTurn.set(clickedKey, maxAttacks);
-        commitState(newState, result.logEntries);
-        checkWin();
-        return;
-      }
+      // No mid-turn Direct HQ conversion (removed 2026-08-31, Run 1) — a unit with no legal
+      // target just has nothing to do right now; unused attacks convert at end of turn only
+      // (see the End Turn handler's evaluateDirectHQ call).
       appendLog([`${CARD_BY_ID[unit.cardId]?.name ?? '?'} at ${clickedKey}: No valid targets`]);
       return;
     }
@@ -1762,8 +1937,27 @@ function applyObjectiveEffects(s, player) {
   return { state: s, log, pendingArtyHits: artyHits };
 }
 
+// ── Hero passive — Ruthless Strategist (H20) ────────────────────────────────
+// "Whenever you play a Command, after it fully resolves: draw 1 card, then deal 1 damage to
+// your HQ" (doc 01 §22 — external trigger AFTER the Command's own printed effect). Called at
+// every true command-completion point (not intermediate steps like a Rally Cry chain's first
+// pick, or Forward Observer's own deck-look before its modal choice is confirmed) — see each
+// call site below (playInstantCommand's shared end, applyCommandEffect's shared end, the
+// Objective Push / Command Shuffle / rotate-modal / command-maneuver early-return paths, and
+// the Forward Observer modal's own confirm handler).
+function applyRuthlessStrategistIfPresent(s, active) {
+  if (!(s[active].heroZones ?? []).includes('H20')) return { state: s, log: [] };
+  const afterDraw = drawCards(s[active], 1);
+  const afterDamage = { ...afterDraw, hq: afterDraw.hq - 1 };
+  return { state: { ...s, [active]: afterDamage }, log: [`${CARD_BY_ID['H20'].name}: draw 1 card, 1 damage to own HQ`] };
+}
+
 // ── Instant commands ──────────────────────────────────────────────────────────
-// Returns true if handled (instant), false if it needs targeting UI (deferred).
+// Run 1 (2026-08-31): rewired to the new C01-C35 id scheme against doc 03's actual effect
+// text — several old and new Commands share a name but NOT an effect (verified per-card, not
+// assumed by id/name — e.g. old id 78 "Combined Arms Doctrine" healed HQ per unit cleared;
+// new C07 of the same name does not). Returns true if handled (instant), false if it needs
+// targeting UI (deferred to getCommandTargets/startCommandTargeting).
 function playInstantCommand(cardId) {
   const active = state.initiative;
   const card = CARD_BY_ID[cardId];
@@ -1784,141 +1978,178 @@ function playInstantCommand(cardId) {
   const log = [];
 
   switch (cardId) {
-    case 22: { // Recon — draw 3
-      s = { ...s, [active]: drawCards(s[active], 3) };
-      log.push(`${card.name}: Draw 3 cards`);
+    case 'C05': { // Recon — draw 2
+      s = { ...s, [active]: drawCards(s[active], 2) };
+      log.push(`${card.name}: Draw 2 cards`);
       break;
     }
-    case 139: { // Grim Requisition — draw a random Deathrattle Unit from deck
-      const deck = s[active].deck;
-      const candidates = deck.map((id, i) => ({ id, i })).filter(({ id }) => {
-        const c = CARD_BY_ID[id];
-        return c?.type === 'unit' && (Array.isArray(c.keyword) ? c.keyword.includes('Deathrattle') : c.keyword === 'Deathrattle');
-      });
-      if (candidates.length === 0) {
-        log.push(`${card.name}: no Deathrattle Unit in deck`);
-        break;
-      }
-      const pick = candidates[Math.floor(Math.random() * candidates.length)];
-      const newDeck = [...deck.slice(0, pick.i), ...deck.slice(pick.i + 1)];
-      s = { ...s, [active]: { ...s[active], deck: newDeck, hand: [...s[active].hand, pick.id] } };
-      log.push(`${card.name}: drew ${CARD_BY_ID[pick.id].name} from deck`);
-      break;
-    }
-    case 121: { // Priority Orders — next Hero Power this turn costs 2F less, min 0
-      s = { ...s, [active]: { ...s[active], pendingHeroDiscount: s[active].pendingHeroDiscount + 2 } };
-      log.push(`${card.name}: next Hero Power this turn costs 2F less`);
-      break;
-    }
-    case 122: { // Command Shuffle — move/swap a Hero without spending the normal reposition.
-      // Fuel/hand already deducted into `s` above; hand off to handleHeroZoneClick's
-      // existing pick-up/drop flow via pendingCommandId === 122 (see that function).
-      if (!(s[active].heroZones ?? []).some(z => z != null)) {
-        log.push(`${card.name}: no deployed Hero to move`);
-        break;
-      }
-      preCommandState = state; // pre-deduction snapshot, so Cancel refunds this card too
-      pendingCommandId = 122;
-      log.push(`${card.name}: choose a Hero to move or swap`);
-      commitState(s, log);
-      return true;
-    }
-    case 76: { // Industrial Surge — +2 Fuel at start of next turn
-      s = { ...s, [active]: { ...s[active], pendingFuelGain: s[active].pendingFuelGain + 2 } };
-      log.push(`${card.name}: +2 Fuel at start of next turn`);
-      break;
-    }
-    case 80: { // Entrench — all friendly Infantry +2 all sides this turn
-      const newBoard = { ...s.board };
-      let count = 0;
-      for (const [k, u] of Object.entries(newBoard)) {
-        if (!u || u.owner !== active || u.state === 'destroyed') continue;
-        if (CARD_BY_ID[u.cardId]?.cls !== 'Infantry') continue;
-        newBoard[k] = { ...u, tempSideBonus: u.tempSideBonus + 2 };
-        count++;
-      }
-      s = { ...s, board: newBoard };
-      log.push(`${card.name}: ${count} Infantry +2 all sides this turn`);
-      break;
-    }
-    case 78: { // Combined Arms Doctrine — remove all Suppression; +2 HQ per unit cleared
+    case 'C07': { // Combined Arms Doctrine — remove Suppression from all friendly Units, draw 1
       let cleared = 0;
       const ccgLog = [];
-      // Heals both players' units, so removeSuppression checks Counteroffensive General
-      // per unit against its own owner — see the comment on that function in combat.js.
       for (const k of Object.keys(s.board)) {
+        const u = s.board[k];
+        if (!u || u.owner !== active) continue;
         const result = removeSuppression(s, k);
         if (!result.changed) continue;
         s = result.state;
         cleared++;
         ccgLog.push(...result.log);
       }
-      const hpGain = cleared * 2;
-      s = { ...s, [active]: { ...s[active], hq: s[active].hq + hpGain } };
-      log.push(`${card.name}: ${cleared} unit(s) un-suppressed, +${hpGain} HQ HP`);
+      s = { ...s, [active]: drawCards(s[active], 1) };
+      log.push(`${card.name}: ${cleared} friendly unit(s) un-suppressed, draw 1`);
       log.push(...ccgLog);
       break;
     }
-    case 73: { // Overrun — each Suppress/Destroy this turn deals +1 HQ damage
+    case 'C09': { // Overrun — rest of THIS turn, enemy Suppress-after-this = 1 HQ, enemy
+      // Destroy-after-this = 3 instead of 2. Setting the flag now (not retroactively touching
+      // anything that already happened) already satisfies "not retroactive" — see applyHit
+      // call sites that check `overrun`.
       s = { ...s, [active]: { ...s[active], overrun: true } };
-      log.push(`${card.name}: Suppress/Destroy deals +1 HQ damage this turn`);
+      log.push(`${card.name}: for the rest of this turn, enemy Suppress deals 1 HQ and enemy Destroy deals 3 HQ`);
       break;
     }
-    case 75: { // Hold Position — all friendly units adjacent to controlled obj gain Armor
+    case 'C13': { // Industrial Surge — +2 Fuel at start of next turn
+      s = { ...s, [active]: { ...s[active], pendingFuelGain: s[active].pendingFuelGain + 2 } };
+      log.push(`${card.name}: +2 Fuel at start of next turn`);
+      break;
+    }
+    case 'C14': { // Priority Orders — next Hero Active this turn costs 2F less, min 0
+      s = { ...s, [active]: { ...s[active], pendingHeroDiscount: s[active].pendingHeroDiscount + 2 } };
+      log.push(`${card.name}: next Hero Active this turn costs 2F less`);
+      break;
+    }
+    case 'C15': { // Command Shuffle — move/swap a Hero, doesn't spend the normal reposition
+      if (!(s[active].heroZones ?? []).some(z => z != null)) {
+        log.push(`${card.name}: no deployed Hero to move`);
+        break;
+      }
+      preCommandState = state; // pre-deduction snapshot, so Cancel refunds this card too
+      pendingCommandId = 'C15';
+      log.push(`${card.name}: choose a Hero to move or swap`);
+      commitState(s, log);
+      return true;
+    }
+    case 'C17': { // Coordinated Order — reset Hero ability state: used Actives become
+      // available again, limited "first X per turn" Passive triggers may fire again this
+      // turn. Does NOT rewind persistent state (Long War Power, Craft cost progression).
+      s = { ...s, [active]: { ...s[active], heroesActivatedThisTurn: [], heroTriggeredThisTurn: {} } };
+      log.push(`${card.name}: Hero ability state reset — used Actives and limited Passives available again`);
+      break;
+    }
+    case 'C20': { // Total Mobilization — ALL Units, friendly and enemy, +1 all sides permanently
       const newBoard = { ...s.board };
       let count = 0;
-      for (const [bk, u] of Object.entries(newBoard)) {
-        if (!u || u.owner !== active || u.state === 'destroyed') continue;
-        const adjHasObj = getAdjacentKeys(bk).some(k => s.objectives[k]?.controller === active);
-        if (!adjHasObj) continue;
-        newBoard[bk] = { ...u, grantedKeywords: [...(u.grantedKeywords || []), 'Armor'] };
+      for (const [k, u] of Object.entries(newBoard)) {
+        if (!u || u.state === 'destroyed') continue;
+        newBoard[k] = { ...u, grantedSideBonus: (u.grantedSideBonus || 0) + 1, sideBonusTurns: 99 };
         count++;
       }
       s = { ...s, board: newBoard };
-      log.push(`${card.name}: ${count} unit(s) near controlled objectives gain Armor (until your next turn)`);
+      log.push(`${card.name}: ${count} Unit(s) (friendly and enemy) +1 all sides (permanent)`);
       break;
     }
-    case 52: { // Forward Observer — draw 3, keep 1, top 1, bottom 1
-      const drawn = s[active].deck.slice(0, 3);
-      if (drawn.length === 0) {
-        log.push(`${card.name}: deck is empty`);
-        commitState(s, log);
-        return true;
-      }
-      if (drawn.length < 3) {
-        // Fewer than 3 cards left — just draw them all into hand
-        s = { ...s, [active]: drawCards(s[active], drawn.length) };
-        log.push(`${card.name}: drew ${drawn.length} card(s) (deck nearly empty)`);
-        commitState(s, log);
-        return true;
-      }
-      // Full case: draw 3, show modal
-      s = { ...s, [active]: { ...s[active], deck: s[active].deck.slice(3) } };
-      commitState(s, log);
-      showFOModal(drawn, active);
-      return true;
+    case 'C23': { // Emergency Supply — gain 3 Fuel FOR THIS TURN, deal 2 own HQ. Tracked via
+      // PlayerState.tempFuelGrant (cleared in the End Turn handler, after Direct HQ) so any
+      // unused portion of THIS grant expires at cleanup rather than persisting — doc 01 §3.
+      const grantedFuel = gainFuel(s[active], 3, false);
+      s = { ...s, [active]: { ...grantedFuel, hq: grantedFuel.hq - 2, tempFuelGrant: (grantedFuel.tempFuelGrant ?? 0) + 3 } };
+      log.push(`${card.name}: +3 Fuel this turn, 2 damage to own HQ`);
+      break;
     }
-    case 125: { // Field Reserves — look at top 4, may take a Unit, rest to bottom
-      const drawn = s[active].deck.slice(0, 4);
-      if (drawn.length === 0) {
-        log.push(`${card.name}: deck is empty`);
-        commitState(s, log);
+    case 'C25': { // Entrench (Infantry) — all friendly Infantry +2 all sides until end of turn
+      const newBoard = { ...s.board };
+      let count = 0;
+      for (const [k, u] of Object.entries(newBoard)) {
+        if (!u || u.owner !== active || u.state === 'destroyed') continue;
+        if (CARD_BY_ID[u.cardId]?.cls !== 'Infantry') continue;
+        newBoard[k] = { ...u, tempSideBonus: (u.tempSideBonus || 0) + 2 };
+        count++;
+      }
+      s = { ...s, board: newBoard };
+      log.push(`${card.name}: ${count} Infantry +2 all sides (until end of turn)`);
+      break;
+    }
+    case 'C26': { // General Offensive (Infantry) — all friendly Infantry +1 permanent; Escalate: +2
+      const escalated = hasEscalated(s[active], card.name);
+      const amount = escalated ? 2 : 1;
+      const newBoard = { ...s.board };
+      let count = 0;
+      for (const [k, u] of Object.entries(newBoard)) {
+        if (!u || u.owner !== active || u.state === 'destroyed') continue;
+        if (CARD_BY_ID[u.cardId]?.cls !== 'Infantry') continue;
+        newBoard[k] = { ...u, grantedSideBonus: (u.grantedSideBonus || 0) + amount, sideBonusTurns: 99 };
+        count++;
+      }
+      s = { ...s, board: newBoard, [active]: markEscalateUse(s[active], card.name) };
+      log.push(`${card.name}: ${count} Infantry +${amount} all sides (permanent)${escalated ? ' [Escalate]' : ''}`);
+      break;
+    }
+    case 'C29': { // Armored Offensive (Tank) — next Tank played this turn costs 2 less
+      s = { ...s, [active]: addDiscount(s[active], { appliesTo: 'Tank', column: null, amount: 2, min: 0 }) };
+      log.push(`${card.name}: next Tank played this turn costs 2 less Fuel`);
+      break;
+    }
+    case 'C33': { // Air Strike (Aircraft) — all friendly Aircraft gain 1 additional attack until EOT
+      const newBoard = { ...s.board };
+      let count = 0;
+      for (const [k, u] of Object.entries(newBoard)) {
+        if (!u || u.owner !== active || u.state === 'destroyed') continue;
+        if (CARD_BY_ID[u.cardId]?.cls !== 'Aircraft') continue;
+        newBoard[k] = grantTempAttacks(u, 1);
+        count++;
+      }
+      s = { ...s, board: newBoard };
+      log.push(`${card.name}: ${count} friendly Aircraft gain 1 additional attack (until end of turn)`);
+      break;
+    }
+    case 'C34': { // Air Superiority (Aircraft) — friendly Aircraft +1 all sides + Precision until EOT; Escalate +2
+      const escalated = hasEscalated(s[active], card.name);
+      const amount = escalated ? 2 : 1;
+      const newBoard = { ...s.board };
+      let count = 0;
+      for (const [k, u] of Object.entries(newBoard)) {
+        if (!u || u.owner !== active || u.state === 'destroyed') continue;
+        if (CARD_BY_ID[u.cardId]?.cls !== 'Aircraft') continue;
+        newBoard[k] = { ...u, tempSideBonus: (u.tempSideBonus || 0) + amount, tempKeywords: [...(u.tempKeywords || []), 'Precision'] };
+        count++;
+      }
+      s = { ...s, board: newBoard, [active]: markEscalateUse(s[active], card.name) };
+      log.push(`${card.name}: ${count} friendly Aircraft +${amount} all sides + Precision (until end of turn)${escalated ? ' [Escalate]' : ''}`);
+      break;
+    }
+    case 'C04': { // Forward Observer — top 3: 1 to hand, 1 top, 1 bottom. Requires 2+ deck
+      // cards; with exactly 2, look at both, 1 to hand, other stays on top.
+      const deckLen = s[active].deck.length;
+      if (deckLen < 2) {
+        // Bail WITHOUT committing `s` — the fuel/hand deduction computed above only exists in
+        // this local variable, so the real `state` is untouched and the card is effectively
+        // never played (doc 01 §27: cannot be played with fewer than 2 deck cards).
+        appendLog([`${card.name}: requires at least 2 cards in deck — not played`]);
+        redraw();
         return true;
       }
+      const drawn = s[active].deck.slice(0, Math.min(3, deckLen));
       s = { ...s, [active]: { ...s[active], deck: s[active].deck.slice(drawn.length) } };
       commitState(s, log);
-      showFieldReservesModal(drawn, active);
+      showFOModal(drawn, active);
       return true;
     }
     default:
       return false; // targeted or not yet implemented
   }
 
-  commitState(s, log);
+  const rs = applyRuthlessStrategistIfPresent(s, active);
+  commitState(rs.state, [...log, ...rs.log]);
   return true;
 }
 
 // ── Targeted commands ─────────────────────────────────────────────────────────
+// Run 1 (2026-08-31): rewired to the new C01-C35 id scheme. C06 Coordinated Strike needs a
+// real multi-select UI (choose 2 friendly Units sharing a legal enemy target) that doesn't
+// exist in this prototype — same pre-existing gap as before Run 1, still not automated.
+// C21/C27/C35 (Maneuver-based) are handled by a separate 2-step flow, not this function —
+// see startCommandManeuver/getCommandTargets's caller. C22 targets an OBJECTIVE tile, not a
+// unit — returns objective keys instead of unit keys for that one case.
 
 // Returns Set of valid board tile keys for a given targeted command.
 // Returns empty Set if no valid targets exist, null if command is unknown/not targeted.
@@ -1926,42 +2157,240 @@ function getCommandTargets(commandId) {
   const active = state.initiative;
   const entries = Object.entries(state.board);
   const friendlies = entries.filter(([, u]) => u && u.owner === active && u.state !== 'destroyed');
-  const enemies    = entries.filter(([, u]) => u && u.owner !== active && u.state !== 'destroyed');
 
   switch (commandId) {
-    case 16: return new Set(enemies.map(([k]) => k));   // Artillery Barrage — any enemy
-    case 20: return new Set(enemies.map(([k]) => k));   // Air Strike — any enemy
-    case 79: return new Set(enemies.map(([k]) => k));   // Suppressing Fire — any enemy
-
-    case 17: // Blitzkrieg Order — friendly Tanks
-      return new Set(friendlies.filter(([, u]) => CARD_BY_ID[u.cardId]?.cls === 'Tank' && u.state === 'normal').map(([k]) => k));
-
-    case 18: // Field Medic — friendly suppressed
-    case 54: // Last Stand — friendly suppressed
+    case 'C01': // Field Medic — friendly suppressed
       return new Set(friendlies.filter(([, u]) => u.state === 'suppressed').map(([k]) => k));
 
-    case 19: // Tactical Withdrawal — any friendly unit
-    case 49: // Smoke Screen — any friendly → gains Guard
-    case 51: // Rally Cry — any friendly (up to 2, chained)
+    case 'C02': // Improvised Position — friendly unit WITHOUT Armor/Heavy Armor
+      return new Set(friendlies.filter(([, u]) => {
+        const kws = getKeywords(u);
+        return !kws.includes('Armor') && !kws.includes('Heavy Armor');
+      }).map(([k]) => k));
+
+    case 'C03': // Rally Cry — any friendly (up to 2, chained)
+    case 'C10': // Hold Position — any friendly (up to 2, chained)
+    case 'C11': // Tactical Withdrawal — any friendly unit
       return new Set(friendlies.map(([k]) => k));
 
-    case 50: // Improvised Position — friendly unit with no base keyword
-      return new Set(friendlies.filter(([, u]) => !CARD_BY_ID[u.cardId]?.keyword).map(([k]) => k));
+    case 'C08': // Second Wind — friendly suppressed
+      return new Set(friendlies.filter(([, u]) => u.state === 'suppressed').map(([k]) => k));
 
-    case 74: // Dig In — friendly unit adjacent to a controlled objective
-      return new Set(friendlies.filter(([k]) =>
-        getAdjacentKeys(k).some(ak => state.objectives[ak]?.controller === active)
-      ).map(([k]) => k));
+    case 'C12': // Dig In — any friendly unit
+      return new Set(friendlies.map(([k]) => k));
 
-    case 124: // Change Formation — any unsuppressed friendly unit
+    case 'C16': // Change Formation — any unsuppressed friendly unit
       return new Set(friendlies.filter(([, u]) => u.state === 'normal').map(([k]) => k));
 
-    case 140: // Sacrifice Play — any friendly unit
-    case 141: // Scorched Earth Rally — any friendly unit
+    case 'C18': // Sacrifice Play — any friendly unit
+    case 'C19': // Scorched Earth Raid — any friendly unit
       return new Set(friendlies.map(([k]) => k));
 
-    default: return null; // unknown / not a targeted command
+    case 'C24': // Suppressing Fire (Infantry) — friendly Infantry
+      return new Set(friendlies.filter(([, u]) => CARD_BY_ID[u.cardId]?.cls === 'Infantry').map(([k]) => k));
+
+    case 'C28': // Field Repairs (Tank) — friendly Tank without Heavy Armor
+      return new Set(friendlies.filter(([, u]) => CARD_BY_ID[u.cardId]?.cls === 'Tank' && !getKeywords(u).includes('Heavy Armor')).map(([k]) => k));
+
+    case 'C30': // Artillery Barrage (Artillery) — friendly Artillery
+    case 'C31': // Target Coordinates (Artillery) — friendly Artillery
+    case 'C32': // Fire for Effect (Artillery) — friendly Artillery
+      return new Set(friendlies.filter(([, u]) => CARD_BY_ID[u.cardId]?.cls === 'Artillery').map(([k]) => k));
+
+    case 'C22': // Objective Push — an OBJECTIVE tile, not a unit
+      return new Set(Object.keys(state.objectives ?? {}));
+
+    default: return null; // unknown / not a targeted command (incl. C06, C21/C27/C35)
   }
+}
+
+// Commands that Maneuver a unit as part of their effect need a 2-step source-then-destination
+// flow, same shape as Hero H16 — see pendingHeroManeuverSource/resolveHeroManeuverDestination
+// above, generalized here for Commands. `filterFn` restricts which friendly units are legal
+// sources (e.g. C27 requires a Tank).
+const COMMAND_MANEUVER_SOURCE_FILTER = {
+  C21: () => true,                                              // Forced March — any friendly unit
+  C27: (u) => CARD_BY_ID[u.cardId]?.cls === 'Tank',              // Blitzkrieg Order — friendly Tank
+  C35: (u) => CARD_BY_ID[u.cardId]?.cls === 'Aircraft',          // Scramble — friendly Aircraft
+};
+
+function getCommandManeuverSources(commandId, excludeKey = null) {
+  const active = state.initiative;
+  const filterFn = COMMAND_MANEUVER_SOURCE_FILTER[commandId];
+  if (!filterFn) return null;
+  return new Set(
+    Object.entries(state.board)
+      .filter(([k, u]) => k !== excludeKey && u && u.owner === active && u.state === 'normal' && filterFn(u))
+      .map(([k]) => k)
+  );
+}
+
+let pendingCommandManeuverSource = null; // { key, commandId }
+let pendingCommandManeuverRemaining = 0; // C27 Blitzkrieg Order under Escalate: up to 2 Tanks total
+
+// ── Coordinated Strike (C06) — 2-unit multi-select ──────────────────────────
+// "Choose 2 friendly Units that both currently have the same enemy Unit as a legal attack
+// target. Each gains 1 additional legal attack this turn." Stats don't need to beat the
+// shared target — getAttackableTargets already only checks legality, never attackBeats.
+let pendingCoordStrikeFirst = null; // board key of the first pick, or null before the 1st click
+
+function getCoordStrikeFirstCandidates() {
+  const active = state.initiative;
+  return new Set(
+    Object.entries(state.board)
+      .filter(([k, u]) => u && u.owner === active && u.state === 'normal' && getAttackableTargets(state, k).length > 0)
+      .map(([k]) => k)
+  );
+}
+
+function getCoordStrikeSecondCandidates(firstKey) {
+  const active = state.initiative;
+  const firstTargets = new Set(getAttackableTargets(state, firstKey).map(t => t.key));
+  return new Set(
+    Object.entries(state.board)
+      .filter(([k, u]) => k !== firstKey && u && u.owner === active && u.state === 'normal' &&
+        getAttackableTargets(state, k).some(t => firstTargets.has(t.key)))
+      .map(([k]) => k)
+  );
+}
+
+function startCoordinatedStrike(cardId) {
+  const active = state.initiative;
+  const card = CARD_BY_ID[cardId];
+  if (getCoordStrikeFirstCandidates().size === 0) {
+    appendLog([`${card.name}: no friendly Unit currently has a legal attack target`]);
+    return;
+  }
+  const discount = discountFor(state[active], card, null);
+  const effectiveCost = card.cost - discount;
+  const handAfter = [...state[active].hand];
+  const idx = handAfter.indexOf(cardId);
+  if (idx !== -1) handAfter.splice(idx, 1);
+  preCommandState = state;
+  state = { ...state, [active]: consumeDiscounts({ ...state[active], fuel: state[active].fuel - effectiveCost, hand: handAfter }, card, null, discount) };
+  pendingCommandId = cardId;
+  pendingCoordStrikeFirst = null;
+  uiState = 'command-coordstrike-first';
+  appendLog([`${card.name}: choose the first friendly Unit`]);
+  redraw();
+}
+
+function resolveCoordStrikeFirst(key) {
+  if (!getCoordStrikeFirstCandidates().has(key)) return;
+  pendingCoordStrikeFirst = key;
+  uiState = 'command-coordstrike-second';
+  appendLog([`${CARD_BY_ID[pendingCommandId].name}: choose a second friendly Unit sharing a legal target with the first`]);
+  redraw();
+}
+
+function resolveCoordStrikeSecond(key) {
+  const firstKey = pendingCoordStrikeFirst;
+  if (!getCoordStrikeSecondCandidates(firstKey).has(key)) return;
+  const card = CARD_BY_ID[pendingCommandId];
+  const active = state.initiative;
+  pendingCoordStrikeFirst = null;
+  pendingCommandId = null;
+  preCommandState = null;
+  uiState = 'idle';
+
+  let s = { ...state };
+  const firstUnit = s.board[firstKey];
+  const secondUnit = s.board[key];
+  s = { ...s, board: { ...s.board, [firstKey]: grantTempAttacks(firstUnit, 1), [key]: grantTempAttacks(secondUnit, 1) } };
+  const log = [`${card.name}: ${CARD_BY_ID[firstUnit.cardId]?.name ?? 'unit'} and ${CARD_BY_ID[secondUnit.cardId]?.name ?? 'unit'} each gain 1 additional attack this turn`];
+  const rs = applyRuthlessStrategistIfPresent(s, active);
+  commitState(rs.state, [...log, ...rs.log]);
+  checkWin();
+}
+
+function startCommandManeuver(cardId) {
+  const active = state.initiative;
+  const card = CARD_BY_ID[cardId];
+  const sources = getCommandManeuverSources(cardId);
+  if (!sources || sources.size === 0) {
+    appendLog([`${card.name}: no valid unit to Maneuver`]);
+    return;
+  }
+  const discount = discountFor(state[active], card, null);
+  const effectiveCost = card.cost - discount;
+  const handAfter = [...state[active].hand];
+  const idx = handAfter.indexOf(cardId);
+  if (idx !== -1) handAfter.splice(idx, 1);
+  preCommandState = state;
+  state = {
+    ...state,
+    [active]: consumeDiscounts({ ...state[active], fuel: state[active].fuel - effectiveCost, hand: handAfter }, card, null, discount),
+  };
+  pendingCommandId = cardId;
+  pendingCommandManeuverSource = { key: null, commandId: cardId };
+  // C27 Blitzkrieg Order: Escalate widens "1 Tank" to "up to 2 Tanks" — mark Escalate used on
+  // this first pick (doc 01 §29: tracked by name, not by how many targets end up chosen).
+  if (cardId === 'C27') {
+    const escalated = hasEscalated(state[active], card.name);
+    pendingCommandManeuverRemaining = escalated ? 2 : 1;
+    if (!escalated) state = { ...state, [active]: markEscalateUse(state[active], card.name) };
+  } else {
+    pendingCommandManeuverRemaining = 1;
+  }
+  uiState = 'command-maneuver-source';
+  appendLog([`${card.name}: choose a unit to Maneuver`]);
+  redraw();
+}
+
+function resolveCommandManeuverSource(sourceKey) {
+  const excludeKey = pendingCommandManeuverSource?.excludeKey ?? null;
+  const sources = getCommandManeuverSources(pendingCommandId, excludeKey);
+  if (!sources?.has(sourceKey)) return;
+  pendingCommandManeuverSource = { key: sourceKey, commandId: pendingCommandId, excludeKey };
+  uiState = 'command-maneuver-destination';
+  appendLog([`${CARD_BY_ID[pendingCommandId].name}: choose a destination tile`]);
+  redraw();
+}
+
+function resolveCommandManeuverDestination(destKey) {
+  if (!pendingCommandManeuverSource?.key) return;
+  const { key: sourceKey, commandId } = pendingCommandManeuverSource;
+  const legalTargets = getManeuverTargets(state, sourceKey);
+  if (!legalTargets.includes(destKey)) return;
+  const card = CARD_BY_ID[commandId];
+  const active = state.initiative;
+
+  let { state: s, log } = resolveManeuver(state, sourceKey, destKey);
+  const movedUnit = s.board[destKey];
+
+  if (commandId === 'C21') { // Forced March — Maneuver, then draw 1
+    s = { ...s, [active]: drawCards(s[active], 1) };
+    log = [...log, `${card.name}: draw 1 card`];
+  } else if (commandId === 'C27') { // Blitzkrieg Order — Maneuver + grant Armor
+    const kws = getKeywords(movedUnit);
+    if (!kws.includes('Armor') && !kws.includes('Heavy Armor')) {
+      s = { ...s, board: { ...s.board, [destKey]: { ...movedUnit, grantedKeywords: [...(movedUnit.grantedKeywords || []), 'Armor'] } } };
+    }
+    log = [...log, `${card.name}: gains Armor`];
+  } else if (commandId === 'C35') { // Scramble — Maneuver + reset persistent attacks
+    s = { ...s, board: { ...s.board, [destKey]: resetPersistentAttacks(s.board[destKey]) } };
+    log = [...log, `${card.name}: attacks reset`];
+  }
+  s = recalculateDynamicStats(s);
+
+  pendingCommandManeuverRemaining--;
+  if (commandId === 'C27' && pendingCommandManeuverRemaining > 0) {
+    // Escalated Blitzkrieg Order: stay in the flow for a second, different Tank.
+    pendingCommandManeuverSource = { key: null, commandId, excludeKey: destKey };
+    uiState = 'command-maneuver-source';
+    commitState(s, log);
+    appendLog([`${card.name}: Escalate — choose a second Tank to Maneuver (or press Done)`]);
+    redraw();
+    return;
+  }
+
+  pendingCommandManeuverSource = null;
+  pendingCommandId = null;
+  preCommandState = null;
+  uiState = 'idle';
+  const rs = applyRuthlessStrategistIfPresent(s, active);
+  commitState(rs.state, [...log, ...rs.log]);
+  checkWin();
 }
 
 // Deduct fuel, remove card from hand, enter command-targeting mode.
@@ -1983,7 +2412,7 @@ function startCommandTargeting(cardId) {
     ),
   };
   pendingCommandId = cardId;
-  pendingRallyCryCount = cardId === 51 ? 2 : 0;
+  pendingRallyCryCount = (cardId === 'C03' || cardId === 'C10') ? 2 : 0;
   uiState = 'command-targeting';
   appendLog([`${card.name}: choose a target`]);
   redraw();
@@ -2056,10 +2485,11 @@ function applyClassCountHits(s, active, targetKey, unit, cls, cardName) {
         [unit.owner]: { ...s[unit.owner], hq: s[unit.owner].hq - dmg } };
   log.push(`${cardName}: ${count} hit(s) on ${unitName} — ${dmg} HQ damage`);
   if (tgt === null) {
-    const dr = checkDeathrattle(s, targetKey, unit);
-    s = dr.state;
-    log.push(...dr.log);
+    const pd = applyPostDestructionEffects(s, { unitKey: targetKey, dyingUnit: unit, sourceUnitKey: null });
+    s = pd.state;
+    log.push(...pd.log);
   }
+  s = recalculateDynamicStats(s);
   return { state: s, log, becameSuppressed };
 }
 
@@ -2070,146 +2500,166 @@ function applyCommandEffect(commandId, targetKey) {
   const card = CARD_BY_ID[commandId];
   let s = { ...state };
   const log = [];
+
+  // C22 Objective Push targets an OBJECTIVE tile, not a unit — handle it before the generic
+  // unit/unitName setup below, which doesn't apply here.
+  if (commandId === 'C22') {
+    const targets = friendlyAdjacentUnitKeys(s.board, targetKey, active);
+    const newBoard = { ...s.board };
+    for (const k of targets) {
+      const u = newBoard[k];
+      newBoard[k] = { ...u, grantedSideBonus: (u.grantedSideBonus || 0) + 1, sideBonusTurns: 99 };
+    }
+    s = { ...s, board: newBoard };
+    log.push(`${card.name}: ${targets.length} friendly Unit(s) adjacent to the Objective +1 all sides (permanent)`);
+    pendingCommandId = null;
+    preCommandState = null;
+    uiState = 'idle';
+    const rs = applyRuthlessStrategistIfPresent(s, active);
+    commitState(rs.state, [...log, ...rs.log]);
+    checkWin();
+    return;
+  }
+
   const unit = s.board[targetKey];
   const unitName = CARD_BY_ID[unit?.cardId]?.name ?? '?';
 
+  // Run 1 (2026-08-31): rewired to the new C01-C35 id scheme against doc 03's actual effect
+  // text — verified per-card, not assumed by id/name resemblance to an old case.
   switch (commandId) {
-    case 16: { // Artillery Barrage — deplete armor + suppress enemy
-      const depleted = { ...unit, armorHits: maxArmorHits(unit) };
-      const suppressed = unit.state === 'normal' ? { ...depleted, state: 'suppressed' } : depleted;
-      const hqDmg = unit.state === 'normal' ? 1 : 0;
-      s = { ...s, board: { ...s.board, [targetKey]: suppressed },
-            [unit.owner]: { ...s[unit.owner], hq: s[unit.owner].hq - hqDmg } };
-      log.push(`${card.name}: ${unitName} Armor stripped + Suppressed (${hqDmg} HQ damage)`);
-      if (suppressed.state === 'suppressed') {
-        const coGen = checkCounteroffensiveGeneral(s, targetKey);
-        s = coGen.state;
-        log.push(...coGen.log);
-      }
-      break;
-    }
-    case 17: { // Blitzkrieg Order — Tank attacks immediately (enter attack targeting)
-      const tankTargets = getAttackableTargets(s, targetKey);
-      if (tankTargets.length === 0) {
-        log.push(`${card.name}: ${unitName} has no adjacent targets`);
-        pendingCommandId = null;
-        preCommandState = null;
-        uiState = 'idle';
-        commitState(s, log);
-        return;
-      }
-      pendingCommandId = null;
-      preCommandState = null;
-      uiState = 'targeting';
-      pendingAttackerKey = targetKey;
-      log.push(`${card.name}: ${unitName} may attack immediately`);
-      commitState(s, log);
-      return; // stay in targeting — don't fall through to idle
-    }
-    case 18: { // Field Medic — un-suppress
+    case 'C01': { // Field Medic — remove Suppression
       const result = removeSuppression(s, targetKey);
       s = result.state;
       log.push(`${card.name}: ${unitName} un-suppressed`);
       log.push(...result.log);
       break;
     }
-    case 19: { // Tactical Withdrawal — return to hand, draw 1
-      const handAfter = [...s[active].hand, unit.cardId];
-      s = { ...s, board: { ...s.board, [targetKey]: null },
-            [active]: drawCards({ ...s[active], hand: handAfter }, 1) };
-      log.push(`${card.name}: ${unitName} returned to hand. Draw 1`);
+    case 'C02': { // Improvised Position — +2 all sides until your next turn (no-Armor unit only)
+      s = { ...s, board: { ...s.board, [targetKey]: { ...unit, grantedSideBonus: (unit.grantedSideBonus || 0) + 2, sideBonusTurns: 1 } } };
+      log.push(`${card.name}: ${unitName} +2 all sides (until your next turn)`);
       break;
     }
-    case 20: { // Air Strike — 1 hit per friendly Aircraft
-      const r = applyClassCountHits(s, active, targetKey, unit, 'Aircraft', card.name);
-      s = r.state;
-      log.push(...r.log);
-      if (r.becameSuppressed) {
-        const coGen = checkCounteroffensiveGeneral(s, targetKey);
-        s = coGen.state;
-        log.push(...coGen.log);
-      }
-      break;
-    }
-    case 49: { // Smoke Screen — give Guard until owner's next turn
-      s = { ...s, board: { ...s.board, [targetKey]: { ...unit, grantedKeywords: [...(unit.grantedKeywords || []), 'Guard'] } } };
-      log.push(`${card.name}: ${unitName} gains Guard (until your next turn)`);
-      break;
-    }
-    case 51: { // Rally Cry — +1 all sides for 2 turns (choose up to 2, may stop after 1)
-      s = { ...s, board: { ...s.board, [targetKey]: { ...unit, grantedSideBonus: (unit.grantedSideBonus || 0) + 1, sideBonusTurns: 2 } } };
-      log.push(`${card.name}: ${unitName} +1 all sides (2 turns)`);
+    case 'C03': { // Rally Cry — +1 all sides until end of turn (choose up to 2, may stop after 1)
+      s = { ...s, board: { ...s.board, [targetKey]: { ...unit, tempSideBonus: (unit.tempSideBonus || 0) + 1 } } };
+      log.push(`${card.name}: ${unitName} +1 all sides (until end of turn)`);
       pendingRallyCryCount--;
       if (pendingRallyCryCount > 0) {
         commitState(s, log);
-        appendLog([`Rally Cry: choose a second unit (or press Done)`]);
+        appendLog([`${card.name}: choose a second unit (or press Done)`]);
         redraw();
         return; // stay in command-targeting for second pick
       }
       break;
     }
-    case 50: { // Improvised Position — give Armor until owner's next turn
-      s = { ...s, board: { ...s.board, [targetKey]: { ...unit, grantedKeywords: [...(unit.grantedKeywords || []), 'Armor'] } } };
-      log.push(`${card.name}: ${unitName} gains Armor (until your next turn)`);
-      break;
-    }
-    case 54: { // Last Stand — un-suppress + give Guard until owner's next turn
+    case 'C08': { // Second Wind — remove Suppression + 2 all sides until end of turn
       const result = removeSuppression(s, targetKey);
       s = result.state;
       const su = s.board[targetKey];
-      s = { ...s, board: { ...s.board, [targetKey]: { ...su, grantedKeywords: [...(su.grantedKeywords || []), 'Guard'] } } };
-      log.push(`${card.name}: ${unitName} un-suppressed + gains Guard (until your next turn)`);
+      s = { ...s, board: { ...s.board, [targetKey]: { ...su, tempSideBonus: (su.tempSideBonus || 0) + 2 } } };
+      log.push(`${card.name}: ${unitName} un-suppressed + 2 all sides (until end of turn)`);
       log.push(...result.log);
       break;
     }
-    case 74: { // Dig In — Guard + Armor until owner's next turn
-      s = { ...s, board: { ...s.board, [targetKey]: { ...unit, grantedKeywords: [...(unit.grantedKeywords || []), 'Guard', 'Armor'] } } };
-      log.push(`${card.name}: ${unitName} gains Guard + Armor (until your next turn)`);
+    case 'C10': { // Hold Position — +2 all sides until your next turn (choose up to 2)
+      s = { ...s, board: { ...s.board, [targetKey]: { ...unit, grantedSideBonus: (unit.grantedSideBonus || 0) + 2, sideBonusTurns: 1 } } };
+      log.push(`${card.name}: ${unitName} +2 all sides (until your next turn)`);
+      pendingRallyCryCount--;
+      if (pendingRallyCryCount > 0) {
+        commitState(s, log);
+        appendLog([`${card.name}: choose a second unit (or press Done)`]);
+        redraw();
+        return;
+      }
       break;
     }
-    case 124: { // Change Formation — rotate 90°, direction chosen via modal (persists until rotated again)
+    case 'C11': { // Tactical Withdrawal — return to hand (resets to printed/default state; no draw)
+      const handAfter = [...s[active].hand, unit.cardId];
+      s = { ...s, board: { ...s.board, [targetKey]: null }, [active]: { ...s[active], hand: handAfter } };
+      log.push(`${card.name}: ${unitName} returned to hand`);
+      break;
+    }
+    case 'C12': { // Dig In — Guard until your next turn (no Armor — new text is Guard-only)
+      s = { ...s, board: { ...s.board, [targetKey]: { ...unit, grantedKeywords: [...(unit.grantedKeywords || []), 'Guard'] } } };
+      log.push(`${card.name}: ${unitName} gains Guard (until your next turn)`);
+      break;
+    }
+    case 'C16': { // Change Formation — rotate 90°, direction chosen via modal
       pendingCommandId = null;
       preCommandState = null;
       uiState = 'idle';
       showRotateDirectionModal({ kind: 'command', targetKey, cardName: card.name, s, log });
       return;
     }
-    case 79: { // Suppressing Fire — 1 hit per friendly Infantry
-      const r = applyClassCountHits(s, active, targetKey, unit, 'Infantry', card.name);
-      s = r.state;
-      log.push(...r.log);
-      if (r.becameSuppressed) {
-        const coGen = checkCounteroffensiveGeneral(s, targetKey);
-        s = coGen.state;
-        log.push(...coGen.log);
-      }
+    case 'C18': { // Sacrifice Play — destroy 1 friendly Unit, draw 2
+      const pd = applyPostDestructionEffects(
+        { ...s, board: { ...s.board, [targetKey]: null } },
+        { unitKey: targetKey, dyingUnit: unit, sourceUnitKey: null }
+      );
+      // Sacrifice Play's own destruction is a plain "friendly Unit destroyed" (normal 2-HQ
+      // self-damage per doc 01 §9), not a replacement — apply that here since
+      // applyPostDestructionEffects deliberately does NOT touch HQ (see its own doc comment).
+      s = { ...recalculateDynamicStats(pd.state), [active]: { ...pd.state[active], hq: pd.state[active].hq - 2 } };
+      s = { ...s, [active]: drawCards(s[active], 2) };
+      log.push(`${card.name}: ${unitName} destroyed (2 HQ damage to ${active.toUpperCase()}), draw 2 cards`);
+      log.push(...pd.log);
       break;
     }
-    case 140: { // Sacrifice Play — destroy own unit; 2 HQ damage to opponent instead of self
-      s = { ...s, board: { ...s.board, [targetKey]: null } };
-      const dr = checkDeathrattle(s, targetKey, unit);
-      s = dr.state;
-      s = { ...s, [opp]: { ...s[opp], hq: s[opp].hq - 2 } };
-      log.push(`${card.name}: ${unitName} destroyed — 2 HQ damage to ${opp.toUpperCase()}`);
-      log.push(...dr.log);
+    case 'C19': { // Scorched Earth Raid — destroy 1 friendly Unit, 2 HQ to ENEMY instead of
+      // the normal friendly-destruction result — applies even if the Unit has Guard.
+      const pd = applyPostDestructionEffects(
+        { ...s, board: { ...s.board, [targetKey]: null } },
+        { unitKey: targetKey, dyingUnit: unit, sourceUnitKey: null }
+      );
+      s = { ...recalculateDynamicStats(pd.state), [opp]: { ...pd.state[opp], hq: pd.state[opp].hq - 2 } };
+      log.push(`${card.name}: ${unitName} destroyed — 2 HQ damage to ${opp.toUpperCase()} instead (even through Guard)`);
+      log.push(...pd.log);
       break;
     }
-    case 141: { // Scorched Earth Rally — destroy own unit (2 HQ self-damage, as if lost in
-      // combat); every OTHER friendly unit gets +1 all sides until your next turn
-      s = { ...s, board: { ...s.board, [targetKey]: null } };
-      const dr = checkDeathrattle(s, targetKey, unit);
-      s = dr.state;
-      s = { ...s, [active]: { ...s[active], hq: s[active].hq - 2 } };
-      const newBoard = { ...s.board };
-      let count = 0;
-      for (const [k, u] of Object.entries(newBoard)) {
-        if (!u || u.owner !== active || u.state === 'destroyed' || k === targetKey) continue;
-        newBoard[k] = { ...u, grantedSideBonus: (u.grantedSideBonus || 0) + 1, sideBonusTurns: 1 };
-        count++;
+    case 'C24': { // Suppressing Fire (Infantry) — +1 all sides permanently (simple stat buff —
+      // NOT the old multi-hit "1 hit per friendly Infantry" mechanic despite the shared name)
+      s = { ...s, board: { ...s.board, [targetKey]: { ...unit, grantedSideBonus: (unit.grantedSideBonus || 0) + 1, sideBonusTurns: 99 } } };
+      log.push(`${card.name}: ${unitName} +1 all sides (permanent)`);
+      break;
+    }
+    case 'C28': { // Field Repairs (Tank) — Armor, or Heavy Armor if it already has Armor
+      const kws = getKeywords(unit);
+      const newKw = kws.includes('Armor') ? 'Heavy Armor' : 'Armor';
+      s = { ...s, board: { ...s.board, [targetKey]: { ...unit, grantedKeywords: [...(unit.grantedKeywords || []), newKw] } } };
+      log.push(`${card.name}: ${unitName} gains ${newKw}`);
+      break;
+    }
+    case 'C30': { // Artillery Barrage (Artillery) — grant Barrage until end of turn (NOT the
+      // old single-target Suppress/Armor-strip effect despite the shared name)
+      s = { ...s, board: { ...s.board, [targetKey]: { ...unit, tempKeywords: [...(unit.tempKeywords || []), 'Barrage'] } } };
+      log.push(`${card.name}: ${unitName} gains Barrage (until end of turn)`);
+      break;
+    }
+    case 'C31': { // Target Coordinates (Artillery) — grant Precision until end of turn
+      s = { ...s, board: { ...s.board, [targetKey]: { ...unit, tempKeywords: [...(unit.tempKeywords || []), 'Precision'] } } };
+      log.push(`${card.name}: ${unitName} gains Precision (until end of turn)`);
+      break;
+    }
+    case 'C32': { // Fire for Effect (Artillery) — grant Blast + Barrage until end of turn;
+      // Escalate: affect up to 2 friendly Artillery instead (chained 2nd pick, same pattern
+      // as Rally Cry/Hold Position — see pendingRallyCryCount).
+      const escalated = hasEscalated(s[active], card.name);
+      s = { ...s, board: { ...s.board, [targetKey]: { ...unit, tempKeywords: [...(unit.tempKeywords || []), 'Blast', 'Barrage'] } } };
+      log.push(`${card.name}: ${unitName} gains Blast and Barrage (until end of turn)`);
+      if (escalated && pendingRallyCryCount === 0) {
+        // First pick under Escalate — mark Escalate used now (doc 01 §29: tracked by name,
+        // not by target count), then offer a second pick.
+        s = { ...s, [active]: markEscalateUse(s[active], card.name) };
+        pendingRallyCryCount = 1;
+        pendingCommandId = 'C32';
+        preCommandState = null; // already past the point where Cancel should refund the card
+        commitState(s, log);
+        appendLog([`${card.name}: Escalate — choose a second friendly Artillery (or press Done)`]);
+        uiState = 'command-targeting';
+        redraw();
+        return;
       }
-      s = { ...s, board: newBoard };
-      log.push(`${card.name}: ${unitName} destroyed (2 HQ damage) — ${count} other friendly unit(s) +1 all sides (until your next turn)`);
-      log.push(...dr.log);
+      if (!escalated) s = { ...s, [active]: markEscalateUse(s[active], card.name) };
+      pendingRallyCryCount = 0;
       break;
     }
     default: break;
@@ -2229,7 +2679,8 @@ function applyCommandEffect(commandId, targetKey) {
   pendingCommandId = null;
   preCommandState = null;
   uiState = 'idle';
-  commitState(s, log, cmdTransitionFlags);
+  const rs = applyRuthlessStrategistIfPresent(s, active);
+  commitState(rs.state, [...log, ...rs.log], cmdTransitionFlags);
   checkWin();
 }
 
@@ -2243,6 +2694,29 @@ document.getElementById('btn-end-turn').addEventListener('click', () => {
 
   // Reset killsThisTurn for the player who just ended
   let s = { ...state, [currentPlayer]: { ...state[currentPlayer], killsThisTurn: 0 } };
+
+  // Long War Commander (H24) passive: +1 Power at the end of ITS CONTROLLER'S turn (doc 01
+  // §21/doc 02 Q117). Never resets — persists across the whole match, including through
+  // Coordinated Order-style Hero-ability resets.
+  if ((s[currentPlayer].heroZones ?? []).includes('H24')) {
+    const prevPower = s[currentPlayer].longWarPower?.['H24'] ?? 1;
+    s = { ...s, [currentPlayer]: { ...s[currentPlayer], longWarPower: { ...s[currentPlayer].longWarPower, H24: prevPower + 1 } } };
+  }
+
+  // Direct HQ (doc 01 §19) — the sole end-of-turn HQ-pressure mechanic (replaces the old
+  // reactive Empty-Board HQ Strike entirely, removed 2026-08-31, Run 1). Runs here, BEFORE
+  // endTurn(), while state.turn still equals the ending player's own turn number and their
+  // units' persistentSpent/tempExtraAttacks haven't been cleared yet.
+  const directHQ = evaluateDirectHQ(s, currentPlayer);
+  s = {
+    ...directHQ.state,
+    p1: { ...directHQ.state.p1, hq: directHQ.state.p1.hq - directHQ.hqDamageToP1 },
+    p2: { ...directHQ.state.p2, hq: directHQ.state.p2.hq - directHQ.hqDamageToP2 },
+  };
+  const directHQLog = directHQ.log;
+
+  // Expire any unused Emergency Supply (C23) temporary Fuel grant — doc 01 §3, after Direct HQ.
+  s = { ...s, [currentPlayer]: expireTempFuelGrant(s[currentPlayer]) };
 
   let newState = endTurn(s);                             // swap initiative, increment turn
   const newActive = newState.initiative;
@@ -2297,7 +2771,7 @@ document.getElementById('btn-end-turn').addEventListener('click', () => {
   pendingHeroTargets = null;
 
   const newRound = Math.ceil(newState.turn / 2);
-  const turnLog = [`--- Round ${newRound} — ${newState.initiative.toUpperCase()} ---`, ...supplyLog, ...effectLog];
+  const turnLog = [...directHQLog, `--- Round ${newRound} — ${newState.initiative.toUpperCase()} ---`, ...supplyLog, ...effectLog];
   commitState(newState, turnLog);
   checkWin();
 
@@ -2316,13 +2790,17 @@ document.getElementById('btn-end-turn').addEventListener('click', () => {
 // ── Cancel ────────────────────────────────────────────────────────────────────
 
 document.getElementById('btn-cancel').addEventListener('click', () => {
-  // Rally Cry: once the first unit is picked and committed, "Cancel" during the second
-  // pick means "stop here" (keep the first pick) — not a full revert of the cast.
-  const rallyCryAlreadyPicked = pendingCommandId === 51 && pendingRallyCryCount < 2;
+  // Rally Cry / Hold Position: once the first unit is picked and committed, "Cancel" during
+  // the second pick means "stop here" (keep the first pick) — not a full revert of the cast.
+  const rallyCryAlreadyPicked = ((pendingCommandId === 'C03' || pendingCommandId === 'C10') && pendingRallyCryCount < 2)
+    || (pendingCommandId === 'C32' && pendingRallyCryCount === 1);
   if (preCommandState && !rallyCryAlreadyPicked) {
     state = preCommandState;
     preCommandState = null;
   }
+  pendingCommandManeuverSource = null;
+  pendingHeroManeuverSource = null;
+  pendingCoordStrikeFirst = null;
   uiState = "idle";
   // Hero targeting must be cancellable: bot_player's flushPendingUiState blindly clicks
   // Cancel whenever uiState !== 'idle', so leaving these set would loop the bot.
@@ -2660,13 +3138,15 @@ function confirmFO() {
   document.getElementById('fo-modal').style.display = 'none';
   const keepId   = foCards.find(id => foAssignments[id] === 'keep');
   const topId    = foCards.find(id => foAssignments[id] === 'top');
-  const bottomId = foCards.find(id => foAssignments[id] === 'bottom');
+  const bottomId = foCards.find(id => foAssignments[id] === 'bottom'); // undefined when only 2 were drawn (doc 01 §27 — no bottom instruction target)
   const ps = state[foPlayer];
-  const s = { ...state, [foPlayer]: { ...ps, hand: [...ps.hand, keepId], deck: [topId, ...ps.deck, bottomId] } };
+  const newDeck = [topId, ...ps.deck, ...(bottomId !== undefined ? [bottomId] : [])];
+  let s = { ...state, [foPlayer]: { ...ps, hand: [...ps.hand, keepId], deck: newDeck } };
   const keepName   = CARD_BY_ID[keepId]?.name   ?? '?';
   const topName    = CARD_BY_ID[topId]?.name    ?? '?';
-  const bottomName = CARD_BY_ID[bottomId]?.name ?? '?';
-  commitState(s, [`Forward Observer: kept ${keepName} · ${topName} → top · ${bottomName} → bottom`]);
+  const log = [`Forward Observer: kept ${keepName} · ${topName} → top` + (bottomId !== undefined ? ` · ${CARD_BY_ID[bottomId]?.name ?? '?'} → bottom` : '')];
+  const rs = applyRuthlessStrategistIfPresent(s, foPlayer);
+  commitState(rs.state, [...log, ...rs.log]);
   foCards = [];
   foAssignments = {};
 }
@@ -2737,6 +3217,43 @@ function confirmFieldReserves(takenId) {
 
 document.getElementById('field-reserves-skip').addEventListener('click', () => confirmFieldReserves(null));
 
+// ── Craft picker modal (Chief Aircraft Engineer, H25) ───────────────────────────
+// Doc 01 §28: activating Craft rolls 3 candidate Aircraft (stats/keyword/drawback) and the
+// player picks 1 of 3 to add to hand. Fuel and the once-per-turn activation lock are already
+// committed by tryActivateHero before this modal opens (see the H25 special case there) — this
+// only resolves which candidate joins the hand and advances the escalating next-Craft cost.
+let craftPickerRole = null;
+
+function showCraftPickerModal(role) {
+  craftPickerRole = role;
+  const candidates = generateCraftCandidates().map(craftCandidateToCard);
+  const container = document.getElementById('craft-picker-cards');
+  container.innerHTML = '';
+  candidates.forEach(card => {
+    const slot = document.createElement('div');
+    slot.className = 'fo-slot';
+    slot.appendChild(buildPreviewCardDiv(card));
+    const btn = document.createElement('button');
+    btn.className = 'fo-pos-btn fo-top';
+    btn.textContent = 'CRAFT THIS';
+    btn.addEventListener('click', () => confirmCraftPick(card.id));
+    slot.appendChild(btn);
+    container.appendChild(slot);
+  });
+  document.getElementById('craft-picker-modal').style.display = 'flex';
+}
+
+function confirmCraftPick(chosenId) {
+  document.getElementById('craft-picker-modal').style.display = 'none';
+  const role = craftPickerRole;
+  craftPickerRole = null;
+  const ps = state[role];
+  const chosen = CARD_BY_ID[chosenId];
+  const s = { ...state, [role]: { ...advanceCraftCost(ps), hand: [...ps.hand, chosenId] } };
+  const log = [`Chief Aircraft Engineer: Crafted ${chosen.name} (${chosen.n}/${chosen.e}/${chosen.s}/${chosen.w}, ${chosen.keyword}) — next activation costs ${nextCraftCost(s[role])}`];
+  commitState(s, log);
+}
+
 // ── Rotate direction modal (Change Formation 124 / Field Engineer 91) ──────────
 // Both effects rotate a unit 90° but let the player choose the direction (2026-08-17,
 // previously a fixed clockwise-only turn). `s`/`log` are the pre-rotation state/log built
@@ -2773,7 +3290,13 @@ function confirmRotateDirection(direction) { // direction: 1 = clockwise, -1 = c
     };
   }
 
-  commitState(next, newLog);
+  let finalLog = newLog;
+  if (kind === 'command') { // C16 Change Formation — a true Command play, so H20 checks here; Hero H11's own rotate never triggers H20 (it's a Hero Active, not a Command)
+    const rs = applyRuthlessStrategistIfPresent(next, role);
+    next = rs.state;
+    finalLog = [...newLog, ...rs.log];
+  }
+  commitState(next, finalLog);
   checkWin();
 }
 
@@ -2970,9 +3493,9 @@ function applyDebugUnitState(newUnitState) {
   let finalState = newState;
   let finalLog = log;
   if (newUnitState === 'destroyed' && dyingUnit) {
-    const dr = checkDeathrattle(finalState, debugSelectedUnitKey, dyingUnit);
-    finalState = dr.state;
-    finalLog = [...log, ...dr.log];
+    const pd = applyPostDestructionEffects(finalState, { unitKey: debugSelectedUnitKey, dyingUnit, sourceUnitKey: null });
+    finalState = recalculateDynamicStats(pd.state);
+    finalLog = [...log, ...pd.log];
   }
   const debugTransitionFlags = newUnitState !== 'normal'
     ? new Map([[debugSelectedUnitKey, newUnitState]]) // 'suppressed' or 'destroyed'; Reset shouldn't animate

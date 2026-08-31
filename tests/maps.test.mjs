@@ -49,7 +49,7 @@ test('objectiveExclude, where present, only lists real objective card ids', () =
 });
 
 test('Midway excludes Factory (Tank-themed) and City (Infantry-themed) — dead weight on an all-water map', () => {
-  assert.deepEqual(MAPS.midway.objectiveExclude, [26, 31]);
+  assert.deepEqual(MAPS.midway.objectiveExclude, ['O1', 'O4']);
 });
 
 test('Midway is all water — no land tiles anywhere', () => {

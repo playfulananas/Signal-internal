@@ -1310,7 +1310,7 @@ body[data-theme="light"] .hc-cost-discounted { color: #007a2e; }
 /* ── Forward Observer / Radio Operator / Field Reserves modals — full-screen deck-look
    prompts. Same theming-bug fix as #hero-deploy-modal: was a hardcoded rgba(0,0,0,0.88)
    inline background, stayed dark regardless of the theme toggle. ── */
-#fo-modal, #radio-op-modal, #field-reserves-modal, #rotate-direction-modal {
+#fo-modal, #radio-op-modal, #field-reserves-modal, #rotate-direction-modal, #craft-picker-modal {
   position: fixed;
   inset: 0;
   background: var(--bg);
