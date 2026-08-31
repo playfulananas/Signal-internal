@@ -120,19 +120,16 @@ This is the canonical game state object. Firebase stores this exact shape. Do no
 
 ### BoardUnit
 
-```js
-{
-  cardId: number,
-  owner: "p1" | "p2",
-  state: "normal" | "suppressed" | "destroyed",
-  armorHits: number,        // hits absorbed by armor so far (0 until armor starts taking hits)
-  tempKeywords: string[],   // keywords added THIS TURN only (Smoke Screen, Dig In, etc.); cleared by endTurn
-  grantedKeywords: string[], // keywords from commands lasting until owner's NEXT TURN; cleared by startOfTurn
-  tempSideBonus: number,    // +N to all sides this turn (Rally Cry, Entrench, etc.); cleared by endTurn
-  objSideBonus: number,     // +N from objective effects; recalculated each startOfTurn
-  justPlaced: boolean,      // true only on the turn deployed; cleared by endTurn
-}
-```
+This shape drifted out of sync with the real one in `state.js` well before Run 1 (missing
+`grantedSideBonus`/`sideBonusTurns`/`debugSideBonus`/`rotation`/`persistentSpent`/
+`tempExtraAttacks`/`tempExtraAttacksSpent`/`dynamicSideBonus`, and — as of 2026-08-31 —
+`permanentKeywords`, the field added to fix Breakthrough/Blitzkrieg Order/Field Repairs
+grants being wiped every turn). Rather than duplicate it here again, **the canonical, current
+BoardUnit shape is the top-of-file comment in `js/state.js`** — read that instead of trusting
+the snippet that used to live here. The one distinction worth restating since it's easy to
+mix up: `grantedKeywords` clears every `startOfTurn` (for "until your next turn" effects like
+Dig In's Guard grant) — a genuinely *permanent* keyword grant (no "until" on the card) must use
+`permanentKeywords` instead, which nothing ever clears.
 
 ---
 
@@ -245,17 +242,50 @@ Added 2026-08-01 to 2026-08-13 (Session Log 20). Heroes are a separate fixed ros
 **State (`PlayerState`, see `createPlayerState` in `state.js`):**
 - `heroRoster: number[]` — the 4 chosen hero card IDs (fixed for the match).
 - `heroZones: [id|null, id|null, id|null, id|null]` — index = board column (0-3), value = hero cardId currently deployed in that zone, or `null`. Every hero has a `scope` of `"column"` (only affects its own column) or `"board"` (affects the whole board) — scope is an authoritative field on the card, never inferred from ability text (see `tests/hero_primitives.test.mjs`).
-- `heroActivated` / `heroRepositioned` — one Activated Hero Power and one reposition/swap per turn, across all zones. Reset in `startOfTurn`.
-- `heroTriggeredThisTurn: { [heroId]: true }` — gates "first X each turn" passives so each fires at most once per owner turn. Reset in `startOfTurn`.
-- `heroesActivatedEver: number[]` — every distinct hero whose Activated Power has fired this **match** (not per-turn), never cleared. Used by cards like Veteran Signal Corps (119).
-- `lastUnitClass` — tracks the class of the last Unit played, for Combined Arms General (109)'s "mixed-class army" trigger.
+**Corrected 2026-08-31 (post-Run-1 QA pass) — this whole section was pre-Run-1 stale**: old
+numeric Hero ids, a `heroActivated`/`heroesActivatedEver` shape that no longer exists, and Fuel
+cap numbers (6/8) that were already wrong even before the migration (locked value is 9 base /
+11 with Logistics Chief). Rewritten against the actual current code:
+- `heroesActivatedThisTurn: string[]` — Hero ids whose Active Power has fired this turn. Each
+  deployed Hero may activate once per turn; different Heroes may each activate in the *same*
+  turn (locked 2026-08-17 — this replaced an older single-activation-per-turn-total model, which
+  is what made Coordinated Orders' old "extra activation" effect redundant and retired). Reset
+  in `startOfTurn`.
+- `heroRepositioned: boolean` — one Hero Phase reposition/deployment per turn. Reset in
+  `startOfTurn`. Command Shuffle (C15) reuses the same pick-up/drop UI flow but explicitly does
+  *not* consume or require this flag (see `handleHeroZoneClick`'s `shuffleActive` branch).
+- `heroTriggeredThisTurn: { [heroId]: true }` — gates "first X each turn" passives (Objective
+  Marshal H04, Infantry Commander H08, Emergency Logistics Officer H21) so each fires at most
+  once per owner turn. Reset in `startOfTurn`.
+- `heroActivatedLastTurn: boolean` — snapshot of "did I activate any Hero Power on my own
+  previous turn," taken at `startOfTurn` before the current turn's tracking resets.
 
-**Hero Phase timing:** `runHeroPhase` (`game.js`) deploys roster Heroes on the same schedule as objective escalation — a Hero becomes available to deploy at each of Objective Levels 1-4 (round 2, 4, 6, 8), not on a separate pre-game step.
+**Hero Phase timing:** `runHeroPhase` (`game.js`) deploys roster Heroes on the same schedule as
+objective escalation — a Hero becomes available to deploy at each of Objective Levels 1-4
+(round 2, 4, 6, 8), not on a separate pre-game step.
+
+**On-play passive ordering (fixed 2026-08-31):** a placed Unit's own On Play (Craft's drawback,
+or the Aircraft Maneuver On Play) must resolve *before* Objective Marshal/Infantry Commander/
+Emergency Logistics Officer check (doc 01 §22) — the PLACING handler had this backwards for the
+whole of Run 1. For a synchronous On Play this was a straight reorder; the Aircraft Maneuver On
+Play needs a UI round-trip, so `checkHeroPassivesOnPlace` is skipped in PLACING for that one
+case and called instead from `resolveUnitManeuverDestination` once the Maneuver actually
+resolves.
 
 **Where the logic lives:**
-- **Pure, tested hero passives** live in `combat.js` alongside ordinary combat resolution: `checkHeroPassivesOnPlace` (on-place triggers: Objective Marshal 94, Infantry Commander 104, Combined Arms General 109, Conventional Warfare Commander 110) and `checkCounteroffensiveGeneral` (101, fires on the Suppression-*applying* side, not on removal). Covered by `tests/hero_phase.test.mjs` and `tests/hero_primitives.test.mjs`.
-- **Hero Power dispatch** (`heroTargetKeys`, `applyHeroPower` — both switch-on-hero-id, same pattern as the objective/command switches below) and **DOM wiring** (`showHeroDeploy`, `deployHero`, `handleHeroZoneClick`, `tryActivateHero`, `resolveHeroTargeting`) live in `game.js`, uncovered by `node:test` — same gap as the objective/command switches (see "Deferred" section below and the project's optimization plan for the plan to close it).
-- **Fuel cap override**: `fuelCapOf` in `state.js` raises the cap from 6 to 8 while Logistics Chief (89) is deployed in any zone — read this instead of a hardcoded `6` anywhere fuel capacity matters.
+- **Pure, tested hero passives** live in `combat.js` alongside ordinary combat resolution:
+  `checkHeroPassivesOnPlace` (on-place triggers: Objective Marshal H04, Infantry Commander H08,
+  Emergency Logistics Officer H21) and `checkCounteroffensiveGeneral` (H06, fires on the
+  Suppression-*applying* side, not on removal). Covered by `tests/hero_phase.test.mjs` and
+  `tests/hero_primitives.test.mjs`.
+- **Hero Power dispatch** (`heroTargetKeys`, `applyHeroPower` — both switch-on-hero-id, same
+  pattern as the objective/command switches below) and **DOM wiring** (`showHeroDeploy`,
+  `deployHero`, `handleHeroZoneClick`, `tryActivateHero`, `resolveHeroTargeting`) live in
+  `game.js`, uncovered by `node:test` — same gap as the objective/command switches (see
+  "Deferred" section below).
+- **Fuel cap override**: `fuelCapOf` in `state.js` raises the cap from 9 to 11 while Logistics
+  Chief (H02) is deployed in any zone — read this instead of a hardcoded `9` anywhere fuel
+  capacity matters.
 
 ---
 
