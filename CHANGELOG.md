@@ -9,6 +9,47 @@ Newest first.
 
 ---
 
+## 2026-09-01 — Fixed the cross-client Craft/Training Officer crash + id collision
+
+Fixed both issues confirmed by the multiplayer test pass below, live-reverified with the same
+Playwright scripts (plus a new `multiplayer_dual_craft_test.mjs`) until both passed cleanly.
+
+- **Cross-client crash (the confirmed bug)**: added `generatedCards` to the shared game-state
+  shape (`state.js`'s `createInitialState`) — a dict of every Craft/Training-Officer-generated
+  card's full definition, keyed by id, that rides along in every `pushState` exactly like
+  `board`/`p1`/`p2`. `confirmCraftPick` and the H19 `applyHeroPower` case (`game.js`) now stash
+  the chosen/buffed definition(s) into it at the moment they're created. On the receiving end,
+  `normalizeFirebaseState` (`game.js`) merges every entry into the local `CARD_BY_ID` via a new
+  `ensureGeneratedCard` (`cards.js`) — idempotent, so it's safe to run on every state update
+  regardless of who originally generated the card.
+- **Id collision (found by inspection, now closed)**: `registerGeneratedCard` (`cards.js`) now
+  takes a `role` and namespaces the id as `Craft-<role>-<n>` instead of bare `Craft-<n>` — two
+  independent clients crafting/buffing in the same match can no longer produce the same id with
+  different stats. `craftCandidateToCard` and `applyHandBuff` (`combat.js`) both thread `role`
+  through; `applyHandBuff` also now returns every newly-generated clone's definition (`generated`)
+  so its caller can add them to `generatedCards` too.
+- **A second, independent bug this surfaced while live-testing the fix**: `craftCandidateToCard`
+  set `copies: Infinity` on every crafted card. That was harmless before today, since a crafted
+  card's definition never left the crafting client's own memory — but now that the full
+  definition has to survive a Firebase `set()` as part of `generatedCards`, `Infinity` isn't
+  JSON-serializable and Firebase rejects the **entire** write outright (`set failed: value
+  argument contains Infinity in property '...copies'`), silently dropping the whole state push,
+  crafted card and all. Removed the field entirely — copy-limit accounting never applied to a
+  generated id in the first place (doc comment already said so; nothing reads `.copies` outside
+  deck-list validation, which a runtime-only id can never appear in).
+- Also fixed a genuine bug in the test script itself while chasing a false negative: the
+  multiplayer test's own `CARD_BY_ID` check used a bare `import('./js/cards.js')`, which resolves
+  to a *different* module instance (and an empty `CARD_BY_ID`) than the one game.js/combat.js
+  actually use — exactly the class of bug fixed for the single-page case a few entries down this
+  changelog. Fixed by discovering the page's actual `?v=` query from its loaded `<script>` tag
+  rather than hardcoding or omitting it.
+- Live-verified end to end, multiple runs: `multiplayer_craft_test.mjs` (single-side craft,
+  placed on the board, joiner's `CARD_BY_ID` now has it, zero console errors — was the confirmed
+  crash before this fix) and `multiplayer_dual_craft_test.mjs` (new — both sides craft
+  independently in the same match: distinct ids `Craft-p1-1`/`Craft-p2-1`, each side's client ends
+  up with both definitions registered, zero errors). `npm test`: 193/193 (3 new tests: id
+  namespacing, and `ensureGeneratedCard`'s register/idempotent-no-overwrite behavior).
+
 ## 2026-09-01 — Multiplayer test pass: confirmed a real cross-client crash for Craft/Training Officer
 
 Wrote and ran two Playwright two-context scripts (`multiplayer_craft_test.mjs`,

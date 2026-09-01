@@ -1,6 +1,6 @@
-import { CARD_BY_ID, registerGeneratedCard } from './cards.js?v=1788220498';
-import { getSideValue, getKeywords, attackBeats, applyHit, oppositeDir, unsuppressOnBoard, drawCards, addDiscount, remainingAttacks, spendAttack, grantTempAttacks, resetPersistentAttacks, fuelCapOf, gainFuel } from './state.js?v=1788220498';
-import { canPlaceOnTerrain, getTerrain } from './maps.js?v=1788220498';
+import { CARD_BY_ID, registerGeneratedCard } from './cards.js?v=1788253998';
+import { getSideValue, getKeywords, attackBeats, applyHit, oppositeDir, unsuppressOnBoard, drawCards, addDiscount, remainingAttacks, spendAttack, grantTempAttacks, resetPersistentAttacks, fuelCapOf, gainFuel } from './state.js?v=1788253998';
+import { canPlaceOnTerrain, getTerrain } from './maps.js?v=1788253998';
 
 // Orthogonal directions and their row/col offsets.
 const DIRS = ["n", "e", "s", "w"];
@@ -628,15 +628,21 @@ const DRAWBACK_LABEL = {
 
 // Registers the chosen candidate as a real card (js/cards.js's CARD_BY_ID) and returns it.
 // Does not add it to hand — caller does that (mirrors normal draw/discard handling so
-// hand-overflow rules apply identically to a Craft pick).
-export function craftCandidateToCard(candidate) {
+// hand-overflow rules apply identically to a Craft pick). `role` namespaces the generated id
+// so two clients crafting independently online never collide — see cards.js.
+export function craftCandidateToCard(candidate, role) {
   return registerGeneratedCard({
+    // No `copies` field: copy-limit accounting never applies to a generated id (it can't appear
+    // in a deck list at build time, only get created at runtime), so there's nothing to cap —
+    // and unlike every static card, this object now also has to survive a Firebase `set()` (see
+    // generatedCards in game.js), which rejects the whole write outright if any value is
+    // Infinity/NaN. `copies: Infinity` was that exact landmine; 2026-09-01, caught live.
     name: 'Crafted Aircraft', cls: 'Aircraft', rarity: 'Common', type: 'unit',
-    cost: 1, copies: Infinity, keyword: candidate.keyword,
+    cost: 1, keyword: candidate.keyword,
     n: candidate.stats.n, e: candidate.stats.e, s: candidate.stats.s, w: candidate.stats.w,
     ability: `On Play: ${DRAWBACK_LABEL[candidate.drawback]}.`,
     craftDrawback: candidate.drawback,
-  });
+  }, role);
 }
 
 // Resolves a crafted Aircraft's On Play drawback — fires immediately after it enters the
@@ -685,18 +691,23 @@ export function advanceCraftCost(playerState) {
 // already uses: replace each qualifying hand slot's id with a freshly-registered clone of that
 // card with +1 all sides, permanently. Two copies of the same printed card in hand become two
 // independent clones — correct, since each is buffed as its own instance.
-export function applyHandBuff(playerState, amount, filterFn) {
+// `role` namespaces each buffed clone's generated id (see cards.js) and lets the caller thread
+// the resulting definitions into shared state's `generatedCards` so they sync to the other
+// client online — `generated` returns every newly-created clone for exactly that purpose.
+export function applyHandBuff(playerState, amount, filterFn, role) {
   const log = [];
+  const generated = [];
   const newHand = playerState.hand.map(cardId => {
     const card = CARD_BY_ID[cardId];
     if (!card || card.type !== 'unit' || !filterFn(card)) return cardId;
     const buffed = registerGeneratedCard({
       ...card, n: card.n + amount, e: card.e + amount, s: card.s + amount, w: card.w + amount,
-    });
+    }, role);
+    generated.push(buffed);
     log.push(`${card.name} +${amount} all sides (permanent)`);
     return buffed.id;
   });
-  return { playerState: { ...playerState, hand: newHand }, log };
+  return { playerState: { ...playerState, hand: newHand }, log, generated };
 }
 
 // ── Maneuver (doc 01 §6) ─────────────────────────────────────────────────────

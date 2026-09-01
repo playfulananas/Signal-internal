@@ -89,13 +89,6 @@ match the v1.1 map art exactly.
   P1's direct-code-join or for P2 in either online flow. Not fixed — restructuring the Firebase
   lobby handshake timing needs a live 2-client test session to verify safely. Confirmed still
   exactly this (not worse) via a live 2-client Playwright run, 2026-09-01.
-- **Craft (H25) / Training Officer (H19) crash the OTHER client in online play** —
-  `registerGeneratedCard`'s dynamically-created card definition is never transmitted through
-  Firebase, only its bare id. Confirmed via a live 2-client test, 2026-09-01: placing a crafted
-  Aircraft throws `Cannot read properties of undefined (reading 'ability')` on the receiving
-  client. A real fix needs an architecture decision (what to embed in synced state, how to
-  namespace `Craft-N` ids so two independent clients crafting in the same match don't collide —
-  see `CHANGELOG.md` for detail) — not attempted yet.
 - **Deck builder** has no custom-deck UI — only the 8 hardcoded Recommended Decks are playable.
 - **`pendingArtyHits`** (the old Artillery-Position "click an enemy to deal 1 hit" targeting
   mode) is fully dormant — no current card triggers it — but not removed, since removing it
@@ -131,14 +124,33 @@ match the v1.1 map art exactly.
     compute the bonus per actual hit outcome instead of off the pre-summed total.
   See `CHANGELOG.md` for full detail on each. `npm test`: 190/190. 4-game selfplay regression
   (mixed decks/maps) post-fix: 0 stalls/timeouts/uncaught errors.
+- **A live 2-client multiplayer test pass (2026-09-01) found and fixed a real cross-client
+  crash**: Craft (H25) / Training Officer (H19) generate card definitions at runtime that only
+  ever existed in the generating client's own memory — Firebase sync only transmitted the bare
+  id, so the OTHER client's render threw `Cannot read properties of undefined (reading
+  'ability')` the moment a generated card became visible to them. Fixed by adding a
+  `generatedCards` dict to shared game state (definitions ride along in every push, merged into
+  the receiving client's `CARD_BY_ID` on arrival) and namespacing generated ids by role
+  (`Craft-p1-1` vs `Craft-p2-1`) so two clients generating independently never collide. A second,
+  independent bug surfaced while fixing this — a crafted card's `copies: Infinity` field made the
+  entire Firebase write fail silently once the definition needed to be synced — also fixed
+  (removed; copy-limit accounting never applied to a generated id anyway). See `CHANGELOG.md` for
+  full detail. Confirmed working (not just "didn't crash") via `multiplayer_craft_test.mjs` and
+  the new `multiplayer_dual_craft_test.mjs`, both live against the real Firebase project.
+  Everything else checked in that same pass — the open-lobby flow through mulligan into a synced
+  board, and the explicit-Exit disconnect flow — was already correct.
 
 ## Verification tools
 
-`npm test` runs `tests/*.test.mjs` (pure-function unit tests, no browser, ~1s, 190/190 passing).
+`npm test` runs `tests/*.test.mjs` (pure-function unit tests, no browser, ~1s, 193/193 passing).
 `node selfplay_test.mjs [games]` runs full Playwright-driven self-play games against a local
 `npm run dev` server (bot vs bot, catches stalls/timeouts/console errors). `node
 selfplay_vs_ai_smoke.mjs` smoke-tests the in-page "vs AI" bot specifically. The bot logic in
 `bot_ai.js` is duplicated in `js/bot_player.js` (in-page mode) — update both if they ever drift.
+`node open_lobby_test.mjs` / `multiplayer_craft_test.mjs` / `multiplayer_dual_craft_test.mjs` /
+`multiplayer_disconnect_test.mjs` are two-real-client Playwright scripts against the live
+Firebase project (no emulator configured) — need `npm run dev` running first. See
+`docs/plans/2026-09-01-multiplayer-test-plan.md` for what each one checks.
 
 ## Pointers
 

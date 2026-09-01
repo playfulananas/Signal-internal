@@ -2,6 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff } from '../js/combat.js';
+import { CARD_BY_ID, ensureGeneratedCard } from '../js/cards.js';
 
 function boardWith(entries) {
   const board = {};
@@ -95,8 +96,8 @@ test('craftCandidateToCard produces a real Aircraft card definition, not in the 
   // convention, not a real bug (every real file consistently uses the same ?v= suffix).
   // What actually matters for gameplay — the returned card's shape — is checked directly.
   const candidate = { stats: { n: 6, e: 6, s: 6, w: 6 }, keyword: 'Armor', drawback: 'ownHqDamage' };
-  const card = craftCandidateToCard(candidate);
-  assert.ok(card.id.startsWith('Craft-'));
+  const card = craftCandidateToCard(candidate, 'p1');
+  assert.ok(card.id.startsWith('Craft-p1-'), `id should be namespaced by role, got: ${card.id}`);
   assert.equal(card.cls, 'Aircraft');
   assert.equal(card.cost, 1);
   assert.equal(card.generated, true);
@@ -128,20 +129,52 @@ test('resolveCraftDrawback: rotateAll rotates every friendly unit including the 
 test('applyHandBuff replaces qualifying hand slots with buffed clones, leaves the rest untouched', () => {
   // I1 Rifle Squad is cost 1 (qualifies); T27 King Tiger is cost 6 (does not).
   const ps = { hand: ['I1', 'T27', 'I1'] };
-  const { playerState, log } = applyHandBuff(ps, 1, c => c.cost === 1 || c.cost === 2);
+  const { playerState, log, generated } = applyHandBuff(ps, 1, c => c.cost === 1 || c.cost === 2, 'p1');
   assert.equal(playerState.hand.length, 3);
   assert.equal(playerState.hand[1], 'T27', 'non-qualifying card untouched, same id');
   assert.notEqual(playerState.hand[0], 'I1', 'qualifying card replaced with a new clone id');
   assert.notEqual(playerState.hand[2], 'I1', 'second copy also replaced');
   assert.notEqual(playerState.hand[0], playerState.hand[2], 'two independent clones, not the same instance');
   assert.equal(log.length, 2, 'one log line per buffed card');
+  // Doc 2026-09-01 multiplayer fix: every clone's full definition must be returned too, so the
+  // caller can thread it into shared state's generatedCards for the other client to receive.
+  assert.equal(generated.length, 2, 'one generated definition per buffed card');
+  assert.ok(generated.every(g => g.id.startsWith('Craft-p1-')), 'generated ids namespaced by role');
+  assert.deepEqual(generated.map(g => g.id), playerState.hand.filter(id => id !== 'T27'), 'generated ids match the hand\'s new clone ids');
 });
 
 test('applyHandBuff is a no-op when nothing in hand qualifies', () => {
   const ps = { hand: ['T27'] };
-  const { playerState, log } = applyHandBuff(ps, 1, c => c.cost === 1);
+  const { playerState, log, generated } = applyHandBuff(ps, 1, c => c.cost === 1, 'p1');
   assert.deepEqual(playerState.hand, ['T27']);
   assert.deepEqual(log, []);
+  assert.deepEqual(generated, []);
+});
+
+test('registerGeneratedCard (via craftCandidateToCard) namespaces ids by role so two clients crafting independently never collide', () => {
+  const candidate = { stats: { n: 1, e: 1, s: 1, w: 1 }, keyword: 'Armor', drawback: 'ownHqDamage' };
+  const p1Card = craftCandidateToCard(candidate, 'p1');
+  const p2Card = craftCandidateToCard(candidate, 'p2');
+  assert.notEqual(p1Card.id, p2Card.id, 'p1 and p2 crafting independently must never produce the same id');
+  assert.ok(p1Card.id.includes('-p1-'));
+  assert.ok(p2Card.id.includes('-p2-'));
+});
+
+// 2026-09-01 multiplayer fix: ensureGeneratedCard is the receiving-client half of syncing a
+// Craft/Training-Officer card across the network — normalizeFirebaseState (game.js) calls it
+// for every entry in the synced generatedCards dict on every state update.
+test('ensureGeneratedCard registers a definition under its given id when not already present', () => {
+  assert.equal(CARD_BY_ID['Craft-test-1'], undefined, 'precondition: id not already registered');
+  const registered = ensureGeneratedCard('Craft-test-1', { name: 'Synced Aircraft', cls: 'Aircraft', n: 3, e: 3, s: 3, w: 3 });
+  assert.equal(registered.id, 'Craft-test-1');
+  assert.equal(registered.generated, true);
+  assert.equal(CARD_BY_ID['Craft-test-1'].name, 'Synced Aircraft');
+});
+
+test('ensureGeneratedCard is idempotent — does not overwrite an already-registered definition', () => {
+  ensureGeneratedCard('Craft-test-2', { name: 'First' });
+  ensureGeneratedCard('Craft-test-2', { name: 'Second — should be ignored' });
+  assert.equal(CARD_BY_ID['Craft-test-2'].name, 'First', 're-registering the same id must not clobber the existing definition');
 });
 
 test('nextCraftCost/advanceCraftCost: 5 -> 4 -> 3 -> 2 -> 1 -> 1 progression, floor 1', () => {

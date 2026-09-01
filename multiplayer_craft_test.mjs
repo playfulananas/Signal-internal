@@ -71,9 +71,13 @@ try {
   // ── Force H25 into the host's Hero Zone + give Fuel via the debug panel ─────
   // (debug actions route through commitState -> pushStateIfOnline, same as any real action,
   // so this exercises the real sync path, not a local-only shortcut.)
+  // Also force initiative to p1: first-player is randomized (2026-09-01 doc 02 fix), so without
+  // this ~half of all runs roll p2-first and every host-side Hero-activate click below is a
+  // legal no-op (not this player's turn) — irrelevant variance for a Craft-sync check.
   await host.evaluate(() => {
     const dbg = window.__SIGNAL_DEBUG__;
     dbg.state.p1.heroZones[0] = 'H25';
+    dbg.state.initiative = 'p1';
   });
   // Force a real commitState so the mutation above actually gets pushed: nudge Fuel via the
   // debug panel UI (direct state mutation alone doesn't call commitState/pushState).
@@ -83,6 +87,8 @@ try {
   await fuelPlus5.click();
   await fuelPlus5.click();
   await host.locator('.debug-panel button:has-text("✕")').first().click();
+  await host.waitForSelector('.debug-panel', { state: 'hidden', timeout: 5000 }).catch(() => {});
+  await host.waitForTimeout(500);
 
   const hostFuel = await host.evaluate(() => window.__SIGNAL_DEBUG__.state.p1.fuel);
   const hostHeroZones = await host.evaluate(() => window.__SIGNAL_DEBUG__.state.p1.heroZones);
@@ -130,8 +136,15 @@ try {
       { timeout: 8000 }
     ).catch(() => fail(`joiner's state never showed ${craftedId} on the board — sync may have failed entirely`));
 
+    // Import with the SAME cache-busting ?v= query the page itself loaded game.js with — a
+    // bare `import('./js/cards.js')` would resolve to a different module instance (and a
+    // different, empty CARD_BY_ID) than the one game.js/combat.js are actually using, exactly
+    // the class of bug fixed earlier this session (see CHANGELOG.md, module-instance
+    // fragmentation). Discover it from the loaded <script> tag rather than hardcoding it.
     const joinerCardDefined = await joiner.evaluate(async (id) => {
-      const mod = await import('./js/cards.js');
+      const scriptSrc = document.querySelector('script[type="module"]').src;
+      const v = new URL(scriptSrc).search;
+      const mod = await import(`./js/cards.js${v}`);
       return !!mod.CARD_BY_ID[id];
     }, craftedId).catch(e => { fail(`joiner failed evaluating CARD_BY_ID lookup: ${e.message}`); return null; });
 

@@ -78,7 +78,7 @@
 // "reset attacks" effect (e.g. Maneuver Commander, Scramble) zeroes persistentSpent only and
 // never recreates an already-spent temporary extra attack.
 
-import { CARD_BY_ID } from './cards.js?v=1788220498';
+import { CARD_BY_ID } from './cards.js?v=1788253998';
 
 // ── State factory ────────────────────────────────────────────────────────────
 
@@ -105,6 +105,11 @@ export function createInitialState(p1DeckIds, p2DeckIds, mapId = 'kursk', p1Hero
     objectives: {},
     log: [],
     pendingArtyHits: 0,
+    // Craft (H25) / Training Officer (H19) generated-card definitions, keyed by id — has to
+    // travel in shared state so the OTHER client's CARD_BY_ID (per-client, in-memory only)
+    // learns about a card it never itself registered. See ensureGeneratedCard (cards.js) and
+    // normalizeFirebaseState (game.js).
+    generatedCards: {},
   };
 }
 

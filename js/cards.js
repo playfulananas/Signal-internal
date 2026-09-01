@@ -184,10 +184,26 @@ export const CARD_BY_ID = Object.fromEntries(CARDS.map(c => [c.id, c]));
 // pool — no copy-limit accounting, never in getDeckPool(). CARD_BY_ID is a plain mutable
 // object, so registering a generated card is just adding a key to it; no schema/lookup
 // change needed anywhere else that reads CARD_BY_ID[cardId].
+//
+// Online play: each client's `nextGeneratedCardSeq` is its own local counter, so the id is
+// namespaced by `role` ('p1'/'p2') to guarantee two independent clients generating a card in
+// the same match never collide on the same id (both would otherwise start at `Craft-1`). The
+// card's full definition also has to travel through Firebase alongside its id (see
+// `generatedCards` on the shared game state, threaded through in game.js) — CARD_BY_ID itself
+// is per-client, in-memory only, and the receiving client never sees a bare id get registered.
 let nextGeneratedCardSeq = 1;
-export function registerGeneratedCard(cardWithoutId) {
-  const id = `Craft-${nextGeneratedCardSeq++}`;
+export function registerGeneratedCard(cardWithoutId, role) {
+  const id = `Craft-${role}-${nextGeneratedCardSeq++}`;
   const card = { ...cardWithoutId, id, generated: true };
   CARD_BY_ID[id] = card;
   return card;
+}
+
+// Merges a generated card definition received from the network (or replayed from state that
+// round-tripped through Firebase) into this client's own CARD_BY_ID, if not already present.
+// Idempotent and order-independent — safe to call for every entry on every state update,
+// regardless of which client originally generated the card.
+export function ensureGeneratedCard(id, definition) {
+  if (!CARD_BY_ID[id]) CARD_BY_ID[id] = { ...definition, id, generated: true };
+  return CARD_BY_ID[id];
 }

@@ -1,4 +1,4 @@
-import { CARD_BY_ID, CARDS } from './cards.js?v=1788220498';
+import { CARD_BY_ID, CARDS, ensureGeneratedCard } from './cards.js?v=1788253998';
 import {
   createInitialState,
   startOfTurn,
@@ -27,15 +27,15 @@ import {
   hasEscalated,
   markEscalateUse,
   expireTempFuelGrant,
-} from './state.js?v=1788220498';
-import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkCounteroffensiveGeneral, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff } from './combat.js?v=1788220498';
-import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1788220498';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1788220498';
-import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1788220498';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1788220498';
-import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1788220498';
-import { runBotTurn } from './bot_player.js?v=1788220498';
-import { bestHeroDeployment } from './bot_ai.js?v=1788220498';
+} from './state.js?v=1788253998';
+import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkCounteroffensiveGeneral, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff } from './combat.js?v=1788253998';
+import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1788253998';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1788253998';
+import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1788253998';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1788253998';
+import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1788253998';
+import { runBotTurn } from './bot_player.js?v=1788253998';
+import { bestHeroDeployment } from './bot_ai.js?v=1788253998';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
@@ -924,8 +924,19 @@ function normalizeFirebaseState(raw) {
     pendingUnitBuffs: toArray(p.pendingUnitBuffs),
     discardPile: toArray(p.discardPile),
   } : p;
+  // Craft (H25) / Training Officer (H19) generate card definitions at runtime that only ever
+  // existed in the crafting client's own in-memory CARD_BY_ID — without this, the receiving
+  // client's CARD_BY_ID[thatId] is undefined the moment the card is visible to them (e.g. on
+  // the board), and rendering it throws. `generatedCards` rides along in shared state for
+  // exactly this reason; merge every entry into this client's own registry on every receive.
+  // Idempotent (ensureGeneratedCard no-ops if already present) and order-independent.
+  const generatedCards = raw.generatedCards ?? {};
+  for (const [id, def] of Object.entries(generatedCards)) {
+    ensureGeneratedCard(id, def);
+  }
   return {
     ...raw,
+    generatedCards,
     log:   toArray(raw.log),
     p1:    fixPlayer(raw.p1),
     p2:    fixPlayer(raw.p2),
@@ -1174,8 +1185,12 @@ function applyHeroPower(s, role, col, hero, targetKey) {
     case 'H19': { // Training Officer — all 1- and 2-cost Units currently in hand +1 all sides
       // permanently. See applyHandBuff (combat.js) for how this works without a hand-instance
       // rewrite: qualifying hand slots get replaced with a freshly-registered buffed clone.
-      const { playerState, log: buffLog } = applyHandBuff(s[role], 1, c => c.cost === 1 || c.cost === 2);
-      s = { ...s, [role]: playerState };
+      const { playerState, log: buffLog, generated } = applyHandBuff(s[role], 1, c => c.cost === 1 || c.cost === 2, role);
+      // Same cross-client sync requirement as Craft's confirmCraftPick — each clone's full
+      // definition has to travel in generatedCards, not just its bare id.
+      const newGeneratedCards = { ...(s.generatedCards ?? {}) };
+      for (const g of generated) newGeneratedCards[g.id] = g;
+      s = { ...s, [role]: playerState, generatedCards: newGeneratedCards };
       log.push(`${hero.name}: ${buffLog.length} Unit(s) in hand +1 all sides (permanent)`);
       log.push(...buffLog);
       break;
@@ -3516,7 +3531,7 @@ let craftPickerRole = null;
 
 function showCraftPickerModal(role) {
   craftPickerRole = role;
-  const candidates = generateCraftCandidates().map(craftCandidateToCard);
+  const candidates = generateCraftCandidates().map(c => craftCandidateToCard(c, role));
   const container = document.getElementById('craft-picker-cards');
   container.innerHTML = '';
   candidates.forEach(card => {
@@ -3540,7 +3555,15 @@ function confirmCraftPick(chosenId) {
   const ps = state[role];
   const chosen = CARD_BY_ID[chosenId];
   // doc 02 Q024: a full hand sends the generated card to Discard Pile instead.
-  const s = { ...state, [role]: addCardToHand(advanceCraftCost(ps), chosenId) };
+  // The chosen candidate's full definition also has to ride along in shared state itself
+  // (generatedCards) — CARD_BY_ID is per-client, in-memory only, so without this the OTHER
+  // client's CARD_BY_ID[chosenId] lookup comes back undefined the moment this card is
+  // visible to them (e.g. placed on the board), crashing that client's render.
+  const s = {
+    ...state,
+    [role]: addCardToHand(advanceCraftCost(ps), chosenId),
+    generatedCards: { ...(state.generatedCards ?? {}), [chosenId]: chosen },
+  };
   const log = [`Chief Aircraft Engineer: Crafted ${chosen.name} (${chosen.n}/${chosen.e}/${chosen.s}/${chosen.w}, ${chosen.keyword}) — next activation costs ${nextCraftCost(s[role])}`];
   commitState(s, log);
 }
