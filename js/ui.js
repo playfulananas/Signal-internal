@@ -1,7 +1,7 @@
-import { CARD_BY_ID } from './cards.js?v=1788297094';
-import { getKeywords, maxArmorHits, discountFor, fuelCapOf, rotatedDir } from './state.js?v=1788297094';
-import { getTerrain } from './maps.js?v=1788297094';
-import { nextCraftCost } from './combat.js?v=1788297094';
+import { CARD_BY_ID } from './cards.js?v=1788300820';
+import { getKeywords, maxArmorHits, discountFor, fuelCapOf, rotatedDir } from './state.js?v=1788300820';
+import { getTerrain } from './maps.js?v=1788300820';
+import { nextCraftCost } from './combat.js?v=1788300820';
 
 const TERRAIN_SHORT = { plains: 'P', forest: 'F', water: 'W', desert: 'D', city: 'C' };
 
@@ -203,7 +203,21 @@ function buildBoardCard(unit, viewer = 'p1', transitionFlag = null) {
   el.className = `board-card ${unit.owner} ${unit.state}${buffed ? ' buffed' : ''}${debuffed ? ' debuffed' : ''}${opponent ? ' opponent-card' : ''}${justSuppressed}${directHqSource}${armorAbsorbed}${causalitySource}${armorRing}${armorRingHeavy}`;
 
   const kwList = getKeywords(unit);
-  const kwHtml = kwList.map(k => `<span class="bc-kw-tag"${KEYWORD_TEXT[k] ? ` data-tip="${esc(KEYWORD_TEXT[k])}"` : ''}>${k}</span>`).join('');
+  // Provenance styling (§3): printed (today's look, unchanged) / permanently granted (filled
+  // background) / temporarily granted (dashed border + ⧗ glyph). getKeywords already merges
+  // base+temp+granted+permanent into one deduped list for gameplay logic — this re-derives
+  // provenance per keyword straight from the same 4 already-populated fields (no new grant-site
+  // plumbing needed), printed taking priority over permanent over temporary so a redundant
+  // grant of an already-printed/permanent keyword never downgrades its badge.
+  const printedKws = Array.isArray(card.keyword) ? card.keyword : (card.keyword ? [card.keyword] : []);
+  const kwHtml = kwList.map(k => {
+    const provenance = printedKws.includes(k) ? 'printed'
+      : (unit.permanentKeywords || []).includes(k) ? 'permanent'
+      : 'temporary'; // must be tempKeywords/grantedKeywords — the only remaining source
+    const provClass = provenance === 'permanent' ? ' kw-permanent' : provenance === 'temporary' ? ' kw-temporary' : '';
+    const glyph = provenance === 'temporary' ? '⧗ ' : '';
+    return `<span class="bc-kw-tag${provClass}"${KEYWORD_TEXT[k] ? ` data-tip="${esc(KEYWORD_TEXT[k])}"` : ''}>${glyph}${k}</span>`;
+  }).join('');
   const abilityHtml = card.ability
     ? `<span class="bc-ability-pip" data-tip="${esc(card.ability)}">⚡</span>`
     : '';

@@ -901,6 +901,12 @@ body.viewer-p2 .stats-panel {
   border-radius: 2px; padding: 0 3px; line-height: 1.5;
   letter-spacing: 0.3px; cursor: help;
 }
+/* Keyword provenance (§3) — printed (above, unchanged) vs. permanently/temporarily granted.
+   Shape carries the distinction rather than a new hue, so it reads at ~8px without competing
+   with the buff/debuff/protection/movement color language: filled = "locked in," dashed
+   reuses the same idiom Suppressed's card border already uses for "reduced/not-permanent." */
+.bc-kw-tag.kw-permanent { background: var(--gold); color: #1a1408; border-style: solid; }
+.bc-kw-tag.kw-temporary { border-style: dashed; }
 /* Status strip — Zone C: a flow row between the stats grid and the keyword row (bc-dirs
    is flex:1, so this sits just above bc-keyword-row, which is always the last flow child).
    Replaces the old .bc-rotation/.bc-state, which were both position:absolute pinned to the
