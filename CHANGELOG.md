@@ -9,6 +9,35 @@ Newest first.
 
 ---
 
+## 2026-09-01 — Fixed the online lobby's map-before-deck order (code-share P1)
+
+Closed the last of the three flagged online-lobby-order gaps from doc 04 §1 — per direct
+instruction: only one player should ever pick the map, so P2 correctly never getting a
+map-picker was already right; the actual bug was P1's code-share flow (`game.html?game=...&role=p1`
+with no `mapId` in the URL) showing its deck-picker before its map-picker, the reverse of the
+locked order. Local/AI mode and the open-lobby-browser flow already had this right.
+
+- `game.js`'s page-load block now also shows the map-picker first for `isOnline && myRole ===
+  'p1' && !urlMapId` (previously only the `!isOnline` case did). The map-grid click handler
+  records the choice in a new `onlineMapId` variable and reveals the deck-picker, instead of
+  calling `beginHostWait` immediately (that only happens once a deck is also chosen, from the
+  deck-grid handler, which now always has a map already in hand — either `urlMapId` from the
+  open-lobby browser or `onlineMapId` from this new flow).
+- P2 still never gets an interactive map-picker in any online flow (unchanged, and correct — a
+  second picker would be redundant, not just out of order) but previously had zero visibility
+  into which map it even was before committing to a deck. Added a small read-only fix: once P2
+  receives P1's lobby push (which carries `mapId`), the deck-picker's label updates to include
+  the map's name (e.g. "YOUR DECK — Ardennes — Wide Front") so an informed deck choice is
+  possible (terrain can matter, e.g. a Tank-heavy deck vs. a Forest-heavy map).
+- Live-verified with a new script, `multiplayer_codeshare_order_test.mjs`: P1 starts on the
+  map-picker (deck-picker hidden), moves to the deck-picker only after choosing a map, and
+  reaches the waiting screen; P2 never sees a map-picker but does see the map name; the match
+  starts correctly end to end. Re-ran the existing `open_lobby_test.mjs`,
+  `multiplayer_craft_test.mjs`, and `multiplayer_disconnect_test.mjs` — all still pass, confirming
+  this didn't disturb the open-lobby flow, Craft sync, or the disconnect screen. `npm test`:
+  193/193 (unaffected — this fix is entirely in game.js's DOM-orchestration layer, same as the
+  other online-only fixes above).
+
 ## 2026-09-01 — Fixed the cross-client Craft/Training Officer crash + id collision
 
 Fixed both issues confirmed by the multiplayer test pass below, live-reverified with the same

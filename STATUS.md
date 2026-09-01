@@ -79,16 +79,12 @@ match the v1.1 map art exactly.
 | Terrain placement restrictions | ✅ | Forest-blocks-Tank only |
 | Firebase multiplayer | ✅ | |
 | Local-mode lobby setup order | ✅ | Map picked before deck(s), local hotseat + AI mode |
-| Online-mode lobby setup order | ⚠️ | Deck still picked before map (P1 direct-join); P2 never sees a map-picker in either online flow. Known gap, not fixed — see Open Items below. |
+| Online-mode lobby setup order | ✅ | Map picked before deck for both online flows (P1 direct-join now fixed to match); P2 never picks a map (by design — one player picks, not two) but sees its name |
 | Deck builder | ⚠️ | 8 hardcoded starter decks; no custom deck building UI |
 | Debug panel | ✅ | |
 
 ## Open items
 
-- **Online lobby setup order** doesn't match doc 04 §1's locked "map before deck" sequence for
-  P1's direct-code-join or for P2 in either online flow. Not fixed — restructuring the Firebase
-  lobby handshake timing needs a live 2-client test session to verify safely. Confirmed still
-  exactly this (not worse) via a live 2-client Playwright run, 2026-09-01.
 - **Deck builder** has no custom-deck UI — only the 8 hardcoded Recommended Decks are playable.
 - **`pendingArtyHits`** (the old Artillery-Position "click an enemy to deal 1 hit" targeting
   mode) is fully dormant — no current card triggers it — but not removed, since removing it
@@ -139,6 +135,12 @@ match the v1.1 map art exactly.
   the new `multiplayer_dual_craft_test.mjs`, both live against the real Firebase project.
   Everything else checked in that same pass — the open-lobby flow through mulligan into a synced
   board, and the explicit-Exit disconnect flow — was already correct.
+- **Online lobby map-before-deck order fixed (2026-09-01)**: P1's code-share flow now shows the
+  map-picker before the deck-picker, matching local/AI mode and the open-lobby flow (was the
+  reverse order, the one remaining wrong-order case — see Core Systems table above). P2
+  deliberately still never gets a map-picker (one player picks, not two) but now sees the map's
+  name during its own deck pick, read-only. Live-verified with `multiplayer_codeshare_order_test.mjs`;
+  re-ran every other multiplayer test to confirm nothing else broke. See `CHANGELOG.md`.
 
 ## Verification tools
 
@@ -148,8 +150,9 @@ match the v1.1 map art exactly.
 selfplay_vs_ai_smoke.mjs` smoke-tests the in-page "vs AI" bot specifically. The bot logic in
 `bot_ai.js` is duplicated in `js/bot_player.js` (in-page mode) — update both if they ever drift.
 `node open_lobby_test.mjs` / `multiplayer_craft_test.mjs` / `multiplayer_dual_craft_test.mjs` /
-`multiplayer_disconnect_test.mjs` are two-real-client Playwright scripts against the live
-Firebase project (no emulator configured) — need `npm run dev` running first. See
+`multiplayer_disconnect_test.mjs` / `multiplayer_codeshare_order_test.mjs` are two-real-client
+Playwright scripts against the live Firebase project (no emulator configured) — need `npm run
+dev` running first. See
 `docs/plans/2026-09-01-multiplayer-test-plan.md` for what each one checks.
 
 ## Pointers

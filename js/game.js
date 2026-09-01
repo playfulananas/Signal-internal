@@ -1,4 +1,4 @@
-import { CARD_BY_ID, CARDS, ensureGeneratedCard } from './cards.js?v=1788253998';
+import { CARD_BY_ID, CARDS, ensureGeneratedCard } from './cards.js?v=1788255254';
 import {
   createInitialState,
   startOfTurn,
@@ -27,15 +27,15 @@ import {
   hasEscalated,
   markEscalateUse,
   expireTempFuelGrant,
-} from './state.js?v=1788253998';
-import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkCounteroffensiveGeneral, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff } from './combat.js?v=1788253998';
-import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1788253998';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1788253998';
-import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1788253998';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1788253998';
-import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1788253998';
-import { runBotTurn } from './bot_player.js?v=1788253998';
-import { bestHeroDeployment } from './bot_ai.js?v=1788253998';
+} from './state.js?v=1788255254';
+import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkCounteroffensiveGeneral, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff } from './combat.js?v=1788255254';
+import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1788255254';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1788255254';
+import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1788255254';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1788255254';
+import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1788255254';
+import { runBotTurn } from './bot_player.js?v=1788255254';
+import { bestHeroDeployment } from './bot_ai.js?v=1788255254';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
@@ -186,8 +186,11 @@ document.getElementById('deck-grid').addEventListener('click', e => {
     p1DeckIds = [...ids];
     p1HeroIds = [...heroIds];
     document.getElementById('deck-picker').style.display = 'none';
-    if (urlMapId) { beginHostWait(urlMapId); return; }
-    document.getElementById('map-picker').style.display = '';
+    // Map is always already chosen by this point now (doc 04 §1 map-before-deck order,
+    // 2026-09-01 fix): urlMapId from the open-lobby browser, or onlineMapId from the
+    // direct-code-join map-picker shown before this deck-picker — see the page-load block
+    // and the map-grid handler below.
+    beginHostWait(urlMapId ?? onlineMapId);
     return;
   }
 
@@ -260,7 +263,17 @@ document.getElementById('map-grid').addEventListener('click', e => {
   const option = e.target.closest('.deck-option');
   if (!option || !option.dataset.map) return;
 
-  if (isOnline && myRole === 'p1') { beginHostWait(option.dataset.map); return; }
+  // Online P1 direct-code-join: this only fires when urlMapId wasn't already set (see the
+  // page-load block below) — i.e. exactly the case doc 04 §1 needs fixed. Just record the
+  // choice and move on to P1's own deck picker; beginHostWait (which actually pushes the
+  // lobby and only P1 needs to see) fires from there once a deck is also chosen. P2 never
+  // gets this screen in any online flow — one player picks the map, not two.
+  if (isOnline && myRole === 'p1') {
+    onlineMapId = option.dataset.map;
+    document.getElementById('map-picker').style.display = 'none';
+    document.getElementById('deck-picker').style.display = '';
+    return;
+  }
 
   // Local/AI mode: map is chosen first (see the doc-04 setup-order note above), so this
   // just records it and moves on to the deck picker(s) — startGame happens from there once
@@ -280,17 +293,22 @@ const urlMapId = params.get('mapId') ?? null; // set when this game came from th
 let myLastPushId = null;
 
 // Doc 04 §1 (locked setup order): Map is selected/revealed BEFORE deck+Hero roster
-// confirmation. Local hotseat and AI mode start on the map-picker for this reason (Run 2
-// fix, 2026-08-31 — every mode used to start on the deck-picker instead). Deliberately NOT
-// touching online here: P1's direct-code-join still deck-picks before map (existing
-// behavior, flagged as a known gap, not fixed this pass — see CLAUDE.md/STATUS.md), and
-// P2 never sees a map-picker at all in either online flow (same flagged gap). Restructuring
-// the online lobby/Firebase handshake order can't be safely verified without a live 2-client
-// session, so it's left alone rather than guessed at. P1-via-open-lobby-browser already
-// satisfies the order on its own, since the map is chosen on index.html before this page
-// even loads (`urlMapId` arrives already set).
+// confirmation, and only ONE player ever picks it — a second picker for the other player
+// would be redundant, not just out of order. Local hotseat and AI mode start on the
+// map-picker for this reason (Run 2 fix, 2026-08-31 — every mode used to start on the
+// deck-picker instead). Online P1 direct-code-join fixed the same way 2026-09-01 (was
+// deck-then-map, the one remaining wrong-order case — see CHANGELOG.md): starts on the
+// map-picker too, choice stored in `onlineMapId`, then falls through to the deck-picker.
+// P1-via-open-lobby-browser already satisfies the order on its own (map chosen on
+// index.html before this page even loads, `urlMapId` arrives already set) and skips this
+// map-picker entirely. P2 never sees a map-picker in either online flow — by design, not a
+// gap: one player picks, the other is told what it is (see the P2-online block below).
 let localMapId = null;
+let onlineMapId = null;
 if (!isOnline) {
+  document.getElementById('deck-picker').style.display = 'none';
+  document.getElementById('map-picker').style.display = '';
+} else if (myRole === 'p1' && !urlMapId) {
   document.getElementById('deck-picker').style.display = 'none';
   document.getElementById('map-picker').style.display = '';
 }
@@ -3330,6 +3348,12 @@ if (isOnline && myRole === 'p2') {
     }
     if (data._phase === 'lobby' && !p1LobbyData) {
       p1LobbyData = data;
+      // P2 never picks the map (one player picks, not two — see the doc 04 §1 note above),
+      // but was previously given zero visibility into it before committing to a deck, even
+      // though terrain can matter for deck choice (e.g. a Tank-heavy deck vs. a Forest map).
+      // Read-only, not a picker.
+      const mapName = MAPS[data.mapId]?.name ?? data.mapId;
+      document.getElementById('picker-label').textContent = `YOUR DECK — ${mapName}`;
       tryPushP2Ready(); // fires if P2 already picked; otherwise waits
     } else if (data.turn !== undefined && !data._phase) {
       if (!state) {
