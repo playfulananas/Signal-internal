@@ -29,7 +29,10 @@ change adjacency/board-Infantry-count — placement, movement, and destruction �
 stay correctly live; the board display (`buildBoardCard` in ui.js) sums `dynamicSideBonus` into
 each side's shown value alongside the other bonus fields. A shared destruction chain
 (`resolveDestructionChain`/`applyPostDestructionEffects` in combat.js) is the single path for
-Last Stand/Breakthrough/HQ-damage-replacement, used by both combat and self-destruct Commands. A
+Last Stand/Breakthrough/HQ-damage-replacement, used by both combat and self-destruct Commands.
+The combat TARGETING handler (game.js) runs this chain for EVERY unit destroyed by a single
+attack, not just one — a Blast/Barrage attack that kills both its primary and a secondary target
+in the same swing correctly fires Last Stand/Breakthrough for both. A
 persistent+temporary attack-allowance model (`remainingAttacks`/`spendAttack` in state.js) has
 locked consumption order: persistent first, then temporary; an explicit reset restores persistent
 only. Direct HQ (`evaluateDirectHQ` in combat.js) is the sole end-of-turn HQ-conversion

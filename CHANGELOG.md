@@ -9,6 +9,44 @@ Newest first.
 
 ---
 
+## 2026-09-01 — Fixed Last Stand/Breakthrough being skipped for non-first kills in a multi-destroy attack
+
+Per direct request, after the Muster bug below prompted the question "should every card be
+manually re-tested?" — rather than a full re-test, audited the codebase for the same *class* of
+bug (a documented multi-step contract with a call site that doesn't fully honor it). Grepped for
+"callers must call X after every Y/Z" style contracts and checked each one's actual call sites,
+the same way the Muster fix below was root-caused.
+
+- **Found**: the combat TARGETING handler in game.js (the code path behind every player-initiated
+  attack) only ever processed the FIRST destroyed unit for Last Stand/Breakthrough purposes —
+  `result.boardMutations.find(m => m.newUnit === null)?.key` — even though `resolveSingleAttack`
+  can return more than one destroyed unit in its `boardMutations` array whenever the attacker has
+  Blast or Barrage and the splash also kills a secondary target. Kill counters
+  (`killsThisTurn`/`totalKills`) had the same flaw, incrementing by 1 regardless of how many units
+  actually died.
+- **Live-verified the bug pattern is real** using AR46 Mortar Battery (Blast) buffed via the debug
+  panel to guarantee a win, attacking a pre-suppressed Frontline Guard (primary target, no Last
+  Stand) with a pre-suppressed Field Commander (I22, Guard + Last Stand) sitting in the Blast
+  splash zone. Both were destroyed in one attack; only the primary's post-destruction step ran —
+  Field Commander's Last Stand (adjacent friendly Infantry +1 all sides) never fired.
+- **Fixed** by replacing the single `.find()` with a loop over every destroyed key in
+  `boardMutations`, running `applyPostDestructionEffects` (Last Stand + Breakthrough-from-attacker)
+  for each one in the same fixed board-scan order Blast/Barrage already use, and updating the kill
+  counters by the real kill count instead of a flat `+1`.
+- **Re-verified live** with the identical scenario after the fix: battle log now shows
+  `Mortar Battery → Frontline Guard: Destroyed`, then `(secondary) -> Field Commander: Destroyed`,
+  then `Field Commander (Last Stand): adjacent friendly Infantry +1 all sides` — and the adjacent
+  Shield Bearers' on-screen stats moved from 3/1/4/3 to 4/2/5/4, confirming the fix all the way
+  through to the rendered board.
+- Same fix pass also corrected a stale comment in `heroTargetKeys` (game.js) that claimed H16
+  Maneuver Commander and H19 Training Officer were "genuinely not yet wired" — both have had real
+  implementations since Run 1 closed (H16's 2-step maneuver flow, H19's `applyHandBuff`); the
+  comment was simply never updated. No functional gap — the switch's "not automated yet" default
+  case is unreachable dead code.
+- `npm test`: 193/193 (this is another game.js-integration-layer bug the pure-function suite
+  can't reach directly — `resolveSingleAttack` and `applyPostDestructionEffects` were each correct
+  in isolation; the bug was purely in how game.js consumed `resolveSingleAttack`'s result).
+
 ## 2026-09-01 — Fixed Inspire/Muster going stale on placement (state + display, two separate bugs)
 
 Live-verified per direct request ("can you check that one if it actually works?") rather than

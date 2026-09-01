@@ -1,4 +1,4 @@
-import { CARD_BY_ID, CARDS, ensureGeneratedCard } from './cards.js?v=1788263767';
+import { CARD_BY_ID, CARDS, ensureGeneratedCard } from './cards.js?v=1788267223';
 import {
   createInitialState,
   startOfTurn,
@@ -27,15 +27,15 @@ import {
   hasEscalated,
   markEscalateUse,
   expireTempFuelGrant,
-} from './state.js?v=1788263767';
-import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkCounteroffensiveGeneral, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff } from './combat.js?v=1788263767';
-import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1788263767';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1788263767';
-import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby, updatePlayerState } from './firebase.js?v=1788263767';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1788263767';
-import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1788263767';
-import { runBotTurn } from './bot_player.js?v=1788263767';
-import { bestHeroDeployment } from './bot_ai.js?v=1788263767';
+} from './state.js?v=1788267223';
+import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkCounteroffensiveGeneral, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff } from './combat.js?v=1788267223';
+import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1788267223';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1788267223';
+import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby, updatePlayerState } from './firebase.js?v=1788267223';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1788267223';
+import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1788267223';
+import { runBotTurn } from './bot_player.js?v=1788267223';
+import { bestHeroDeployment } from './bot_ai.js?v=1788267223';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
@@ -1116,12 +1116,12 @@ function scopedEnemyUnits(s, role, col, filterFn) {
 // (an instant), [] = needs a target but none exists right now.
 // Run 1 (2026-08-31): rewired to the new H01-H25 id scheme. Heroes not listed here are
 // either passive (no Active Power — H02/H04/H06/H08/H13/H14/H20 fire from other hooks, see
-// combat.js) or genuinely not yet wired (H16 Maneuver Commander needs a 2-step
-// source-then-destination flow — see resolveHeroTargeting/pendingHeroManeuverSource; H19
-// Training Officer needs a hand-instance-buff data model this prototype doesn't have yet —
-// both left logging "not automated yet" via tryActivateHero's implemented-flag path... but
-// since all 25 are `implemented:true` in cards.js (per the new truth), they instead fall
-// through applyHeroPower's default case below with an explicit "not automated" log line).
+// combat.js) or handled outside this switch entirely: H16 Maneuver Commander's 2-step
+// source-then-destination flow lives in resolveHeroTargeting/pendingHeroManeuverSource
+// (resolveHeroManeuverDestination calls resolveManeuver directly, never reaching
+// applyHeroPower's switch below); H19 Training Officer's hand-buff runs through
+// applyHandBuff (combat.js) via its own case in that switch. All 25 Heroes are fully wired —
+// the switch's default "power not automated yet" case below is unreachable dead code.
 function heroTargetKeys(s, role, col, hero) {
   switch (hero.id) {
     case 'H03': // Tactical Commander — any friendly unit in the column
@@ -1989,19 +1989,23 @@ document.getElementById('board').addEventListener('click', e => {
     // Kill tracking, then Last Stand / Breakthrough via the shared post-destruction hook
     // (doc 01 §9 destruction chain) — HQ damage for the kill was already correctly computed
     // by applyHit inside resolveSingleAttack above, so this only runs the remaining steps.
-    const wasDestroyed = result.boardMutations.some(m => m.newUnit === null);
+    // A Blast/Barrage attack can destroy more than one Unit in a single resolveSingleAttack
+    // call (primary target + secondary splash) — every one of them gets its own Last
+    // Stand/Breakthrough pass, not just whichever mutation happens to be first in the array
+    // (fixed 2026-09-01: this used to .find() only the first dying key, silently skipping
+    // Last Stand for any additional Unit destroyed by the same attack's splash).
+    const dyingKeys = result.boardMutations.filter(m => m.newUnit === null).map(m => m.key);
     let postDestroyLog = [];
-    if (wasDestroyed) {
+    if (dyingKeys.length > 0) {
       newState = { ...newState, [attacker]: {
         ...newState[attacker],
-        killsThisTurn: (newState[attacker].killsThisTurn ?? 0) + 1,
-        totalKills: (newState[attacker].totalKills ?? 0) + 1,
+        killsThisTurn: (newState[attacker].killsThisTurn ?? 0) + dyingKeys.length,
+        totalKills: (newState[attacker].totalKills ?? 0) + dyingKeys.length,
       }};
-      const dyingKey = result.boardMutations.find(m => m.newUnit === null)?.key;
-      if (dyingKey) {
+      for (const dyingKey of dyingKeys) {
         const pd = applyPostDestructionEffects(newState, { unitKey: dyingKey, dyingUnit: rallyState.board[dyingKey], sourceUnitKey: attackerKey });
         newState = pd.state;
-        postDestroyLog = pd.log;
+        postDestroyLog = [...postDestroyLog, ...pd.log];
       }
     }
     newState = recalculateDynamicStats(newState);
