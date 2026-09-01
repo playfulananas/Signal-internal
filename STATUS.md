@@ -24,7 +24,10 @@ All 25 Heroes and all 35 Commands have real implementations — no stub/no-op ca
 `applyHeroPower`/`playInstantCommand`/`applyCommandEffect`. Guard uses attacker-specific
 legal-target priority (not adjacency); Precision, Blast, Barrage, Rally, Inspire (dynamic aura),
 Muster (dynamic aura), Last Stand (unit keyword), Breakthrough, Maneuver, Escalate, and Craft are
-all built and tested. A shared destruction chain
+all built and tested. `recalculateDynamicStats` (combat.js) runs after all 3 events that can
+change adjacency/board-Infantry-count — placement, movement, and destruction — so Inspire/Muster
+stay correctly live; the board display (`buildBoardCard` in ui.js) sums `dynamicSideBonus` into
+each side's shown value alongside the other bonus fields. A shared destruction chain
 (`resolveDestructionChain`/`applyPostDestructionEffects` in combat.js) is the single path for
 Last Stand/Breakthrough/HQ-damage-replacement, used by both combat and self-destruct Commands. A
 persistent+temporary attack-allowance model (`remainingAttacks`/`spendAttack` in state.js) has

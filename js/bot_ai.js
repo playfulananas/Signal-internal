@@ -4,10 +4,10 @@
 // Given a live state snapshot (read from window.__SIGNAL_DEBUG__ in the browser), this module
 // picks the best legal action. It does not touch the DOM — callers (selfplay_test.mjs,
 // bot_player.js) execute the chosen action via clicks.
-import { CARD_BY_ID } from "./cards.js?v=1788258602";
-import { getAttackableTargets, resolveSingleAttack } from "./combat.js?v=1788258602";
-import { getKeywords, applyHit, hasEscalated } from "./state.js?v=1788258602";
-import { canPlaceOnTerrain, getTerrain } from "./maps.js?v=1788258602";
+import { CARD_BY_ID } from "./cards.js?v=1788263767";
+import { getAttackableTargets, resolveSingleAttack } from "./combat.js?v=1788263767";
+import { getKeywords, applyHit, hasEscalated } from "./state.js?v=1788263767";
+import { canPlaceOnTerrain, getTerrain } from "./maps.js?v=1788263767";
 
 const W_HQ = 10;      // weight per point of HQ damage dealt/avoided
 const W_MATERIAL = 3; // weight per "state step" (normal→suppressed→destroyed) inflicted/risked

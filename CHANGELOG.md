@@ -9,6 +9,37 @@ Newest first.
 
 ---
 
+## 2026-09-01 — Fixed Inspire/Muster going stale on placement (state + display, two separate bugs)
+
+Live-verified per direct request ("can you check that one if it actually works?") rather than
+trusting the existing unit tests, which only ever call `computeDynamicSideBonus` as an imported
+pure function and never exercise the real placement handler. Found two independent bugs stacked
+on top of each other:
+
+- **State bug**: combat.js's own doc comment on `recalculateDynamicStats` requires callers to
+  call it "after every placement, movement, or destruction — the 3 events that can change
+  adjacency/board-Infantry-count." Grepping all 8 existing call sites in `game.js` (Hero-power
+  hits, unit Maneuver, combat TARGETING, end of `applyObjectiveEffects`, Command Maneuver,
+  hit-resolution, the debug panel) showed placement was the one event that never called it.
+  Live-reproduced: placed a Muster unit (Green Recruit, I15) alone, then placed a second friendly
+  Infantry (Assault Trooper) adjacent — the Muster unit's `dynamicSideBonus` stayed `0` instead of
+  becoming `1`. Fixed by adding the missing call right after the new unit is added to
+  `state.board`, before the "Placed X" log line.
+- **Display bug, found while verifying the state fix**: even after the state fix made
+  `dynamicSideBonus` correctly update, the rendered board card still showed the Muster unit's
+  unbuffed base stats. `buildBoardCard` (ui.js)'s `bonus` sum — which feeds directly into the
+  printed N/E/S/W numbers — and its `buffed` CSS-highlight check both listed
+  `tempSideBonus`/`grantedSideBonus`/`objSideBonus`/`debugSideBonus` but omitted
+  `dynamicSideBonus` entirely, so Inspire/Muster's live bonus was invisible on screen even when
+  the underlying state and actual combat math (`getSideValue`, state.js) were already correct.
+  Fixed by adding `dynamicSideBonus` into both the `bonus` sum and the `buffed` check.
+- Re-verified live end-to-end after both fixes: placing Assault Trooper next to Green Recruit
+  now correctly shows Green Recruit as 2/2/2/2 (up from printed 1/1/1/1) with the gold "buffed"
+  highlight applied, matching the internal `dynamicSideBonus: 1`.
+- `npm test`: 193/193 (no test caught the state bug directly, confirming the "pure function
+  tested, integration untested" gap — coverage gap noted, not closed, since writing a
+  game.js-level integration test for this is a larger addition than this fix warranted).
+
 ## 2026-09-01 — Made online mulligan simultaneous instead of sequential
 
 Per direct request. The old flow was strictly sequential: P1 mulliganed, and only after that

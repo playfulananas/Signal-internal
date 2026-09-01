@@ -1,7 +1,7 @@
-import { CARD_BY_ID } from './cards.js?v=1788258602';
-import { getKeywords, maxArmorHits, discountFor, fuelCapOf, rotatedDir } from './state.js?v=1788258602';
-import { getTerrain } from './maps.js?v=1788258602';
-import { nextCraftCost } from './combat.js?v=1788258602';
+import { CARD_BY_ID } from './cards.js?v=1788263767';
+import { getKeywords, maxArmorHits, discountFor, fuelCapOf, rotatedDir } from './state.js?v=1788263767';
+import { getTerrain } from './maps.js?v=1788263767';
+import { nextCraftCost } from './combat.js?v=1788263767';
 
 const TERRAIN_SHORT = { plains: 'P', forest: 'F', water: 'W', desert: 'D', city: 'C' };
 
@@ -129,7 +129,7 @@ export function renderBoard(state, selectedTileKey, validDropKeys, changedKeys =
 function buildBoardCard(unit, viewer = 'p1', transitionFlag = null) {
   const card = CARD_BY_ID[unit.cardId];
   const el = document.createElement('div');
-  const buffed = unit.tempSideBonus > 0 || unit.grantedSideBonus > 0 || unit.debugSideBonus > 0 || (unit.tempKeywords?.length > 0) || (unit.grantedKeywords?.length > 0) || (unit.permanentKeywords?.length > 0);
+  const buffed = unit.tempSideBonus > 0 || unit.grantedSideBonus > 0 || unit.debugSideBonus > 0 || unit.dynamicSideBonus > 0 || (unit.tempKeywords?.length > 0) || (unit.grantedKeywords?.length > 0) || (unit.permanentKeywords?.length > 0);
   const opponent = unit.owner !== viewer;
   const justSuppressed = transitionFlag === 'suppressed' ? ' just-suppressed' : '';
   el.className = `board-card ${unit.owner} ${unit.state}${buffed ? ' buffed' : ''}${opponent ? ' opponent-card' : ''}${justSuppressed}`;
@@ -139,7 +139,7 @@ function buildBoardCard(unit, viewer = 'p1', transitionFlag = null) {
   const abilityHtml = card.ability
     ? `<span class="bc-ability-pip" data-tip="${esc(card.ability)}">⚡</span>`
     : '';
-  const bonus = (unit.tempSideBonus || 0) + (unit.grantedSideBonus || 0) + (unit.objSideBonus || 0) + (unit.debugSideBonus || 0);
+  const bonus = (unit.tempSideBonus || 0) + (unit.grantedSideBonus || 0) + (unit.objSideBonus || 0) + (unit.debugSideBonus || 0) + (unit.dynamicSideBonus || 0);
   const maxArmor = maxArmorHits(unit);
   const remaining = maxArmor - unit.armorHits;
   const armorPips = maxArmor > 0
@@ -161,8 +161,9 @@ function buildBoardCard(unit, viewer = 'p1', transitionFlag = null) {
   const dw = baseW + bonus;
   // Any side no longer matching its printed value is flagged gold (increased) or red
   // (decreased) — every stat-changing effect (objective bonuses, Hero bonuses, command
-  // effects, the debug panel) funnels through the same tempSideBonus/grantedSideBonus/
-  // objSideBonus/debugSideBonus fields, so one comparison per side covers all of them.
+  // effects, Inspire/Muster's live recalculation, the debug panel) funnels through the same
+  // tempSideBonus/grantedSideBonus/objSideBonus/debugSideBonus/dynamicSideBonus fields, so
+  // one comparison per side covers all of them.
   const dirClass = (val, base) => val > base ? ' class="bc-dir-up"' : val < base ? ' class="bc-dir-down"' : '';
   if (card && card.type === 'unit') {
     el.innerHTML = `

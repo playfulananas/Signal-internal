@@ -1,4 +1,4 @@
-import { CARD_BY_ID, CARDS, ensureGeneratedCard } from './cards.js?v=1788258602';
+import { CARD_BY_ID, CARDS, ensureGeneratedCard } from './cards.js?v=1788263767';
 import {
   createInitialState,
   startOfTurn,
@@ -27,15 +27,15 @@ import {
   hasEscalated,
   markEscalateUse,
   expireTempFuelGrant,
-} from './state.js?v=1788258602';
-import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkCounteroffensiveGeneral, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff } from './combat.js?v=1788258602';
-import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1788258602';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1788258602';
-import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby, updatePlayerState } from './firebase.js?v=1788258602';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1788258602';
-import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1788258602';
-import { runBotTurn } from './bot_player.js?v=1788258602';
-import { bestHeroDeployment } from './bot_ai.js?v=1788258602';
+} from './state.js?v=1788263767';
+import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkCounteroffensiveGeneral, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff } from './combat.js?v=1788263767';
+import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1788263767';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1788263767';
+import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby, updatePlayerState } from './firebase.js?v=1788263767';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1788263767';
+import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1788263767';
+import { runBotTurn } from './bot_player.js?v=1788263767';
+import { bestHeroDeployment } from './bot_ai.js?v=1788263767';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
@@ -1812,6 +1812,15 @@ document.getElementById('board').addEventListener('click', e => {
       ),
     };
 
+    // Inspire/Muster (combat.js's own doc comment): "Callers must call recalculateDynamicStats
+    // after every placement, movement, or destruction — the 3 events that can change
+    // adjacency/board-Infantry-count." Placement was the one of the three that never actually
+    // did this — every other event (Maneuver, combat destruction, Objective effects, Hero
+    // powers) recalculates correctly. Confirmed live 2026-09-01: placing a second friendly
+    // Infantry next to an existing Muster unit left the Muster unit showing its un-buffed base
+    // stats until some unrelated later action (an attack, End Turn) happened to recalculate —
+    // meaning an attack made in the meantime would have used the wrong (too-low) side value.
+    newState = recalculateDynamicStats(newState);
     const logLines = [`Placed ${card.name} at ${clickedKey} (${terrain})${discount > 0 ? ` [Armored Spearhead: -${discount} Fuel]` : ''}`];
     state = { ...newState, log: [...(newState.log ?? []), ...logLines] };
     appendLog(logLines); // fire immediately so it displays before any On-Play/Hero-passive lines below
