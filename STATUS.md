@@ -36,7 +36,10 @@ in the same swing correctly fires Last Stand/Breakthrough for both. A
 persistent+temporary attack-allowance model (`remainingAttacks`/`spendAttack` in state.js) has
 locked consumption order: persistent first, then temporary; an explicit reset restores persistent
 only. Direct HQ (`evaluateDirectHQ` in combat.js) is the sole end-of-turn HQ-conversion
-mechanism, wired into the End Turn handler. Suppression deals 0 HQ damage; Destroy deals 2.
+mechanism, wired into the End Turn handler. Suppression deals 0 HQ damage; Destroy deals 2, or 0
+if the destroyed Unit has Guard — enforced consistently by both destruction paths (`applyHit` in
+state.js, for normal combat/Blast/Barrage kills; `resolveDestructionChain` in combat.js, for
+command/self-destruct kills like Sacrifice Play).
 
 `bot_ai.js`'s Command/Hero-Power/Objective scoring is fully mapped to the current id scheme,
 matched by each card's actual effect text.

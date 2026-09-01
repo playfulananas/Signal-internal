@@ -9,6 +9,30 @@ Newest first.
 
 ---
 
+## 2026-09-01 — Fixed Guard not blocking HQ damage on normal-combat destruction
+
+Per direct request: "if guard is killed you should not receive damage." Doc 01's rule ("destroying
+a Unit deals 2 to its OWNER's HQ ... unless Guard reduces it to 0") was already correctly
+implemented in `resolveDestructionChain` (used by command/self-destruct destruction like Sacrifice
+Play — see the existing test `resolveDestructionChain with no replacement: destroying a Guard Unit
+deals 0 HQ damage`), but normal combat destruction goes through a completely separate path —
+`applyHit` (state.js), called directly by `resolveSingleAttack` and `resolveSecondaryHits`
+(Blast/Barrage) — which had no Guard check at all. A Guard Unit destroyed in an ordinary attack, or
+as Blast/Barrage splash, wrongly dealt its owner the full 2 HQ damage instead of 0.
+
+- Fixed inside `applyHit` itself so every caller gets it for free, mirroring
+  `resolveDestructionChain`'s own check (`getKeywords(unit).includes('Guard')`) rather than
+  patching each call site separately.
+- Added 4 tests (`tests/keywords.test.mjs`): direct `applyHit` on a Guard vs. non-Guard Unit, a
+  full `resolveSingleAttack` combat kill, and a Blast-secondary-kill case confirming only the
+  non-Guard kill in a multi-kill attack contributes HQ damage. None of these existed before —
+  exactly why this had no coverage to catch it.
+- **Live-verified** in a real match (debug panel to buff an attacker and pre-suppress two
+  different defenders — one Guard, one not — then attack each): the Guard defender's destruction
+  left the owner's HQ unchanged (30 → 30), while the non-Guard control case correctly dropped HQ
+  by 2 (30 → 28) the same way.
+- `npm test`: 209/209.
+
 ## 2026-09-01 — Added Objective player-choice targeting (4 of 20 secondary effects)
 
 Doc 04 §6 locks auto-random selection only for Objective secondary effects whose card text says
