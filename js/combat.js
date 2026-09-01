@@ -1,6 +1,6 @@
-import { CARD_BY_ID, registerGeneratedCard } from './cards.js?v=1788281953';
-import { getSideValue, getKeywords, attackBeats, applyHit, oppositeDir, unsuppressOnBoard, drawCards, addDiscount, remainingAttacks, spendAttack, grantTempAttacks, resetPersistentAttacks, fuelCapOf, gainFuel } from './state.js?v=1788281953';
-import { canPlaceOnTerrain, getTerrain } from './maps.js?v=1788281953';
+import { CARD_BY_ID, registerGeneratedCard } from './cards.js?v=1788297094';
+import { getSideValue, getKeywords, attackBeats, applyHit, oppositeDir, unsuppressOnBoard, drawCards, addDiscount, remainingAttacks, spendAttack, grantTempAttacks, resetPersistentAttacks, fuelCapOf, gainFuel } from './state.js?v=1788297094';
+import { canPlaceOnTerrain, getTerrain } from './maps.js?v=1788297094';
 
 // Orthogonal directions and their row/col offsets.
 const DIRS = ["n", "e", "s", "w"];
@@ -339,13 +339,18 @@ export function recalculateDynamicStats(state) {
 // against an enemy Unit — success not required (doc 01 §15). Direct HQ is NOT an attack
 // against an enemy Unit and must never call this. Per-card effect dispatch by id, mirroring
 // the destruction-chain / Hero-power switch pattern elsewhere in this codebase.
+// Returns { state, log, causalityTargets }: causalityTargets is the additive, UI-only list of
+// board keys whose card actually changed as a result of this trigger (for the causality-pulse
+// "source glow -> target flash" visualization in game.js — see UI_FEEDBACK_UPGRADE_PLAN.md §14).
+// Never read by game logic, only by rendering; existing callers that ignore it are unaffected.
 export function checkRally(s, attackerKey) {
   const unit = s.board[attackerKey];
-  if (!unit) return { state: s, log: [] };
-  if (!getKeywords(unit).includes('Rally')) return { state: s, log: [] };
+  if (!unit) return { state: s, log: [], causalityTargets: [] };
+  if (!getKeywords(unit).includes('Rally')) return { state: s, log: [], causalityTargets: [] };
   const card = CARD_BY_ID[unit.cardId];
   const owner = unit.owner;
   const log = [];
+  const causalityTargets = [];
   const tag = `${card.name} (Rally):`;
 
   switch (card.id) {
@@ -360,6 +365,7 @@ export function checkRally(s, attackerKey) {
         const u = s.board[pick.key];
         s = { ...s, board: { ...s.board, [pick.key]: { ...u, grantedSideBonus: (u.grantedSideBonus || 0) + 1, sideBonusTurns: 99 } } };
         log.push(`${tag} ${CARD_BY_ID[u.cardId].name} +1 all sides (permanent)`);
+        causalityTargets.push(pick.key);
       }
       break;
     }
@@ -368,6 +374,7 @@ export function checkRally(s, attackerKey) {
       for (const { key: k } of others) {
         const u = s.board[k];
         s = { ...s, board: { ...s.board, [k]: { ...u, grantedSideBonus: (u.grantedSideBonus || 0) + 1, sideBonusTurns: 99 } } };
+        causalityTargets.push(k);
       }
       if (others.length) log.push(`${tag} all other friendly Infantry +1 all sides (permanent)`);
       break;
@@ -380,6 +387,7 @@ export function checkRally(s, attackerKey) {
         if (!u || u.state === 'destroyed' || u.owner !== owner) continue;
         s = { ...s, board: { ...s.board, [adjKey]: { ...u, grantedSideBonus: (u.grantedSideBonus || 0) + 1, sideBonusTurns: 99 } } };
         any = true;
+        causalityTargets.push(adjKey);
       }
       if (any) log.push(`${tag} adjacent friendly Units +1 all sides (permanent)`);
       break;
@@ -387,7 +395,7 @@ export function checkRally(s, attackerKey) {
     default:
       break;
   }
-  return { state: s, log };
+  return { state: s, log, causalityTargets };
 }
 
 // ── Shared destruction chain (doc 01 §9) ────────────────────────────────────
@@ -437,6 +445,7 @@ export function resolveDestructionChain(s, { unitKey, sourceUnitKey = null, caus
   s = recalculateDynamicStats(s);
 
   // 4. Last Stand.
+  const causalityTargets = [];
   if (getKeywords(dyingUnit).includes('Last Stand')) {
     const doubled = (s[owner]?.heroZones ?? []).includes('H14'); // Graves Registration Officer
     const usedTargets = new Set();
@@ -444,6 +453,7 @@ export function resolveDestructionChain(s, { unitKey, sourceUnitKey = null, caus
       const r = runLastStandEffect(s, unitKey, dyingUnit, card, owner, usedTargets);
       s = r.state;
       log.push(...r.log);
+      causalityTargets.push(...(r.causalityTargets ?? []));
       if (r.targetKey) usedTargets.add(r.targetKey);
     }
     s = recalculateDynamicStats(s);
@@ -457,11 +467,12 @@ export function resolveDestructionChain(s, { unitKey, sourceUnitKey = null, caus
       const r = runBreakthroughEffect(s, sourceUnitKey, sourceUnit, sourceCard);
       s = r.state;
       log.push(...r.log);
+      causalityTargets.push(...(r.causalityTargets ?? []));
       s = recalculateDynamicStats(s);
     }
   }
 
-  return { state: s, log, hqDamageToP1, hqDamageToP2 };
+  return { state: s, log, hqDamageToP1, hqDamageToP2, causalityTargets };
 }
 
 // Lighter-weight sibling of resolveDestructionChain, for callers where the destroy mutation
@@ -472,10 +483,11 @@ export function resolveDestructionChain(s, { unitKey, sourceUnitKey = null, caus
 // `dyingUnit` is a snapshot of the unit taken immediately BEFORE it was removed/marked
 // destroyed (for cardId/owner/keywords); `unitKey`'s tile should already reflect the destroy.
 export function applyPostDestructionEffects(s, { unitKey, dyingUnit, sourceUnitKey = null }) {
-  if (!dyingUnit) return { state: s, log: [] };
+  if (!dyingUnit) return { state: s, log: [], causalityTargets: [] };
   const card = CARD_BY_ID[dyingUnit.cardId];
   const owner = dyingUnit.owner;
   const log = [];
+  const causalityTargets = [];
 
   if (getKeywords(dyingUnit).includes('Last Stand')) {
     const doubled = (s[owner]?.heroZones ?? []).includes('H14'); // Graves Registration Officer
@@ -484,6 +496,7 @@ export function applyPostDestructionEffects(s, { unitKey, dyingUnit, sourceUnitK
       const r = runLastStandEffect(s, unitKey, dyingUnit, card, owner, usedTargets);
       s = r.state;
       log.push(...r.log);
+      causalityTargets.push(...(r.causalityTargets ?? []));
       if (r.targetKey) usedTargets.add(r.targetKey);
     }
     s = recalculateDynamicStats(s);
@@ -496,11 +509,12 @@ export function applyPostDestructionEffects(s, { unitKey, dyingUnit, sourceUnitK
       const r = runBreakthroughEffect(s, sourceUnitKey, sourceUnit, sourceCard);
       s = r.state;
       log.push(...r.log);
+      causalityTargets.push(...(r.causalityTargets ?? []));
       s = recalculateDynamicStats(s);
     }
   }
 
-  return { state: s, log };
+  return { state: s, log, causalityTargets };
 }
 
 function runLastStandEffect(s, key, dyingUnit, card, owner, excludeKeys) {
@@ -510,30 +524,30 @@ function runLastStandEffect(s, key, dyingUnit, card, owner, excludeKeys) {
     case 'I18': // Last Stand Soldier — draw 1
       s = { ...s, [owner]: drawCards(s[owner], 1) };
       log.push(`${tag} draw 1 card`);
-      return { state: s, log };
+      return { state: s, log, causalityTargets: [] };
     case 'I19': { // Final Defender — random friendly Infantry +1 all sides permanently
       const list = unitsOnBoard(s, owner).filter(({ key: k, unit: u }) => !excludeKeys.has(k) && CARD_BY_ID[u.cardId]?.cls === 'Infantry');
-      if (!list.length) { log.push(`${tag} no friendly Infantry to target`); return { state: s, log }; }
+      if (!list.length) { log.push(`${tag} no friendly Infantry to target`); return { state: s, log, causalityTargets: [] }; }
       const pick = list[Math.floor(Math.random() * list.length)];
       const u = s.board[pick.key];
       s = { ...s, board: { ...s.board, [pick.key]: { ...u, grantedSideBonus: (u.grantedSideBonus || 0) + 1, sideBonusTurns: 99 } } };
       log.push(`${tag} ${CARD_BY_ID[u.cardId].name} +1 all sides (permanent)`);
-      return { state: s, log, targetKey: pick.key };
+      return { state: s, log, targetKey: pick.key, causalityTargets: [pick.key] };
     }
     case 'I22': { // Field Commander — adjacent friendly Infantry +1 all sides until end of turn
       const [row, col] = tileCoords(key);
-      let any = false;
+      const causalityTargets = [];
       for (const { key: adjKey } of adjacentTiles(row, col)) {
         const u = s.board[adjKey];
         if (!u || u.state === 'destroyed' || u.owner !== owner || CARD_BY_ID[u.cardId]?.cls !== 'Infantry') continue;
         s = { ...s, board: { ...s.board, [adjKey]: { ...u, tempSideBonus: (u.tempSideBonus || 0) + 1 } } };
-        any = true;
+        causalityTargets.push(adjKey);
       }
-      if (any) log.push(`${tag} adjacent friendly Infantry +1 all sides (until end of turn)`);
-      return { state: s, log };
+      if (causalityTargets.length) log.push(`${tag} adjacent friendly Infantry +1 all sides (until end of turn)`);
+      return { state: s, log, causalityTargets };
     }
     default:
-      return { state: s, log: [`${tag} not automated yet`] };
+      return { state: s, log: [`${tag} not automated yet`], causalityTargets: [] };
   }
 }
 
@@ -544,12 +558,12 @@ function runBreakthroughEffect(s, key, unit, card) {
     case 'T32': case 'T38': // Tank Hunter / Armored Spearhead — this Unit +1 all sides permanently
       s = { ...s, board: { ...s.board, [key]: { ...unit, grantedSideBonus: (unit.grantedSideBonus || 0) + 1, sideBonusTurns: 99 } } };
       log.push(`${tag} +1 all sides (permanent)`);
-      return { state: s, log };
+      return { state: s, log, causalityTargets: [key] };
     case 'T33': { // Tank Destroyer — your next Tank costs 1 Fuel (set-cost; see discountFor's
       // `setCost` handling in state.js — other reductions can still stack on top, down to 0).
       s = { ...s, [unit.owner]: addDiscount(s[unit.owner], { appliesTo: 'Tank', column: null, setCost: 1 }) };
       log.push(`${tag} next Tank costs 1 Fuel`);
-      return { state: s, log };
+      return { state: s, log, causalityTargets: [] };
     }
     case 'T34': { // Breakthrough Tank — gains Armor (permanent — no "until" wording on this
       // card, so it must use permanentKeywords, not grantedKeywords which clears every
@@ -558,19 +572,21 @@ function runBreakthroughEffect(s, key, unit, card) {
       if (!kws.includes('Armor') && !kws.includes('Heavy Armor')) {
         s = { ...s, board: { ...s.board, [key]: { ...unit, permanentKeywords: [...(unit.permanentKeywords || []), 'Armor'] } } };
         log.push(`${tag} gains Armor (permanent)`);
+        return { state: s, log, causalityTargets: [key] };
       }
-      return { state: s, log };
+      return { state: s, log, causalityTargets: [] };
     }
     case 'T35': { // Ace Tank — gains Double Attack (permanent — same permanentKeywords fix as T34)
       const kws = getKeywords(unit);
       if (!kws.includes('Double Attack')) {
         s = { ...s, board: { ...s.board, [key]: { ...unit, permanentKeywords: [...(unit.permanentKeywords || []), 'Double Attack'] } } };
         log.push(`${tag} gains Double Attack (permanent)`);
+        return { state: s, log, causalityTargets: [key] };
       }
-      return { state: s, log };
+      return { state: s, log, causalityTargets: [] };
     }
     default:
-      return { state: s, log: [] };
+      return { state: s, log: [], causalityTargets: [] };
   }
 }
 

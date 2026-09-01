@@ -1,7 +1,7 @@
-import { CARD_BY_ID } from './cards.js?v=1788295040';
-import { getKeywords, maxArmorHits, discountFor, fuelCapOf, rotatedDir } from './state.js?v=1788295040';
-import { getTerrain } from './maps.js?v=1788295040';
-import { nextCraftCost } from './combat.js?v=1788295040';
+import { CARD_BY_ID } from './cards.js?v=1788297094';
+import { getKeywords, maxArmorHits, discountFor, fuelCapOf, rotatedDir } from './state.js?v=1788297094';
+import { getTerrain } from './maps.js?v=1788297094';
+import { nextCraftCost } from './combat.js?v=1788297094';
 
 const TERRAIN_SHORT = { plains: 'P', forest: 'F', water: 'W', desert: 'D', city: 'C' };
 
@@ -185,6 +185,11 @@ function buildBoardCard(unit, viewer = 'p1', transitionFlag = null) {
   const directHqSource = transitionFlag === 'direct-hq' ? ' fx-flash-positive' : '';
   // Armor absorb — one-shot protection-blue flash (also FxFlash directly, no new wrapper).
   const armorAbsorbed = transitionFlag === 'armor-absorbed' ? ' fx-flash-protect' : '';
+  // Causality pulse, source stage — the Rally/Breakthrough-triggering unit glows immediately;
+  // the target(s) it affected flash a beat later via flashCausalityTarget (game.js), a direct
+  // DOM className toggle rather than a second transitionFlags cycle (see UI_FEEDBACK_UPGRADE_
+  // PLAN.md §14, "source glow -> target flash").
+  const causalitySource = transitionFlag === 'causality-source' ? ' fx-flash-positive' : '';
   // Protection ring — keyed off REMAINING protection (maxArmorHits - armorHits), not the
   // card's static max, so a Heavy Armor unit's inner ring disappears after its first absorbed
   // hit and the outer ring after its second, matching "a layer of protection being consumed"
@@ -195,7 +200,7 @@ function buildBoardCard(unit, viewer = 'p1', transitionFlag = null) {
   const remaining = maxArmor - unit.armorHits;
   const armorRing = maxArmor > 0 && remaining >= 1 ? ' armor-ring' : '';
   const armorRingHeavy = maxArmor > 1 && remaining >= 2 ? ' armor-ring-heavy' : '';
-  el.className = `board-card ${unit.owner} ${unit.state}${buffed ? ' buffed' : ''}${debuffed ? ' debuffed' : ''}${opponent ? ' opponent-card' : ''}${justSuppressed}${directHqSource}${armorAbsorbed}${armorRing}${armorRingHeavy}`;
+  el.className = `board-card ${unit.owner} ${unit.state}${buffed ? ' buffed' : ''}${debuffed ? ' debuffed' : ''}${opponent ? ' opponent-card' : ''}${justSuppressed}${directHqSource}${armorAbsorbed}${causalitySource}${armorRing}${armorRingHeavy}`;
 
   const kwList = getKeywords(unit);
   const kwHtml = kwList.map(k => `<span class="bc-kw-tag"${KEYWORD_TEXT[k] ? ` data-tip="${esc(KEYWORD_TEXT[k])}"` : ''}>${k}</span>`).join('');

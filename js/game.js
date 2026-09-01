@@ -1,4 +1,4 @@
-import { CARD_BY_ID, CARDS, ensureGeneratedCard } from './cards.js?v=1788295040';
+import { CARD_BY_ID, CARDS, ensureGeneratedCard } from './cards.js?v=1788297094';
 import {
   createInitialState,
   startOfTurn,
@@ -27,15 +27,15 @@ import {
   hasEscalated,
   markEscalateUse,
   expireTempFuelGrant,
-} from './state.js?v=1788295040';
-import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkCounteroffensiveGeneral, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff, getObjectivePickEffectType, computeObjectivePickTargets, describeDynamicSideBonus } from './combat.js?v=1788295040';
-import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones, showFxPopup } from './ui.js?v=1788295040';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1788295040';
-import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby, updatePlayerState } from './firebase.js?v=1788295040';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1788295040';
-import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1788295040';
-import { runBotTurn } from './bot_player.js?v=1788295040';
-import { bestHeroDeployment } from './bot_ai.js?v=1788295040';
+} from './state.js?v=1788297094';
+import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkCounteroffensiveGeneral, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff, getObjectivePickEffectType, computeObjectivePickTargets, describeDynamicSideBonus } from './combat.js?v=1788297094';
+import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones, showFxPopup } from './ui.js?v=1788297094';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1788297094';
+import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby, updatePlayerState } from './firebase.js?v=1788297094';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1788297094';
+import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1788297094';
+import { runBotTurn } from './bot_player.js?v=1788297094';
+import { bestHeroDeployment } from './bot_ai.js?v=1788297094';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
@@ -878,6 +878,19 @@ function flashDirectHit(targetPlayer, amount) {
   el.classList.add('fx-flash-negative');
   const rect = el.getBoundingClientRect();
   showFxPopup(rect.left + rect.width / 2, rect.top, amount > 1 ? `DIRECT HIT ×${amount}` : 'DIRECT HIT');
+}
+
+// Causality pulse, target stage — the delayed half of "source glow -> target flash" (source
+// glow is applied synchronously via the normal transitionFlags path, see UI_FEEDBACK_UPGRADE_
+// PLAN.md §14). Reuses the board-card gold flash directly (same DOM query pattern as
+// flashDirectHit above) rather than a full commitState, since by the time this fires the board
+// has already repainted once and we're only touching already-rendered nodes.
+function flashCausalityTarget(tileKey) {
+  const el = document.querySelector(`.tile[data-key="${tileKey}"] .board-card`);
+  if (!el) return;
+  el.classList.remove('fx-flash-positive');
+  void el.offsetWidth;
+  el.classList.add('fx-flash-positive');
 }
 
 function redraw() {
@@ -2106,6 +2119,9 @@ document.getElementById('board').addEventListener('click', e => {
     // Last Stand for any additional Unit destroyed by the same attack's splash).
     const dyingKeys = result.boardMutations.filter(m => m.newUnit === null).map(m => m.key);
     let postDestroyLog = [];
+    // Rally's own causality targets (declared-attack trigger, always evaluated above) seed the
+    // list; Last Stand/Breakthrough targets from each kill get appended below.
+    const causalityTargets = [...rally.causalityTargets];
     if (dyingKeys.length > 0) {
       newState = { ...newState, [attacker]: {
         ...newState[attacker],
@@ -2116,6 +2132,7 @@ document.getElementById('board').addEventListener('click', e => {
         const pd = applyPostDestructionEffects(newState, { unitKey: dyingKey, dyingUnit: rallyState.board[dyingKey], sourceUnitKey: attackerKey });
         newState = pd.state;
         postDestroyLog = [...postDestroyLog, ...pd.log];
+        causalityTargets.push(...pd.causalityTargets);
       }
     }
     newState = recalculateDynamicStats(newState);
@@ -2166,6 +2183,19 @@ document.getElementById('board').addEventListener('click', e => {
         const rect = tile.getBoundingClientRect();
         showFxPopup(rect.left + rect.width / 2, rect.top, 'ARMOR ABSORBED');
       }
+    }
+
+    // Causality pulse (Rally/Breakthrough): attacker glows now via transitionFlags (same
+    // render pass as everything else above); the affected target(s) flash ~150ms later via a
+    // direct DOM toggle, once the board has actually repainted with their new stats. Skip the
+    // attacker's own tile from the delayed list — Breakthrough's current effects all self-buff,
+    // so source and target are the same tile and a second flash on it would just be redundant.
+    if (causalityTargets.length > 0 && newState.board[attackerKey]?.state !== 'destroyed') {
+      transitionFlags.set(attackerKey, 'causality-source');
+    }
+    const delayedCausalityTargets = causalityTargets.filter(k => k !== attackerKey);
+    if (delayedCausalityTargets.length > 0) {
+      setTimeout(() => delayedCausalityTargets.forEach(flashCausalityTarget), 150);
     }
 
     commitState(newState, [...rallyLog, ...result.logEntries, ...overrunLog, ...postDestroyLog, ...coGenLog], transitionFlags);
