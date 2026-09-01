@@ -115,6 +115,20 @@ async function handleArtyTargeting(page) {
   await page.waitForTimeout(30);
 }
 
+// Objective player-choice targeting (2026-09-01) — mirrors bot_player.js's handleObjectivePicking
+// (see that file for the full rationale: no scoring heuristic, gated on uiState rather than
+// ".cmd-target" presence alone since Hero-power/Command-maneuver targeting share that class).
+// Handles both steps of Airfield L2's Maneuver automatically — whichever step is current,
+// game.js's render highlight already narrows ".cmd-target" to just that step's legal set.
+async function handleObjectivePicking(page) {
+  const debug = await readDebug(page);
+  if (debug?.uiState !== "objective-picking") return;
+  const targets = page.locator(".tile.cmd-target");
+  const count = await targets.count();
+  if (count > 0) await targets.first().click();
+  await page.waitForTimeout(30);
+}
+
 // Resolve an attack-targeting or command-targeting prompt smartly: re-read live state,
 // score the DOM-offered candidate tiles, click the best one. Loops for Double Attack.
 async function resolveTargetingSmart(page, { attackerKey = null, heroPower = null } = {}, maxSteps = 3) {
@@ -167,6 +181,15 @@ async function playTurnSmart(page) {
     await handleRadioOperator(page);
     await handleRotateDirection(page);
     await handleCraftPicker(page);
+    // Must run before flushPendingUiState below — there's no Cancel button for
+    // 'objective-picking'. Also re-check Hero deploy here (not just at the top of the outer
+    // per-turn loop): resolving the last pending Objective pick can trigger a deferred Hero
+    // Phase mid-chain (doc 04: Objective step resolves before free Hero deployment), and unlike
+    // "vs AI" mode (which auto-deploys with no modal), this harness runs isAiMode=false, so
+    // runHeroPhase opens the real modal here — an unhandled modal silently swallows clicks and
+    // the run reports STALLED instead of erroring loudly.
+    await handleObjectivePicking(page);
+    await handleHeroDeploy(page);
     if (await page.locator("#end-screen").isVisible().catch(() => false)) return;
 
     let debug = await readDebug(page);

@@ -1,13 +1,13 @@
 // Deck builder page. Pool on the left, working deck on the right.
 // Copy-limit adds are blocked outright; going over/under 30 cards is allowed
 // while editing (meter turns red) but blocks saving.
-import { CARD_BY_ID } from './cards.js?v=1788267223';
+import { CARD_BY_ID } from './cards.js?v=1788275462';
 import {
   getDeckPool, getHeroPool, validateDeck, validateHeroRoster, countCopies, copyCap,
   DECK_RULES, STARTER_DECKS, loadCustomDecks, saveCustomDeck, deleteCustomDeck,
   mergeRemoteDecks, replaceAllCustomDecks,
-} from './decks.js?v=1788267223';
-import { initAuth, pushUserDecks, fetchUserDecks } from './firebase.js?v=1788267223';
+} from './decks.js?v=1788275462';
+import { initAuth, pushUserDecks, fetchUserDecks } from './firebase.js?v=1788275462';
 
 let deckIds = [];
 let heroIds = [];

@@ -50,6 +50,29 @@ order. Multiple simultaneously-controlled Objectives resolve in fixed column-maj
 All 5 Objectives' L1-L4 secondary effects execute for real. Objective identities randomize into
 fixed per-map slots after mulligan (`finishStartGame`), unique per map.
 
+Of the 20 total secondary effects, 16 say "random" in their card text and auto-pick via
+`pickRandomN` (doc 04 §6's locked Random-Target Rule). The other 4 — Airfield L2 (Maneuver),
+Supply Depot L1 (Remove Suppression), City L1 (Guard), Artillery Position L1 (Rotate) — don't say
+"random", and the doc is silent on selection method for them; the controlling player picks the
+target instead. `applyObjectiveEffects` is resumable (`resumeAfterKey` param): it pauses and
+returns `pendingPick: { objectiveKey, sourceKey }` the moment one of these 4 needs a target with
+at least one eligible option, halting all further Objective processing (later controlled
+Objectives' backbone included) until the pick resolves — doc 04 §5's "fully resolve one Objective
+before the next begins" holds exactly, not approximately. No eligible target logs an explicit
+line (e.g. "City L1: no eligible friendly Unit.") and the loop continues normally, same as the
+"random" effects' existing no-op behavior. `getObjectivePickEffectType`/`computeObjectivePickTargets`
+(combat.js) are the single source of truth for eligibility, shared by the render highlight, the
+click validator (`resolveObjectivePickClick`, game.js), and the bot (`handleObjectivePicking`,
+bot_player.js / selfplay_test.mjs) — a highlighted tile is always a legal click. Airfield L2 is a
+2-step pick (source Unit, then destination) using one `uiState` value throughout, distinguished
+only by whether `sourceKey` is set. Artillery Position L1 reuses the existing rotate-direction
+modal (Change Formation C16 / Field Coordinator's Hero Power) via a third `kind: 'objective'`
+branch. Hero Phase is deferred (`runHeroPhase` call gated on `!pendingPick`) until the entire
+Objective chain — including any pending pick — has fully drained, both locally and via
+`receiveRemoteState` online. City L1's Guard eligibility check (`getKeywords(u).includes('Guard')`)
+treats printed/permanent/temp-granted Guard identically — a documented simplification pending
+this project's separate work on distinguishing keyword provenance/duration.
+
 ## Maps
 
 4 live maps in `js/maps.js`: Stalingrad (1 objective slot), Kursk (2), El Alamein (3), Ardennes

@@ -9,6 +9,79 @@ Newest first.
 
 ---
 
+## 2026-09-01 — Added Objective player-choice targeting (4 of 20 secondary effects)
+
+Doc 04 §6 locks auto-random selection only for Objective secondary effects whose card text says
+"random" (16 of 20) — Airfield L2 (Maneuver), Supply Depot L1 (Remove Suppression), City L1
+(Guard), Artillery Position L1 (Rotate) don't say "random", and the doc is silent on selection
+method for them. All 4 were nonetheless auto-picked (3 via `pickRandomN`, Supply Depot L1 via a
+non-random `.find()`) — found while auditing for the same bug class as the Last Stand fix above.
+Filip's call given the doc's silence: if it's not explicitly random, the controlling player picks
+the target. This is new architecture — Objectives had zero click-to-target UI before this.
+
+- **Design reviewed before implementation** (plan mode, 12 required revisions applied): minimize
+  the synced pending-pick descriptor to `{ objectiveKey, sourceKey }` — everything else
+  (`effectType`, card id, level, controlling player) is derived fresh from `state.objectives`
+  rather than snapshotted, avoiding a second source of truth. Resume position is the paused
+  Objective's own key (looked up fresh in a re-sorted `orderedKeys` list each time), not a raw
+  array index carried across the pause — verified safe because `orderedKeys` is a pure function
+  of `s.objectives`, which cannot change while `uiState === 'objective-picking'` (nothing in that
+  click path touches it, and the existing online turn-gate at the board click listener means only
+  the controlling player's own client can ever produce the click).
+- **Reused prior art instead of inventing new UI**: the dormant `'arty-targeting'` flow
+  (`pendingArtyHits`/`syncArtyTargetingUiState`, from when Artillery Position used to have a
+  click-to-hit mode) is the template for "pause after commit, resolve via a board click, synced
+  online through a state field rather than a local variable." Artillery Position L1's Rotate
+  reuses the *existing* rotate-direction modal (Change Formation C16 / Field Coordinator's Hero
+  Power) via a third `kind: 'objective'` branch — no new rotate UI needed.
+- `applyObjectiveEffects` (game.js) is now resumable (`resumeAfterKey` param): it `return`s the
+  moment one of the 4 effects needs a pick with ≥1 eligible target, which genuinely halts all
+  further processing (later controlled Objectives' backbone included) rather than approximating
+  doc 04 §5's "fully resolve one Objective before the next begins." No eligible target logs an
+  explicit line (e.g. "City L1: no eligible friendly Unit.") instead of silently no-op'ing.
+- New pure functions in combat.js — `getObjectivePickEffectType`, `computeObjectivePickTargets`
+  — are the single source of truth for eligibility, used identically by the render highlight, the
+  click validator, and the bot; a highlighted tile is always a legal click.
+- Hero Phase deferred (`runHeroPhase` gated on `!pendingPick`) until the whole Objective chain —
+  including any pending pick — drains, both in the local End Turn handler and in
+  `receiveRemoteState` (online, the non-acting client's own Hero-phase trigger needed the same
+  gate, found while implementing).
+- Bot support: `handleObjectivePicking` (bot_player.js, and an equivalent in `selfplay_test.mjs`)
+  mirrors the existing `handleArtyTargeting`/`handleRotateDirection` pattern, gated explicitly on
+  `uiState === 'objective-picking'` (not just `.cmd-target` element presence, since Hero-power and
+  Command-maneuver targeting already use that class — a naive presence check could cross-talk
+  with an unrelated in-progress flow).
+- **Live-verified end-to-end** via a standalone Playwright script (the interactive MCP browser was
+  locked by a concurrent session's own Playwright instance — this launched its own isolated
+  Chromium instead, via the `playwright` package already a project dev dependency): all 4 effect
+  types resolve correctly (City L1 grantGuard, Supply Depot L1 removeSuppression, Airfield L2's
+  full 2-step Maneuver including the source-locked highlight during step 2, Artillery Position L1
+  via the reused rotate modal), the no-eligible-target case logs and doesn't pause, a 2-Objective
+  chain (Kursk) resolves both picks in fixed scan order with Hero Phase confirmed NOT showing
+  until the last one drains, and — a real bug found during this verification, not by inspection —
+  `uiState` never reset to `'idle'` after the last pick in a chain resolved (`syncObjectivePickUiState`
+  only ever *sets* `'objective-picking'`, mirroring `syncArtyTargetingUiState`'s asymmetry, which
+  never needed a reset since `pendingArtyHits` has been hardcoded to 0 since Run 2). Fixed by
+  resetting `uiState = 'idle'` at the top of `resumeObjectiveResolution`, same convention the
+  original arty-targeting click handler already used inline.
+- **Known verification gap, disclosed rather than glossed over**: the bot's own resolution of a
+  pick it controls (`handleObjectivePicking` actually firing inside `runBotTurn`'s loop) was not
+  directly exercised live. `selfplay_test.mjs` needs real Firebase network access this environment
+  doesn't have (established earlier today); "vs AI" mode's bot acts autonomously the instant it's
+  P2's turn, leaving no safe window to inject P2-side debug setup before the bot has already
+  started, and forcing a P2-controlled Objective requires a P2 Unit already on board, which can't
+  be placed before P2's turn exists. Confidence here rests on code parity with the already-proven
+  `handleArtyTargeting`/`handleRotateDirection` bot handlers and the same `uiState`/
+  `computeObjectivePickTargets` mechanism already verified correct for the human path — plus a
+  regression check confirming the bot's normal "vs AI" turn-taking is unaffected (no hang/crash)
+  with this code present. Revisit with a live 2-client or longer organic bot-play session if this
+  needs firmer proof.
+- `npm test`: 205/205 (12 new pure-function tests in `tests/objectives.test.mjs` for
+  `getObjectivePickEffectType`/`computeObjectivePickTargets`; the resumable-loop mechanics
+  themselves live in game.js, DOM-coupled, same "pure function tested, integration untested"
+  ceiling as every other game.js-integration fix this session — covered by live verification
+  instead).
+
 ## 2026-09-01 — Fixed Last Stand/Breakthrough being skipped for non-first kills in a multi-destroy attack
 
 Per direct request, after the Muster bug below prompted the question "should every card be

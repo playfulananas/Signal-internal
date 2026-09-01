@@ -3,9 +3,9 @@
 // instead of driving a separate Playwright browser, it clicks the real DOM elements on this
 // page directly — the same elements a human would click. This goes through game.js's existing,
 // unmodified click handlers, so no game logic needed to change to add this feature.
-import { CARD_BY_ID } from "./cards.js?v=1788267223";
-import { discountFor } from "./state.js?v=1788267223";
-import { bestPlacement, bestExistingAttack, findLethal, findCombinedLethal, bestAttackForUnit, scoreCommand, scoreHeroPower, bestHeroPowerTarget } from "./bot_ai.js?v=1788267223";
+import { CARD_BY_ID } from "./cards.js?v=1788275462";
+import { discountFor } from "./state.js?v=1788275462";
+import { bestPlacement, bestExistingAttack, findLethal, findCombinedLethal, bestAttackForUnit, scoreCommand, scoreHeroPower, bestHeroPowerTarget } from "./bot_ai.js?v=1788275462";
 
 const CLICK_DELAY_MS = 350; // pacing so a human watching can follow what the bot is doing
 
@@ -48,6 +48,25 @@ async function handleRadioOperator() {
 
 async function handleArtyTargeting() {
   const targets = document.querySelectorAll(".tile.targetable");
+  if (targets.length > 0) targets[0].click();
+  await sleep(CLICK_DELAY_MS);
+}
+
+// Objective player-choice targeting (2026-09-01): Airfield L2/Supply Depot L1/City L1/Artillery
+// Position L1 pause for a board click instead of auto-picking (see applyObjectiveEffects,
+// game.js). No scoring heuristic — same "don't overthink it" simplification as
+// handleRotateDirection/handleCraftPicker below: first eligible tile, always. Gated explicitly
+// on uiState (not just ".cmd-target" presence) because that class is also used by Hero-power and
+// Command-maneuver targeting — clicking blind on element presence alone could hijack an unrelated
+// in-progress flow. Handles both steps of Airfield L2's Maneuver automatically: whichever step is
+// current, computeObjectivePickTargets (game.js's render highlight) already narrows ".cmd-target"
+// to just that step's legal set, so this needs no extra state of its own. Artillery Position L1's
+// direction choice is covered separately by handleRotateDirection, which runs every iteration
+// regardless of kind.
+async function handleObjectivePicking() {
+  const debug = readDebug();
+  if (debug?.uiState !== "objective-picking") return;
+  const targets = document.querySelectorAll(".tile.cmd-target");
   if (targets.length > 0) targets[0].click();
   await sleep(CLICK_DELAY_MS);
 }
@@ -116,6 +135,11 @@ async function playBotTurnSteps() {
     await handleRadioOperator();
     await handleRotateDirection();
     await handleCraftPicker();
+    // Must run before flushPendingUiState below: there's no Cancel button for
+    // 'objective-picking' (it isn't a voluntary action to back out of), so if this uiState were
+    // ever left for flushPendingUiState's generic "click Cancel on anything stale" fallback to
+    // find, the bot's turn would hang forever instead of progressing.
+    await handleObjectivePicking();
     if (isGameOver()) return;
 
     let debug = await flushPendingUiState(readDebug());

@@ -1,6 +1,6 @@
-import { CARD_BY_ID, registerGeneratedCard } from './cards.js?v=1788267223';
-import { getSideValue, getKeywords, attackBeats, applyHit, oppositeDir, unsuppressOnBoard, drawCards, addDiscount, remainingAttacks, spendAttack, grantTempAttacks, resetPersistentAttacks, fuelCapOf, gainFuel } from './state.js?v=1788267223';
-import { canPlaceOnTerrain, getTerrain } from './maps.js?v=1788267223';
+import { CARD_BY_ID, registerGeneratedCard } from './cards.js?v=1788275462';
+import { getSideValue, getKeywords, attackBeats, applyHit, oppositeDir, unsuppressOnBoard, drawCards, addDiscount, remainingAttacks, spendAttack, grantTempAttacks, resetPersistentAttacks, fuelCapOf, gainFuel } from './state.js?v=1788275462';
+import { canPlaceOnTerrain, getTerrain } from './maps.js?v=1788275462';
 
 // Orthogonal directions and their row/col offsets.
 const DIRS = ["n", "e", "s", "w"];
@@ -736,6 +736,67 @@ export function getManeuverTargets(state, unitKey) {
     }
   }
   return targets;
+}
+
+// ── Objective player-choice targeting ───────────────────────────────────────
+// Doc 04 §6 locks auto-random selection only for secondary effects whose card text says
+// "random" (16 of 20). The other 4 (Airfield L2, Supply Depot L1, City L1, Artillery Position
+// L1) don't say "random" and the doc is silent on selection method — Filip's call: if it's not
+// explicitly random, the controlling player picks the target. This table and helper are the
+// single source of truth for what's eligible, shared by the render highlight, the click
+// validator, and (implicitly) the bot, which just clicks whatever gets highlighted.
+const OBJECTIVE_PICK_EFFECTS = {
+  'O2-2': 'maneuver',
+  'O3-1': 'removeSuppression',
+  'O4-1': 'grantGuard',
+  'O5-1': 'rotate',
+};
+
+export function getObjectivePickEffectType(cardId, level) {
+  return OBJECTIVE_PICK_EFFECTS[`${cardId}-${level}`] ?? null;
+}
+
+// Adjacency helper local to combat.js (mirrors game.js's friendlyAdjacentUnitKeys, needed here
+// so computeObjectivePickTargets stays a pure, unit-testable function rather than living in
+// game.js where it couldn't be reached by the node:test pure-function suite).
+function friendlyAdjacentUnitKeys(state, key, player) {
+  const [r, c] = tileCoords(key);
+  return adjacentTiles(r, c)
+    .map(t => t.key)
+    .filter(ak => {
+      const u = state.board[ak];
+      return u && u.owner === player && u.state !== 'destroyed';
+    });
+}
+
+// sourceKey is only relevant for effectType 'maneuver' (its 2nd, destination-picking step).
+export function computeObjectivePickTargets(state, objectiveKey, effectType, sourceKey = null) {
+  const obj = state.objectives?.[objectiveKey];
+  if (!obj) return [];
+  const player = obj.controller;
+  switch (effectType) {
+    case 'maneuver':
+      if (sourceKey) return getManeuverTargets(state, sourceKey);
+      return unitsOnBoard(state, player)
+        .filter(({ key: k }) => getManeuverTargets(state, k).length > 0)
+        .map(({ key: k }) => k);
+    case 'removeSuppression':
+      return friendlyAdjacentUnitKeys(state, objectiveKey, player)
+        .filter(ak => state.board[ak].state === 'suppressed');
+    case 'grantGuard':
+      // "Has Guard right now" regardless of source (printed/permanent/temp granted) — see
+      // getKeywords, which already merges all three. This project is separately moving toward
+      // distinguishing keyword provenance/duration; until that lands, any active Guard makes a
+      // Unit ineligible (doc 04 §6's own "avoid a duplicate no-op" principle for random picks
+      // applies here too, just resolved by the player instead of by re-rolling).
+      return unitsOnBoard(state, player)
+        .filter(({ unit: u }) => !getKeywords(u).includes('Guard'))
+        .map(({ key: k }) => k);
+    case 'rotate':
+      return unitsOnBoard(state, player).map(({ key: k }) => k);
+    default:
+      return [];
+  }
 }
 
 // Moves the unit, preserving orientation/attack-state/keywords/buffs — everything except
