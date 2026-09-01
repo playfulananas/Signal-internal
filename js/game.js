@@ -1,4 +1,4 @@
-import { CARD_BY_ID, CARDS, ensureGeneratedCard } from './cards.js?v=1788255254';
+import { CARD_BY_ID, CARDS, ensureGeneratedCard } from './cards.js?v=1788258602';
 import {
   createInitialState,
   startOfTurn,
@@ -27,15 +27,15 @@ import {
   hasEscalated,
   markEscalateUse,
   expireTempFuelGrant,
-} from './state.js?v=1788255254';
-import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkCounteroffensiveGeneral, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff } from './combat.js?v=1788255254';
-import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1788255254';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1788255254';
-import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby } from './firebase.js?v=1788255254';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1788255254';
-import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1788255254';
-import { runBotTurn } from './bot_player.js?v=1788255254';
-import { bestHeroDeployment } from './bot_ai.js?v=1788255254';
+} from './state.js?v=1788258602';
+import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkCounteroffensiveGeneral, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff } from './combat.js?v=1788258602';
+import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1788258602';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1788258602';
+import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby, updatePlayerState } from './firebase.js?v=1788258602';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1788258602';
+import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1788258602';
+import { runBotTurn } from './bot_player.js?v=1788258602';
+import { bestHeroDeployment } from './bot_ai.js?v=1788258602';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
@@ -548,12 +548,7 @@ function startGame(p1Ids, p2Ids, mapId, p1Heroes = [], p2Heroes = []) {
   let s = createInitialState(p1Ids, p2Ids, mapId, p1Heroes, p2Heroes);
 
   if (isOnline && myRole === 'p1') {
-    document.getElementById('lobby').style.display = 'none';
-    document.getElementById('waiting-screen').style.display = 'none';
-    showMulligan('YOUR OPENING HAND', s.p1.hand, indices => {
-      s = applyMulligan(s, 'p1', indices);
-      finishStartGame(s, mapId);
-    });
+    beginOnlineMulligan(s, mapId);
     return;
   }
 
@@ -597,7 +592,11 @@ function finishStartGame(s, mapId) {
   s = { ...s, [s.initiative]: drawCards(s[s.initiative], 1) };
   state = startOfTurn(s);
   const mapName = MAPS[mapId].name;
-  state = { ...state, log: [`Game started on ${mapName} — ${state.initiative.toUpperCase()} goes first.`] };
+  // readyForPlay flips here — see the field comment in state.js — so both online clients'
+  // ongoing-sync listeners can tell "the host has now done the one-time post-mulligan setup"
+  // apart from "still in the pre-objectives simultaneous-mulligan phase" (see
+  // beginOnlineMulligan/showOnlineMulligan below), where `turn` alone can't distinguish the two.
+  state = { ...state, readyForPlay: true, log: [`Game started on ${mapName} — ${state.initiative.toUpperCase()} goes first.`] };
   appendLog(state.log);
   redraw();
 
@@ -620,6 +619,83 @@ function finishStartGame(s, mapId) {
       receiveRemoteState(remoteState);
     });
   }
+}
+
+// ── Online simultaneous mulligan ────────────────────────────────────────────────
+// Per direct request: mulligan should never be sequential online — the old flow had P1
+// mulligan, push a FULLY started game (objectives, first draw, turn 1 already resolved), and
+// only THEN show P2 a mulligan screen, leaving P2 stuck on a blank waiting screen the whole
+// time for no rules reason (mulligan only ever touches the calling player's own hand/deck).
+// Objectives/first-draw/turn setup still happen exactly ONCE, computed only by the host
+// (createInitialState's own comment already established "only the host ever does anything
+// Math.random()-based both sides must agree on" — this preserves that invariant), but now
+// strictly AFTER both players' mulligans instead of after only P1's, per doc 04 §1's locked
+// "objectives after mulligan" order — see finishStartGame above, unchanged in what it does,
+// just called at a different, later point now.
+//
+// Each player's own mulligan confirmation writes ONLY their own p1/p2 sub-object via
+// updatePlayerState (see firebase.js) rather than pushStateIfOnline's full-object set() — two
+// concurrent mulligan confirmations landing at nearly the same moment must never let one
+// silently clobber the other's hand, which a full-object replace could.
+let hostMulliganPhaseDone = false; // p1/host only — guards finishStartGame from firing twice
+
+function beginOnlineMulligan(s, mapId) {
+  disarmWaitingTimeout();
+  document.getElementById('lobby').style.display = 'none';
+  document.getElementById('waiting-screen').style.display = 'none';
+  s = { ...s, p1: { ...s.p1, mulliganDone: false }, p2: { ...s.p2, mulliganDone: false } };
+  state = s;
+  pushStateIfOnline(state); // safe full push — P2 hasn't written anything at this node yet
+  subscribeState(gameId, remoteState => {
+    if (hostMulliganPhaseDone) return; // finishStartGame's own listener has taken over by now
+    if (remoteState._playerLeft && remoteState._playerLeft !== myRole) {
+      showDisconnectScreen(remoteState._playerLeft);
+      return;
+    }
+    // No _pushId echo-guard here (unlike every other online listener): updatePlayerState
+    // (P2's mulligan confirmation) writes only games/{gameId}/p2, never touching the top-level
+    // _pushId field at all — it's left stale at whatever P1's own initial full push set it to,
+    // which trivially always equals myLastPushId on THIS (the host's) client. Comparing against
+    // it here would wrongly treat P2's genuine mulligan update as an echo of P1's own push and
+    // silently ignore it forever. Safe to just always merge: reprocessing an actual echo of P1's
+    // own mulligan slice is idempotent (same values back), and the mulliganDone-both-true check
+    // below can only ever fire once thanks to hostMulliganPhaseDone.
+    const normalized = normalizeFirebaseState(remoteState);
+    state = { ...state, p1: normalized.p1, p2: normalized.p2 };
+    if (state.p1.mulliganDone && state.p2.mulliganDone) {
+      hostMulliganPhaseDone = true;
+      finishStartGame(state, mapId);
+    }
+  });
+  showOnlineMulligan(mapId);
+}
+
+// Shown to BOTH online roles — each mulligans their own hand independently, with no dependency
+// on the other player's progress. `mapId` is only actually used by the p1/host branch, to call
+// finishStartGame if this player turns out to be the one finishing last.
+function showOnlineMulligan(mapId) {
+  showMulligan('YOUR OPENING HAND', state[myRole].hand, indices => {
+    const updated = applyMulligan(state, myRole, indices);
+    const mySlice = { ...updated[myRole], mulliganDone: true };
+    state = { ...updated, [myRole]: mySlice };
+    updatePlayerState(gameId, myRole, mySlice).catch(err => {
+      console.error('mulligan push failed', err);
+      appendLog(['Connection error while confirming your mulligan — check your connection.']);
+    });
+
+    if (myRole === 'p1' && state.p2?.mulliganDone && !hostMulliganPhaseDone) {
+      // I'm the host and P2 already finished before me — I'm the one who runs the shared
+      // post-mulligan setup, so do it now rather than waiting on my own listener to notice a
+      // change that, from my own local state, has already happened.
+      hostMulliganPhaseDone = true;
+      finishStartGame(state, mapId);
+      return;
+    }
+    document.getElementById('waiting-screen').style.display = 'flex';
+    document.getElementById('waiting-msg').textContent = myRole === 'p1'
+      ? 'Waiting for the other player to finish their mulligan...'
+      : 'Waiting for the host to start the match...';
+  });
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -3357,25 +3433,38 @@ if (isOnline && myRole === 'p2') {
       tryPushP2Ready(); // fires if P2 already picked; otherwise waits
     } else if (data.turn !== undefined && !data._phase) {
       if (!state) {
-        // First game state arrival — show P2 mulligan before entering game
-        const normalized = normalizeFirebaseState(data);
+        // First game state arrival — P1's initial (unmulliganed) push. Show P2's own mulligan
+        // screen immediately, with no dependency on P1's mulligan progress — see
+        // beginOnlineMulligan/showOnlineMulligan above for the full simultaneous-mulligan
+        // design (objectives/first-draw/turn-1 setup still happen exactly once, computed only
+        // by the host, but now strictly after BOTH mulligans instead of after only P1's).
         document.getElementById('waiting-screen').style.display = 'none';
-        showMulligan('YOUR OPENING HAND', normalized.p2.hand, indices => {
-          state = applyMulligan(normalized, 'p2', indices);
-          // No pre-game Hero pick anymore — P2's first Hero arrives at round 2 via
-          // runHeroPhase, same as P1 and local hotseat (removed 2026-08-11). This used to
-          // deploy a Hero here immediately after mulligan; that stale copy of the old flow
-          // was the actual cause of "P2 gets a Hero immediately" in online play — the
-          // pre-game step was removed from startGame() but this separate P2-online path
-          // still had its own independent copy of it.
-          document.getElementById('game-area').style.display = 'flex';
-          appendLog(state.log ?? []);
-          redraw();
-          pushStateIfOnline(state);
-        });
+        state = normalizeFirebaseState(data);
+        showOnlineMulligan(data.mapId);
         return;
       }
-      // Ongoing updates
+      if (!data.readyForPlay) {
+        // Still in the pre-objectives mulligan phase: merge only the player sub-states (this
+        // is how P1's own mulliganDone flag becomes visible to P2) — not routed through
+        // receiveRemoteState, which assumes real gameplay has already started. P2 never
+        // computes objectives itself; it just waits here for the host's eventual full
+        // post-mulligan push, which will arrive in the branch below once readyForPlay is true.
+        // Checks the INCOMING data's flag, not the locally-cached state's — state.readyForPlay
+        // is still stale-false on the exact update where it first flips true, which would
+        // otherwise wrongly re-enter this branch and skip revealing the board entirely.
+        const normalized = normalizeFirebaseState(data);
+        state = { ...state, p1: normalized.p1, p2: normalized.p2 };
+        return;
+      }
+      // Ongoing updates, real gameplay already underway. receiveRemoteState never touches
+      // #game-area's visibility itself (every OTHER call site already revealed it before ever
+      // reaching that function) — P2 might be seeing readyForPlay:true for the very first time
+      // right here (if P2 finished mulligan before P1 did, there was no earlier moment for P2
+      // to reveal it at), so do that explicitly, once, before handing off.
+      if (document.getElementById('game-area').style.display !== 'flex') {
+        document.getElementById('waiting-screen').style.display = 'none';
+        document.getElementById('game-area').style.display = 'flex';
+      }
       if (data._pushId !== myLastPushId) {
         receiveRemoteState(data);
       }

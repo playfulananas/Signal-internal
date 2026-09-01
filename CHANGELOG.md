@@ -9,6 +9,55 @@ Newest first.
 
 ---
 
+## 2026-09-01 — Made online mulligan simultaneous instead of sequential
+
+Per direct request. The old flow was strictly sequential: P1 mulliganed, and only after that
+push (which also carried objectives, first-turn draw, turn 1 fully resolved — i.e. the whole
+match had technically started) did P2 even get shown a mulligan screen. P2 sat on a blank
+waiting screen the entire time for no rules reason — mulligan only ever touches the calling
+player's own hand/deck, nothing about it needs to be sequenced.
+
+- New flow: the host still creates the initial state and is still the only client that ever
+  computes objectives/first-draw/turn setup (`createInitialState`'s own comment already
+  established "only the host ever does anything Math.random()-based both sides must agree on" —
+  preserved here), but that computation (`finishStartGame`, unchanged in what it does) now runs
+  strictly after BOTH players' mulligans instead of after only P1's, keeping doc 04 §1's locked
+  "objectives after mulligan" order intact. Both players see their own mulligan screen the moment
+  the host's initial (unmulliganed) state arrives, with zero dependency on each other.
+- New `updatePlayerState` (`firebase.js`): each player's mulligan confirmation writes only their
+  own `p1`/`p2` sub-object via a targeted `update()`, never the shared `pushState`/`set()` used
+  everywhere else — two mulligan confirmations landing at nearly the same instant must never let
+  one clobber the other's hand, which a full-object replace could.
+- New `readyForPlay` field on game state (`state.js`, defaults `false`): lets each client's
+  ongoing-sync listener tell "still in the pre-objectives mulligan phase" apart from "the host has
+  finished the one-time post-mulligan setup" — `turn` alone can't do this since it's already `1`
+  from the moment the state object is created, long before either mulligan.
+- New `beginOnlineMulligan`/`showOnlineMulligan` (`game.js`) replace the old inline mulligan call
+  in `startGame`'s online branch and the old inline mulligan call in P2's `subscribeState`
+  handler. Whichever player finishes last is the one who triggers `finishStartGame` if that
+  player is the host (checked in two places depending on ordering: the host's own dedicated
+  mulligan-phase listener, for "P2 finished after me," and the host's own `onConfirm` handler, for
+  "P2 already finished before me" — both guarded by a single `hostMulliganPhaseDone` flag so
+  `finishStartGame` can only ever fire once regardless of which order the two mulligans land in).
+- **Bug found and fixed while live-testing this**: the host's new mulligan-phase listener
+  initially reused the existing `_pushId` echo-guard (`if (remoteState._pushId === myLastPushId)
+  return;`) used by every other online listener — but `updatePlayerState`'s partial `update()`
+  never touches the top-level `_pushId` field at all, so it stays stale at whatever the host's own
+  earlier full push set it to, which trivially always equals the host's own `myLastPushId`. That
+  made the guard wrongly treat the *other* player's genuine mulligan confirmation as an echo of
+  the host's own push and silently ignore it forever — both players would sit on their respective
+  waiting/mulligan screens indefinitely, `finishStartGame` never firing. Fixed by dropping the
+  echo-guard for this specific listener (processing an actual echo of your own slice here is
+  idempotent and harmless — the real duplicate-fire protection is `hostMulliganPhaseDone`, not
+  `_pushId`).
+- Live-verified both possible orderings with a new script, `multiplayer_mulligan_test.mjs`: P1
+  confirms first (then waits, host's listener detects P2 finishing and starts the match) and P2
+  confirms first (then waits, host's own `onConfirm` detects P2 was already done and starts the
+  match immediately) — both reach a synced live board correctly. Re-ran every other multiplayer
+  test (open lobby, code-share order, Craft/dual-craft sync, disconnect) plus a 3-game local/AI
+  selfplay regression — all still pass. `npm test`: 193/193 (unaffected — this fix lives entirely
+  in game.js's online-mode DOM-orchestration layer).
+
 ## 2026-09-01 — Fixed the online lobby's map-before-deck order (code-share P1)
 
 Closed the last of the three flagged online-lobby-order gaps from doc 04 §1 — per direct

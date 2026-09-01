@@ -43,6 +43,15 @@ export async function setPlayerLeft(gameId, role) {
   await update(ref(db, `games/${gameId}`), { _playerLeft: role });
 }
 
+// Simultaneous mulligan: each player writes only their OWN sub-object under games/{gameId},
+// never the other player's or the shared board/objectives/etc. update() only touches the given
+// keys at that path, so two players confirming their mulligan at the same moment can never
+// clobber each other the way pushState's full set() would (whichever push landed last would
+// otherwise silently discard the other's mulliganed hand).
+export async function updatePlayerState(gameId, role, data) {
+  await update(ref(db, `games/${gameId}/${role}`), data);
+}
+
 // Lobby: pre-game coordination (deck choices, map). Uses update() so both
 // players can write their own fields without overwriting each other's.
 export async function updateLobby(gameId, data) {

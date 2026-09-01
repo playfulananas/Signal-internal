@@ -80,6 +80,7 @@ match the v1.1 map art exactly.
 | Firebase multiplayer | ✅ | |
 | Local-mode lobby setup order | ✅ | Map picked before deck(s), local hotseat + AI mode |
 | Online-mode lobby setup order | ✅ | Map picked before deck for both online flows (P1 direct-join now fixed to match); P2 never picks a map (by design — one player picks, not two) but sees its name |
+| Online mulligan | ✅ | Simultaneous — each player mulligans independently the moment the host's initial state arrives, no dependency on the other. Objectives/first-draw still computed once, by the host, but strictly after BOTH mulligans (doc 04 §1) |
 | Deck builder | ⚠️ | 8 hardcoded starter decks; no custom deck building UI |
 | Debug panel | ✅ | |
 
@@ -141,6 +142,16 @@ match the v1.1 map art exactly.
   deliberately still never gets a map-picker (one player picks, not two) but now sees the map's
   name during its own deck pick, read-only. Live-verified with `multiplayer_codeshare_order_test.mjs`;
   re-ran every other multiplayer test to confirm nothing else broke. See `CHANGELOG.md`.
+- **Online mulligan made simultaneous (2026-09-01)**: per direct request — was strictly
+  sequential (P1 mulligans, pushes a fully-started game, only then does P2 even see a mulligan
+  screen). Both players now mulligan independently the instant the host's initial state arrives;
+  objectives/first-draw still computed once by the host, but now after both mulligans instead of
+  after only P1's (doc 04 §1). Found and fixed a real bug while live-testing this: the host's new
+  mulligan-phase listener reused the existing `_pushId` echo-guard, which doesn't work for the new
+  targeted per-player Firebase writes (they never touch that field, so it stays stale and falsely
+  matches) — both players would otherwise wait forever, `finishStartGame` never firing.
+  Live-verified both possible finish orders with `multiplayer_mulligan_test.mjs`; re-ran every
+  other multiplayer test plus a local/AI selfplay regression — all still pass. See `CHANGELOG.md`.
 
 ## Verification tools
 
@@ -150,9 +161,9 @@ match the v1.1 map art exactly.
 selfplay_vs_ai_smoke.mjs` smoke-tests the in-page "vs AI" bot specifically. The bot logic in
 `bot_ai.js` is duplicated in `js/bot_player.js` (in-page mode) — update both if they ever drift.
 `node open_lobby_test.mjs` / `multiplayer_craft_test.mjs` / `multiplayer_dual_craft_test.mjs` /
-`multiplayer_disconnect_test.mjs` / `multiplayer_codeshare_order_test.mjs` are two-real-client
-Playwright scripts against the live Firebase project (no emulator configured) — need `npm run
-dev` running first. See
+`multiplayer_disconnect_test.mjs` / `multiplayer_codeshare_order_test.mjs` /
+`multiplayer_mulligan_test.mjs` are two-real-client Playwright scripts against the live Firebase
+project (no emulator configured) — need `npm run dev` running first. See
 `docs/plans/2026-09-01-multiplayer-test-plan.md` for what each one checks.
 
 ## Pointers

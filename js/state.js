@@ -78,7 +78,7 @@
 // "reset attacks" effect (e.g. Maneuver Commander, Scramble) zeroes persistentSpent only and
 // never recreates an already-spent temporary extra attack.
 
-import { CARD_BY_ID } from './cards.js?v=1788255254';
+import { CARD_BY_ID } from './cards.js?v=1788258602';
 
 // ── State factory ────────────────────────────────────────────────────────────
 
@@ -110,6 +110,13 @@ export function createInitialState(p1DeckIds, p2DeckIds, mapId = 'kursk', p1Hero
     // learns about a card it never itself registered. See ensureGeneratedCard (cards.js) and
     // normalizeFirebaseState (game.js).
     generatedCards: {},
+    // Online simultaneous mulligan only (local/AI mode never touches this): false from creation
+    // until the host runs the post-mulligan setup (objectives, first draw — see finishStartGame
+    // in game.js), which flips it to true. Lets each client's ongoing-sync listener tell "still
+    // in the pre-objectives mulligan phase" apart from "real gameplay has started" — `turn` alone
+    // can't do this, since it's already 1 from the moment this object is created, well before
+    // either player has mulliganed.
+    readyForPlay: false,
   };
 }
 
