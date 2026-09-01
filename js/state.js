@@ -78,7 +78,7 @@
 // "reset attacks" effect (e.g. Maneuver Commander, Scramble) zeroes persistentSpent only and
 // never recreates an already-spent temporary extra attack.
 
-import { CARD_BY_ID } from './cards.js?v=1788275462';
+import { CARD_BY_ID } from './cards.js?v=1788294375';
 
 // ── State factory ────────────────────────────────────────────────────────────
 
@@ -508,7 +508,14 @@ export function hitsToDestroy(boardUnit) {
 //   state === "normal"       → "suppressed" (hqDamage = 0 — Set 1 truth, locked 2026-08-31:
 //                               Suppression never deals HQ damage by default. This replaces
 //                               the old "Suppress = 1, Destroy = 2, total 3 per kill" model.)
-//   state === "suppressed"   → "destroyed"  (hqDamage = 2)
+//   state === "suppressed"   → "destroyed"  (hqDamage = 2, or 0 if the unit has Guard — same
+//                               rule resolveDestructionChain already applies for command/
+//                               self-destruct destruction: "destroying a Unit deals 2 to its
+//                               OWNER's HQ ... unless Guard reduces it to 0." Fixed 2026-09-01:
+//                               this path — every normal combat kill, including Blast/Barrage
+//                               secondary hits via resolveSecondaryHits — had no Guard check at
+//                               all, so a Guard Unit killed in combat wrongly dealt its owner 2
+//                               HQ damage instead of 0.)
 // hqDamage is dealt to the unit owner's HQ (the one being attacked).
 export function applyHit(boardUnit) {
   const unit = { ...boardUnit };
@@ -526,7 +533,8 @@ export function applyHit(boardUnit) {
 
   if (unit.state === "suppressed") {
     unit.state = "destroyed";
-    return { newUnit: unit, hqDamage: 2 };
+    const isGuard = getKeywords(unit).includes('Guard');
+    return { newUnit: unit, hqDamage: isGuard ? 0 : 2 };
   }
 
   // Already destroyed — safe fallback.

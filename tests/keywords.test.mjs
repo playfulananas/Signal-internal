@@ -5,7 +5,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { getAttackableTargets, resolveSingleAttack, checkRally, computeDynamicSideBonus, recalculateDynamicStats, resolveDestructionChain, applyPostDestructionEffects } from '../js/combat.js';
-import { discountFor, addDiscount, getSideValue, getKeywords, startOfTurn } from '../js/state.js';
+import { discountFor, addDiscount, getSideValue, getKeywords, startOfTurn, applyHit } from '../js/state.js';
 import { CARD_BY_ID } from '../js/cards.js';
 
 function boardWith(entries) {
@@ -81,6 +81,48 @@ test('no Guard candidate in range -> full raw pool is legal', () => {
   const state = baseState(boardWith({ '0,0': unit('p1', 'AR43'), '3,0': unit('p2', 'I2'), '0,3': unit('p2', 'I3') }));
   const targets = getAttackableTargets(state, '0,0');
   assert.deepEqual(targets.map(t => t.key).sort(), ['0,3', '3,0']);
+});
+
+// ── Guard blocks HQ damage on normal-combat destruction (fixed 2026-09-01) ──
+// resolveDestructionChain already gave a Guard Unit 0 HQ damage on self-destruct/command-based
+// destruction (see the Sacrifice Play tests below), but normal combat destruction goes through
+// applyHit directly (via resolveSingleAttack/resolveSecondaryHits), which had no Guard check at
+// all — a Guard Unit killed in an ordinary attack wrongly dealt its owner the full 2 HQ damage.
+test('applyHit: destroying a Guard Unit (already Suppressed) deals 0 HQ damage', () => {
+  const guardUnit = unit('p1', 'I6', { state: 'suppressed' }); // I6 Shield Bearers, Guard
+  const { newUnit, hqDamage } = applyHit(guardUnit);
+  assert.equal(newUnit.state, 'destroyed');
+  assert.equal(hqDamage, 0, 'Guard reduces normal combat-destruction HQ damage to 0');
+});
+
+test('applyHit: destroying a non-Guard Unit (already Suppressed) deals the normal 2 HQ damage', () => {
+  const plainUnit = unit('p1', 'I1', { state: 'suppressed' });
+  const { newUnit, hqDamage } = applyHit(plainUnit);
+  assert.equal(newUnit.state, 'destroyed');
+  assert.equal(hqDamage, 2);
+});
+
+test('resolveSingleAttack: destroying a Guard Unit in normal combat deals 0 HQ damage to its owner', () => {
+  const state = baseState(boardWith({
+    '1,1': unit('p1', 'I1', { tempSideBonus: 20 }),
+    '2,1': unit('p2', 'I6', { state: 'suppressed' }), // I6 Shield Bearers, Guard, one hit from destroyed
+  }));
+  const result = resolveSingleAttack(state, '1,1', '2,1');
+  assert.ok(result.boardMutations.some(m => m.key === '2,1' && m.newUnit === null), 'target was destroyed');
+  assert.equal(result.hqDamageToP2, 0, 'Guard reduces the destroyed defender owner\'s HQ damage to 0');
+});
+
+test('resolveSingleAttack: Blast secondary Hit destroying a Guard Unit deals 0 HQ damage for that kill', () => {
+  const state = baseState(boardWith({
+    '1,1': unit('p1', 'AR46', { tempSideBonus: 20 }), // Blast
+    '2,1': unit('p2', 'I1', { state: 'suppressed' }),  // primary target, one hit from destroyed
+    '2,0': unit('p2', 'I6', { state: 'suppressed' }),  // Guard, perpendicular secondary, also one hit from destroyed
+  }));
+  const result = resolveSingleAttack(state, '1,1', '2,1');
+  const primaryDestroyed = result.boardMutations.some(m => m.key === '2,1' && m.newUnit === null);
+  const secondaryDestroyed = result.boardMutations.some(m => m.key === '2,0' && m.newUnit === null);
+  assert.ok(primaryDestroyed && secondaryDestroyed, 'both primary and secondary Guard target were destroyed');
+  assert.equal(result.hqDamageToP2, 2, 'only the non-Guard primary kill (2) contributes HQ damage — the Guard secondary kill contributes 0');
 });
 
 // ── Section 5: Blast / Barrage ───────────────────────────────────────────────
