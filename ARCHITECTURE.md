@@ -339,17 +339,11 @@ generateGameCode() → string
 
 These are locked decisions — don't reinvent them.
 
-**Run 1 migration note (2026-08-31):** the table below reflects the current Set 1 truth-lock
-(SIGNAL Claude Handoff package, docs 00-09). The rules-engine mechanics themselves (this table)
-are implemented and unit-tested. The *content-wiring* layer in `game.js` — the per-Hero Active
-switch (`applyHeroPower`) and per-Command effect switch (`playInstantCommand`/
-`applyCommandEffect`) — still keys on the pre-migration numeric card ids (16, 92, 143, etc.)
-and has **not yet** been remapped to the new id scheme (`H01`-`H25`, `C01`-`C35`, `I1`-`A65`).
-Since ids changed type (number → string), every old `case <number>:` / `cardId === <number>`
-comparison now silently never matches rather than crashing — so no Hero Active or Command
-currently does anything at runtime, even though Guard/Precision/Blast/Barrage/Direct HQ/Last
-Stand/Breakthrough/Rally/Inspire/Muster/Suppression-HQ-damage are all correctly implemented
-underneath. This is the largest remaining Run 1 follow-up — see STATUS.md.
+**Status (updated 2026-09-01):** all 16 keywords below are fully built, wired into the current
+`H01`-`H25`/`C01`-`C35`/`I1`-`A65` id scheme, and unit-tested — including Maneuver/Escalate/Craft,
+which this table used to (wrongly, as of 2026-08-31) call out as "not yet built." Every Hero
+Active and Command has a real implementation; see `STATUS.md` for the current-state summary and
+`CHANGELOG.md` for the closure passes that finished this.
 
 | Keyword | How it resolves |
 |---|---|
@@ -366,7 +360,9 @@ underneath. This is the largest remaining Run 1 follow-up — see STATUS.md.
 | **Inspire** | Implemented 2026-08-31 as a dynamic aura (`computeDynamicSideBonus`/`recalculateDynamicStats` in combat.js) — adjacent friendly Units get +1 all sides per adjacent Inspire source, recalculated after every placement/movement/destruction. Feeds `getSideValue` via a new `dynamicSideBonus` field. |
 | **Muster** | Implemented 2026-08-31, same dynamic-recalculation mechanism as Inspire — +1 all sides per OTHER friendly Infantry controlled, board-wide. |
 | **Last Stand** | Implemented 2026-08-31 as a Unit keyword via the shared destruction chain (distinct from the old same-named Command, which is now archived). |
-| **Maneuver / Escalate / Craft** | **Not yet built.** Doc 01 requires all three for the current 125-card pool (Maneuver: A55/A56/A61-A63/A65/H16; Escalate: C26/C27/C32/C34; Craft: H25) — flagged as remaining Run 1 work, not deferred by design. |
+| **Maneuver** | Move a friendly Unit to any other empty, legal tile — no adjacency/range limit, terrain restrictions still apply. Either a Unit's own On Play (A55/A56/A61-A63/A65 — 2-step source-then-destination flow) or a Hero/Command effect (H16, C21/C27/C35) choosing a target Unit. Does not retrigger On Play; does not reset attacks unless the specific effect says so. `getManeuverTargets`/`resolveManeuver` in combat.js. |
+| **Escalate** | First use of a named Escalate card in a match resolves its base effect; every use after the first resolves the upgraded version instead (bigger bonus or more targets, per card). Tracked by card name, per player, per match (`escalateUses` on PlayerState) — two physical copies share the count. Current cards: C26/C34 (boosted amount), C27/C32 (affects up to 2 targets instead of 1). |
+| **Craft** | H25 Chief Aircraft Engineer only. Generates 3 candidate Aircraft (random stats, one of Bombard/Double Attack/Armor, plus a drawback), player picks 1 to add to hand. Activation cost starts at 5 Fuel and drops by 1 each use (5→4→3→2→1, floor 1), tracked per player for the rest of the match. `generateCraftCandidates`/`craftCandidateToCard`/`nextCraftCost` in combat.js. |
 | **Airborne** | Retired — not part of the new Set 1 truth (Aircraft has innate unrestricted terrain access instead; see `maps.js`). |
 
 ---
