@@ -1,4 +1,4 @@
-import { CARD_BY_ID, CARDS, ensureGeneratedCard } from './cards.js?v=1788297094';
+import { CARD_BY_ID, CARDS, ensureGeneratedCard } from './cards.js?v=1788298462';
 import {
   createInitialState,
   startOfTurn,
@@ -27,15 +27,15 @@ import {
   hasEscalated,
   markEscalateUse,
   expireTempFuelGrant,
-} from './state.js?v=1788297094';
-import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkCounteroffensiveGeneral, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff, getObjectivePickEffectType, computeObjectivePickTargets, describeDynamicSideBonus } from './combat.js?v=1788297094';
-import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones, showFxPopup } from './ui.js?v=1788297094';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1788297094';
-import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby, updatePlayerState } from './firebase.js?v=1788297094';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1788297094';
-import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1788297094';
-import { runBotTurn } from './bot_player.js?v=1788297094';
-import { bestHeroDeployment } from './bot_ai.js?v=1788297094';
+} from './state.js?v=1788298462';
+import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkCounteroffensiveGeneral, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff, getObjectivePickEffectType, computeObjectivePickTargets, describeDynamicSideBonus } from './combat.js?v=1788298462';
+import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones, showFxPopup } from './ui.js?v=1788298462';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1788298462';
+import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby, updatePlayerState } from './firebase.js?v=1788298462';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1788298462';
+import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1788298462';
+import { runBotTurn } from './bot_player.js?v=1788298462';
+import { bestHeroDeployment } from './bot_ai.js?v=1788298462';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
@@ -1943,7 +1943,25 @@ document.getElementById('board').addEventListener('click', e => {
     // Infantry next to an existing Muster unit left the Muster unit showing its un-buffed base
     // stats until some unrelated later action (an attack, End Turn) happened to recalculate —
     // meaning an attack made in the meantime would have used the wrong (too-low) side value.
+    const dynamicBefore = new Map(
+      Object.entries(newState.board).filter(([, u]) => u).map(([k, u]) => [k, u.dynamicSideBonus || 0])
+    );
     newState = recalculateDynamicStats(newState);
+    // Inspire/Muster causality pulse (§14): unlike Rally/Breakthrough/Last Stand, there's no
+    // single "source" tile to glow first — an aura's effect is a board-wide recalculation, not
+    // a one-shot trigger — so this is a single-stage flash on whichever tiles' dynamicSideBonus
+    // actually went up as a result of this placement (a new Inspire source reaching adjacent
+    // units, a new Infantry raising every Muster unit's count, or the placed Unit itself
+    // benefiting from an existing aura). Scheduled via setTimeout so it fires after whichever
+    // redraw() this handler ends up calling below (there are several early-return branches for
+    // On-Play UI round-trips), rather than depending on any one of them.
+    const dynamicPulseTargets = Object.keys(newState.board).filter(k => {
+      const u = newState.board[k];
+      return u && (u.dynamicSideBonus || 0) > (dynamicBefore.get(k) ?? 0);
+    });
+    if (dynamicPulseTargets.length > 0) {
+      setTimeout(() => dynamicPulseTargets.forEach(flashCausalityTarget), 50);
+    }
     const logLines = [`Placed ${card.name} at ${clickedKey} (${terrain})${discount > 0 ? ` [Armored Spearhead: -${discount} Fuel]` : ''}`];
     state = { ...newState, log: [...(newState.log ?? []), ...logLines] };
     appendLog(logLines); // fire immediately so it displays before any On-Play/Hero-passive lines below
