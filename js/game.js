@@ -1,4 +1,4 @@
-import { CARD_BY_ID, CARDS, ensureGeneratedCard } from './cards.js?v=1788281953';
+import { CARD_BY_ID, CARDS, ensureGeneratedCard } from './cards.js?v=1788295040';
 import {
   createInitialState,
   startOfTurn,
@@ -27,15 +27,15 @@ import {
   hasEscalated,
   markEscalateUse,
   expireTempFuelGrant,
-} from './state.js?v=1788281953';
-import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkCounteroffensiveGeneral, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff, getObjectivePickEffectType, computeObjectivePickTargets, describeDynamicSideBonus } from './combat.js?v=1788281953';
-import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones, showFxPopup } from './ui.js?v=1788281953';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1788281953';
-import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby, updatePlayerState } from './firebase.js?v=1788281953';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1788281953';
-import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1788281953';
-import { runBotTurn } from './bot_player.js?v=1788281953';
-import { bestHeroDeployment } from './bot_ai.js?v=1788281953';
+} from './state.js?v=1788295040';
+import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkCounteroffensiveGeneral, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff, getObjectivePickEffectType, computeObjectivePickTargets, describeDynamicSideBonus } from './combat.js?v=1788295040';
+import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones, showFxPopup } from './ui.js?v=1788295040';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1788295040';
+import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby, updatePlayerState } from './firebase.js?v=1788295040';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1788295040';
+import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1788295040';
+import { runBotTurn } from './bot_player.js?v=1788295040';
+import { bestHeroDeployment } from './bot_ai.js?v=1788295040';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
@@ -331,7 +331,9 @@ let pendingCommandId = null;       // card ID of command awaiting a board target
 let preCommandState = null;        // state snapshot before command-targeting started (for cancel)
 let pendingRallyCryCount = 0;      // remaining Rally Cry target picks (0 = not active)
 let lastChangedKeys = new Set();   // tiles changed by opponent's last move (cleared on own action)
-let lastTransitionFlags = new Map(); // tileKey -> 'suppressed'|'destroyed' this commit, for a one-shot render animation
+let lastTransitionFlags = new Map(); // tileKey -> 'suppressed'|'destroyed'|'armor-absorbed'|'direct-hq' this commit, for a one-shot render animation
+let lastObjectiveTransitionFlags = new Map(); // tileKey -> 'obj-captured'|'obj-leveled' this commit — same one-shot idea, kept separate from lastTransitionFlags since it describes the objective at that tile, not a unit
+let lastHeroActivationKey = null; // "role-col" of the Hero Zone that just fired this commit, or null
 let gameOver = false;
 
 // ── Forward Observer state ─────────────────────────────────────────────────────
@@ -509,7 +511,20 @@ function runHeroPhase(role) {
 
   const roster = ps.heroRoster ?? [];
   const hasFreeZone = (ps.heroZones ?? []).some(z => z == null);
-  if (!roster.length || !hasFreeZone) { commitState(noteLevel(state), []); return; }
+  if (!roster.length || !hasFreeZone) {
+    // Fires synchronously, same click as whatever just called commitState immediately
+    // before this (End Turn — Direct HQ source pulse, objective capture/level flash, both
+    // set on the module-level last* vars right before runHeroPhase runs). Carrying them
+    // forward here instead of defaulting to empty is deliberate: without this, a player
+    // with no free Hero zone (all 4 filled) or no roster would have that flash wiped before
+    // a single frame ever painted, purely because Hero Phase's own state note happened to
+    // run in the same synchronous burst. Safe specifically because this branch never waits
+    // on user input — see the finish() callback below, which does wait (via the deploy
+    // modal) and deliberately does NOT do this, since by the time a human picks a Hero the
+    // original flash is long stale and shouldn't replay.
+    commitState(noteLevel(state), [], lastTransitionFlags, lastObjectiveTransitionFlags, lastHeroActivationKey);
+    return;
+  }
 
   const isFirstHero = (ps.heroZones ?? []).every(z => z == null);
 
@@ -873,9 +888,9 @@ function redraw() {
   renderHQ(state);
 
   if (uiState === "placing") {
-    renderBoard(state, null, getValidTiles(), lastChangedKeys, lastTransitionFlags, getTerrainBlockedTiles());
+    renderBoard(state, null, getValidTiles(), lastChangedKeys, lastTransitionFlags, getTerrainBlockedTiles(), lastObjectiveTransitionFlags);
   } else {
-    renderBoard(state, null, null, lastChangedKeys, lastTransitionFlags);
+    renderBoard(state, null, null, lastChangedKeys, lastTransitionFlags, null, lastObjectiveTransitionFlags);
   }
 
   if (uiState === "targeting" && pendingAttackerKey) {
@@ -984,7 +999,7 @@ function redraw() {
 
   const handRole = myRole ?? state.initiative;
   renderHand(state[handRole].hand, 'p1-hand', selectedHandCardId, { playerState: state[handRole] });
-  renderHeroZones(state, selectedHeroZone);
+  renderHeroZones(state, selectedHeroZone, lastHeroActivationKey);
 
   const cancelBtn = document.getElementById('btn-cancel');
   if (cancelBtn) {
@@ -1035,9 +1050,11 @@ function syncObjectivePickUiState() {
   }
 }
 
-function commitState(newState, logLines, transitionFlags) {
+function commitState(newState, logLines, transitionFlags, objectiveTransitionFlags, heroActivationKey) {
   lastChangedKeys = new Set(); // player acted — clear opponent highlights
   lastTransitionFlags = transitionFlags ?? new Map();
+  lastObjectiveTransitionFlags = objectiveTransitionFlags ?? new Map();
+  lastHeroActivationKey = heroActivationKey ?? null;
   state = { ...newState, log: [...(newState.log ?? []), ...(logLines ?? [])] };
   if (logLines?.length) appendLog(logLines);
   syncArtyTargetingUiState();
@@ -1442,7 +1459,7 @@ function tryActivateHero(role, col) {
     }
     const paid = { ...state, [role]: { ...spendCostMods(ps), fuel: ps.fuel - cost } };
     const { state: next, log } = applyHeroPower(paid, role, col, hero, null);
-    commitState(next, [...costModLog, ...log]);
+    commitState(next, [...costModLog, ...log], undefined, undefined, `${role}-${col}`);
     checkWin();
     return true;
   }
@@ -1493,7 +1510,7 @@ function resolveHeroTargeting(clickedKey) {
   }
   uiState = 'idle';
   const { state: next, log } = applyHeroPower(state, role, col, hero, clickedKey);
-  commitState(next, log);
+  commitState(next, log, undefined, undefined, `${role}-${col}`);
   checkWin();
 }
 
@@ -3367,8 +3384,24 @@ document.getElementById('btn-end-turn').addEventListener('click', () => {
     newState = { ...newState, [newActive]: drawCards(newState[newActive], 1) };
   }
   newState = startOfTurn(newState);                      // gain fuel for new active player
+  const objectivesBeforeThisTurn = newState.objectives;
   newState = updateObjectiveLevels(newState);            // escalate objective levels
   newState = checkObjectiveControl(newState);            // check majority-adjacent control
+
+  // Capture/level-up feedback — previously silent (both recalculate here every turn with no
+  // transition of any kind). Diffed against the snapshot just above rather than threaded
+  // through updateObjectiveLevels/checkObjectiveControl themselves, so neither pure function
+  // needs to change shape for a UI-only concern.
+  const objectiveTransitionFlags = new Map();
+  for (const [objKey, objAfter] of Object.entries(newState.objectives)) {
+    const objBefore = objectivesBeforeThisTurn[objKey];
+    if (!objBefore) continue;
+    if (objBefore.controller !== objAfter.controller && objAfter.controller) {
+      objectiveTransitionFlags.set(objKey, 'obj-captured');
+    } else if (objBefore.level !== objAfter.level) {
+      objectiveTransitionFlags.set(objKey, 'obj-leveled');
+    }
+  }
 
   // Supply Runner ability: at start of turn, if on a controlled objective → +1 Fuel
   const supplyLog = [];
@@ -3418,7 +3451,7 @@ document.getElementById('btn-end-turn').addEventListener('click', () => {
   // already redraws (same transitionFlags mechanism as Suppressed/Destroyed).
   const directHQFlags = new Map();
   directHQ.sources.forEach(({ key }) => directHQFlags.set(key, 'direct-hq'));
-  commitState(newState, turnLog, directHQFlags);
+  commitState(newState, turnLog, directHQFlags, objectiveTransitionFlags);
   checkWin();
   // HQ-side result flash/popup — deliberately a beat after the source pulse above (which
   // plays immediately on this same commit) rather than simultaneous, so SOURCE → RESULT

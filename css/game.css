@@ -413,6 +413,12 @@ body.viewer-p2 .stats-panel {
 .hero-placed.p2 { border-color: var(--p2); background: var(--p2-bg); }
 /* Activation still available this turn — same cue as .board-card.buffed */
 .hero-placed.ready { box-shadow: 0 0 8px 2px var(--gold-glow); }
+/* One-shot fire flash — the ready/spent states above are persistent; nothing previously
+   marked the instant a Power actually resolved. Same FxFlash primitive as everywhere else. */
+.hero-zone-slot.just-activated { animation: fx-flash-glow 0.5s ease-out; --fx-flash-color: rgba(240,192,48,0.85); }
+@media (prefers-reduced-motion: reduce) {
+  .hero-zone-slot.just-activated { animation: none; }
+}
 /* Activation already spent this turn — same dimming language as a suppressed unit */
 .hero-placed.spent { opacity: 0.5; }
 /* Picked up for repositioning — same gold selection cue units use */
@@ -644,6 +650,15 @@ body.viewer-p2 .stats-panel {
 .tile.objective-tile { background: var(--obj-bg); border-color: var(--obj-border); }
 .tile.obj-ctrl-p1 { background: var(--p1-obj-bg) !important; border-color: var(--p1-obj-border) !important; }
 .tile.obj-ctrl-p2 { background: var(--p2-obj-bg) !important; border-color: var(--p2-obj-border) !important; }
+
+/* Control-flip/level-up — previously silent (control and level both recalculate at start of
+   turn with zero transition of any kind). MAJOR-tier (capture, ~0.6s) vs STATE CHANGE-tier
+   (level-up, ~0.35s) via duration, same fx-flash-glow primitive as everywhere else. */
+.tile.objective-tile.obj-just-captured { animation: fx-flash-glow 0.6s ease-out; --fx-flash-color: rgba(240,192,48,0.85); }
+.tile.objective-tile.obj-just-leveled  { animation: fx-flash-glow 0.35s ease-out; --fx-flash-color: rgba(240,192,48,0.6); }
+@media (prefers-reduced-motion: reduce) {
+  .tile.objective-tile.obj-just-captured, .tile.objective-tile.obj-just-leveled { animation: none; }
+}
 /* Objective tile — D design */
 .obj-header {
   position: absolute;

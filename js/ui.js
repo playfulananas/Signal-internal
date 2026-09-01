@@ -1,7 +1,7 @@
-import { CARD_BY_ID } from './cards.js?v=1788281953';
-import { getKeywords, maxArmorHits, discountFor, fuelCapOf, rotatedDir } from './state.js?v=1788281953';
-import { getTerrain } from './maps.js?v=1788281953';
-import { nextCraftCost } from './combat.js?v=1788281953';
+import { CARD_BY_ID } from './cards.js?v=1788295040';
+import { getKeywords, maxArmorHits, discountFor, fuelCapOf, rotatedDir } from './state.js?v=1788295040';
+import { getTerrain } from './maps.js?v=1788295040';
+import { nextCraftCost } from './combat.js?v=1788295040';
 
 const TERRAIN_SHORT = { plains: 'P', forest: 'F', water: 'W', desert: 'D', city: 'C' };
 
@@ -42,7 +42,7 @@ const KEYWORD_TEXT = {
 // recomputed per-viewer rotation. Stats shown on a placed card also never flip by owner
 // (see getSideValue in state.js) — a card's printed N/E/S/W always maps to physical
 // N/E/S/W, same as in hand.
-export function renderBoard(state, selectedTileKey, validDropKeys, changedKeys = null, transitionFlags = null, terrainBlockedKeys = null) {
+export function renderBoard(state, selectedTileKey, validDropKeys, changedKeys = null, transitionFlags = null, terrainBlockedKeys = null, objectiveTransitionFlags = null) {
   const board = document.getElementById('board');
   board.innerHTML = '';
 
@@ -76,6 +76,15 @@ export function renderBoard(state, selectedTileKey, validDropKeys, changedKeys =
         else if (obj.controller === 'p2') tile.classList.add('obj-ctrl-p2');
         const objCard = CARD_BY_ID[obj.cardId];
         const ctrl = obj.controller;
+        // Control-flip/level-up flash — previously silent: control and level are both
+        // recalculated at start of turn with no transition of any kind, so a player had to
+        // notice the background color or dot track changed on their own. Same one-shot
+        // mechanism as the unit transitionFlags, just a separate map since a tile can never
+        // hold both a unit and an objective (getValidTiles excludes objective tiles from
+        // placement) but conflating the two flag types would still read as more confusing.
+        const objTransition = objectiveTransitionFlags?.get(key);
+        if (objTransition === 'obj-captured') tile.classList.add('obj-just-captured');
+        else if (objTransition === 'obj-leveled') tile.classList.add('obj-just-leveled');
 
         // Header: OBJECTIVE badge + controller
         const header = document.createElement('div');
@@ -141,6 +150,16 @@ export function renderBoard(state, selectedTileKey, validDropKeys, changedKeys =
       }
 
       board.appendChild(tile);
+      // Capture popup — needs the tile's real screen position, so it has to fire after
+      // appendChild (getBoundingClientRect is meaningless before the node is in the
+      // document). Level-up gets the flash above but no popup — the level-dot track already
+      // visibly advances on its own, and a popup on every 2-round escalation for every
+      // objective on the map would be noise the capture moment doesn't have to compete with.
+      if (obj && objectiveTransitionFlags?.get(key) === 'obj-captured' && obj.controller) {
+        const objCard = CARD_BY_ID[obj.cardId];
+        const rect = tile.getBoundingClientRect();
+        showFxPopup(rect.left + rect.width / 2, rect.top, `${obj.controller.toUpperCase()} captured ${objCard?.name ?? 'Objective'}`);
+      }
     }
   }
 }
@@ -391,7 +410,7 @@ export function heroPlacedHtml(card, owner, { ready = false, spent = false, pick
 
 // Fills both Hero Zone strips from state. A zone holding a hero drops its dashed
 // placeholder chrome (.filled); empty zones keep it.
-export function renderHeroZones(state, selectedZone = null) {
+export function renderHeroZones(state, selectedZone = null, justActivatedKey = null) {
   for (const role of ['p1', 'p2']) {
     const strip = document.getElementById(`hero-zone-${role}`);
     if (!strip) continue;
@@ -422,7 +441,13 @@ export function renderHeroZones(state, selectedZone = null) {
       // tryActivateHero (game.js) actually charges.
       const baseCost = heroId === 'H25' ? nextCraftCost(ps) : (card.activeCost ?? 0);
       const effectiveCost = card.powerType === 'active' ? Math.max(0, baseCost - discount + tax) : null;
-      return `<div class="hero-zone-slot filled${isDropTarget ? ' drop-target' : ''}" data-hero-zone="${role}-${col}">${heroPlacedHtml(card, role, { ready, spent, picked, effectiveCost })}</div>`;
+      // One-shot fire flash — the ready→spent state above is persistent, but nothing
+      // previously marked the instant a power actually resolved. Covers the ~22 of 25 Heroes
+      // that resolve straight through applyHeroPower's instant/targeted paths; H11 (rotate
+      // modal), H16 (2-step maneuver), and H25 (Craft picker modal) resolve through separate
+      // flows and don't set this yet — documented gap, not an oversight.
+      const justActivated = justActivatedKey === `${role}-${col}`;
+      return `<div class="hero-zone-slot filled${isDropTarget ? ' drop-target' : ''}${justActivated ? ' just-activated' : ''}" data-hero-zone="${role}-${col}">${heroPlacedHtml(card, role, { ready, spent, picked, effectiveCost })}</div>`;
     }).join('');
   }
 }
