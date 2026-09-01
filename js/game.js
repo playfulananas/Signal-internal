@@ -1,4 +1,4 @@
-import { CARD_BY_ID, CARDS, ensureGeneratedCard } from './cards.js?v=1788275462';
+import { CARD_BY_ID, CARDS, ensureGeneratedCard } from './cards.js?v=1788281953';
 import {
   createInitialState,
   startOfTurn,
@@ -27,15 +27,15 @@ import {
   hasEscalated,
   markEscalateUse,
   expireTempFuelGrant,
-} from './state.js?v=1788275462';
-import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkCounteroffensiveGeneral, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff, getObjectivePickEffectType, computeObjectivePickTargets } from './combat.js?v=1788275462';
-import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones } from './ui.js?v=1788275462';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1788275462';
-import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby, updatePlayerState } from './firebase.js?v=1788275462';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1788275462';
-import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1788275462';
-import { runBotTurn } from './bot_player.js?v=1788275462';
-import { bestHeroDeployment } from './bot_ai.js?v=1788275462';
+} from './state.js?v=1788281953';
+import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkCounteroffensiveGeneral, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff, getObjectivePickEffectType, computeObjectivePickTargets, describeDynamicSideBonus } from './combat.js?v=1788281953';
+import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones, showFxPopup } from './ui.js?v=1788281953';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1788281953';
+import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby, updatePlayerState } from './firebase.js?v=1788281953';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1788281953';
+import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1788281953';
+import { runBotTurn } from './bot_player.js?v=1788281953';
+import { bestHeroDeployment } from './bot_ai.js?v=1788281953';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
@@ -714,6 +714,25 @@ function getValidTiles() {
   return valid;
 }
 
+// Empty tiles ruled out specifically by terrain (not by being occupied) for the currently
+// selected card — the complement of getValidTiles within the empty-tile set. Used only for
+// the passive "why can't I drop here" board cue (renderBoard's terrain-blocked class); the
+// actual placement rejection is still enforced independently in the PLACING click handler.
+function getTerrainBlockedTiles() {
+  const card = CARD_BY_ID[selectedHandCardId];
+  const blocked = new Set();
+  if (!card) return blocked;
+  for (let r = 0; r < 4; r++) {
+    for (let c = 0; c < 4; c++) {
+      const k = tileKey(r, c);
+      if (state.board[k] || state.objectives[k]) continue;
+      const terrain = getTerrain(state.mapId, r, c);
+      if (!canPlaceOnTerrain(card, terrain)) blocked.add(k);
+    }
+  }
+  return blocked;
+}
+
 function getAdjacentKeys(key) {
   const [r, c] = key.split(',').map(Number);
   return [[r-1,c],[r+1,c],[r,c-1],[r,c+1]]
@@ -831,6 +850,21 @@ function showTurnToast(text) {
   turnToastTimer = setTimeout(() => toast.classList.remove('show'), 1200);
 }
 
+// Direct HQ result flash — the HQ number itself pulses red (reusing FxFlash, same primitive
+// the source unit's board-card pulse uses) and a "DIRECT HIT" popup stamps near it, batched
+// by target: evaluateDirectHQ sweeps every qualifying unit in one pass, so more than one unit
+// hitting the SAME HQ in the same sweep is a real case — one flash/popup per target HQ, not
+// one replayed per source unit, per the plan's SOURCE→TARGET→RESULT batching rule.
+function flashDirectHit(targetPlayer, amount) {
+  const el = document.getElementById(`${targetPlayer}-hq`);
+  if (!el) return;
+  el.classList.remove('fx-flash-negative');
+  void el.offsetWidth; // restart the CSS animation if it fires again quickly
+  el.classList.add('fx-flash-negative');
+  const rect = el.getBoundingClientRect();
+  showFxPopup(rect.left + rect.width / 2, rect.top, amount > 1 ? `DIRECT HIT ×${amount}` : 'DIRECT HIT');
+}
+
 function redraw() {
   if (!state) return;
   // Debug/testing hook only — read-only snapshot for external tooling (e.g. selfplay bot).
@@ -839,7 +873,7 @@ function redraw() {
   renderHQ(state);
 
   if (uiState === "placing") {
-    renderBoard(state, null, getValidTiles(), lastChangedKeys, lastTransitionFlags);
+    renderBoard(state, null, getValidTiles(), lastChangedKeys, lastTransitionFlags, getTerrainBlockedTiles());
   } else {
     renderBoard(state, null, null, lastChangedKeys, lastTransitionFlags);
   }
@@ -1792,8 +1826,20 @@ document.getElementById('board').addEventListener('click', e => {
     }
     newS = recalculateDynamicStats(newS);
     const artyTransitionFlags = new Map();
-    if (finalUnit === null) artyTransitionFlags.set(clickedKey, 'destroyed');
+    if (finalUnit === null) {
+      artyTransitionFlags.set(clickedKey, 'destroyed');
+      const destroyedName = CARD_BY_ID[unit.cardId]?.name;
+      if (destroyedName) {
+        const rect = tile.getBoundingClientRect();
+        showFxPopup(rect.left + rect.width / 2, rect.top, `${destroyedName} destroyed`);
+      }
+    }
     else if (newUnit.state === 'suppressed') artyTransitionFlags.set(clickedKey, 'suppressed');
+    else if (newUnit.state === 'normal') {
+      artyTransitionFlags.set(clickedKey, 'armor-absorbed');
+      const rect = tile.getBoundingClientRect();
+      showFxPopup(rect.left + rect.width / 2, rect.top, 'ARMOR ABSORBED');
+    }
     commitState(newS, log, artyTransitionFlags);
     checkWin();
     return;
@@ -1817,6 +1863,8 @@ document.getElementById('board').addEventListener('click', e => {
 
     if (!canPlaceOnTerrain(card, terrain)) {
       appendLog([`${card.name} cannot enter ${terrain} terrain`]);
+      const rect = tile.getBoundingClientRect();
+      showFxPopup(rect.left + rect.width / 2, rect.top, 'Blocked by terrain');
       return;
     }
     // Real column is known now, so column-restricted discounts are evaluated properly here.
@@ -2077,13 +2125,30 @@ document.getElementById('board').addEventListener('click', e => {
     }
 
     // result.boardMutations always targets clickedKey — newUnit===null means destroyed,
-    // otherwise .state tells us whether this specific hit just suppressed it (vs. an
-    // armor-absorb hit, which changes armorHits but not .state and shouldn't animate).
+    // newUnit.state==='suppressed' means this hit just suppressed it, and newUnit.state
+    // still 'normal' (only possible on a hit that actually landed) means Armor/Heavy Armor
+    // absorbed it — applyHit (state.js) always either absorbs or transitions state, no third
+    // outcome, so 'normal' here is unambiguous.
     const transitionFlags = new Map();
     if (result.boardMutations.length > 0) {
       const { newUnit } = result.boardMutations[0];
-      if (newUnit === null) transitionFlags.set(clickedKey, 'destroyed');
+      if (newUnit === null) {
+        transitionFlags.set(clickedKey, 'destroyed');
+        // Name popup on the now-empty tile — the destroyed unit's own card, read from
+        // pre-mutation state (still the module-level `state`, not yet reassigned) since
+        // it's already gone from result.boardMutations by this point.
+        const destroyedName = CARD_BY_ID[state.board[clickedKey]?.cardId]?.name;
+        if (destroyedName) {
+          const rect = tile.getBoundingClientRect();
+          showFxPopup(rect.left + rect.width / 2, rect.top, `${destroyedName} destroyed`);
+        }
+      }
       else if (newUnit.state === 'suppressed') transitionFlags.set(clickedKey, 'suppressed');
+      else if (newUnit.state === 'normal') {
+        transitionFlags.set(clickedKey, 'armor-absorbed');
+        const rect = tile.getBoundingClientRect();
+        showFxPopup(rect.left + rect.width / 2, rect.top, 'ARMOR ABSORBED');
+      }
     }
 
     commitState(newState, [...rallyLog, ...result.logEntries, ...overrunLog, ...postDestroyLog, ...coGenLog], transitionFlags);
@@ -3232,9 +3297,24 @@ function applyCommandEffect(commandId, targetKey) {
   // for free without touching each case.
   const cmdTransitionFlags = new Map();
   const afterUnit = s.board[targetKey];
-  if (unit && !afterUnit) cmdTransitionFlags.set(targetKey, 'destroyed');
+  if (unit && !afterUnit) {
+    cmdTransitionFlags.set(targetKey, 'destroyed');
+    const destroyedName = CARD_BY_ID[unit.cardId]?.name;
+    const tileEl = document.querySelector(`[data-key="${targetKey}"]`);
+    if (destroyedName && tileEl) {
+      const rect = tileEl.getBoundingClientRect();
+      showFxPopup(rect.left + rect.width / 2, rect.top, `${destroyedName} destroyed`);
+    }
+  }
   else if (unit && afterUnit && unit.state !== 'suppressed' && afterUnit.state === 'suppressed') {
     cmdTransitionFlags.set(targetKey, 'suppressed');
+  } else if (unit && afterUnit && (afterUnit.armorHits || 0) > (unit.armorHits || 0)) {
+    cmdTransitionFlags.set(targetKey, 'armor-absorbed');
+    const tileEl = document.querySelector(`[data-key="${targetKey}"]`);
+    if (tileEl) {
+      const rect = tileEl.getBoundingClientRect();
+      showFxPopup(rect.left + rect.width / 2, rect.top, 'ARMOR ABSORBED');
+    }
   }
 
   pendingCommandId = null;
@@ -3333,8 +3413,20 @@ document.getElementById('btn-end-turn').addEventListener('click', () => {
 
   const newRound = Math.ceil(newState.turn / 2);
   const turnLog = [...directHQLog, `--- Round ${newRound} — ${newState.initiative.toUpperCase()} ---`, ...supplyLog, ...effectLog];
-  commitState(newState, turnLog);
+  // Direct HQ source-unit pulse — set on the exact keys evaluateDirectHQ reports converted
+  // this sweep, so it plays on the very next render alongside everything else this commit
+  // already redraws (same transitionFlags mechanism as Suppressed/Destroyed).
+  const directHQFlags = new Map();
+  directHQ.sources.forEach(({ key }) => directHQFlags.set(key, 'direct-hq'));
+  commitState(newState, turnLog, directHQFlags);
   checkWin();
+  // HQ-side result flash/popup — deliberately a beat after the source pulse above (which
+  // plays immediately on this same commit) rather than simultaneous, so SOURCE → RESULT
+  // reads as a brief sequence instead of everything flashing at once. Not the full
+  // SequenceQueue from the plan (explicitly deferred) — just enough timing to feel like two
+  // steps, layered over the existing synchronous resolution.
+  if (directHQ.hqDamageToP1 > 0) setTimeout(() => flashDirectHit('p1', directHQ.hqDamageToP1), 200);
+  if (directHQ.hqDamageToP2 > 0) setTimeout(() => flashDirectHit('p2', directHQ.hqDamageToP2), 200);
 
   // Local hotseat only — both players share this screen, so flash whose turn it now is.
   // Online is handled separately in receiveRemoteState (fires on the receiving client only).
@@ -3417,6 +3509,9 @@ function showCardPreview(cardId) {
   if (!card) return;
   document.getElementById('cp-name').textContent = card.name;
   document.getElementById('cp-badge').className = 'cp-badge';
+  // Static template only (hand/Hero/objective-fallback) — never has a live-effects
+  // breakdown, so clear any left over from a previous showBoardUnitPreview hover.
+  document.getElementById('cp-effects').innerHTML = '';
   if (card.type === 'unit') {
     document.getElementById('cp-badge').textContent = `${card.cost} Fuel · ${card.cls || card.type}`;
     document.getElementById('cp-dirs').innerHTML =
@@ -3441,6 +3536,71 @@ function showCardPreview(cardId) {
     document.getElementById('cp-keyword').innerHTML = '';
     document.getElementById('cp-effect').textContent = card.effect || card.req || '';
   }
+  document.getElementById('card-preview').style.display = 'flex';
+  document.getElementById('preview-hint').style.display = 'none';
+}
+
+// Live board-unit preview — unlike showCardPreview above (which reads the static CARD_BY_ID
+// template for hand/Hero/objective hover), this reads the actual BoardUnit and answers "why
+// does this unit currently look/behave this way": live N/E/S/W (same getSideValue combat
+// resolution itself uses, so it can never disagree with what an attack would actually do),
+// Suppressed state, armor remaining, rotation, and a source breakdown for every stat bonus
+// this build can attribute to a real cause (Debug Panel, Inspire/Muster — see
+// describeDynamicSideBonus in combat.js). Bonuses from Commands/Hero Powers/Objectives are
+// still real and included in the live N/E/S/W numbers and in the total below — they're just
+// not individually attributed yet (bucketed as "other effects"), since that needs
+// source-tracking threaded through the ~30 scattered grant call sites in combat.js/game.js,
+// which is deferred, separate follow-up work, not part of this pass.
+function showBoardUnitPreview(unitKey) {
+  const unit = state?.board[unitKey];
+  if (!unit) return;
+  const card = CARD_BY_ID[unit.cardId];
+  if (!card) return;
+
+  document.getElementById('cp-name').textContent = card.name;
+  const armorMax = maxArmorHits(unit);
+  const badge = document.getElementById('cp-badge');
+  badge.className = 'cp-badge';
+  badge.textContent = `${card.cost} Fuel · ${card.cls || card.type}` +
+    (armorMax > 0 ? ` · ${armorMax - unit.armorHits}/${armorMax} protection` : '');
+
+  document.getElementById('cp-dirs').innerHTML =
+    `<div class="cp-dir-row"><span class="cp-dl">N</span><span class="cp-dv">${getSideValue(unit, 'n')}</span></div>` +
+    `<div class="cp-dir-row"><span class="cp-dl">E</span><span class="cp-dv">${getSideValue(unit, 'e')}</span></div>` +
+    `<div class="cp-dir-row"><span class="cp-dl">S</span><span class="cp-dv">${getSideValue(unit, 's')}</span></div>` +
+    `<div class="cp-dir-row"><span class="cp-dl">W</span><span class="cp-dv">${getSideValue(unit, 'w')}</span></div>`;
+
+  const kwList = getKeywords(unit);
+  document.getElementById('cp-keyword').innerHTML = kwList.map(k => `<span class="cp-kw-tag">${k}</span>`).join('');
+
+  const rows = [];
+  if (unit.state === 'suppressed') rows.push(['negative', '▼', 'Suppressed — cannot attack']);
+  const dyn = describeDynamicSideBonus(state, unitKey);
+  dyn.sources.forEach(s => rows.push(['positive', '▲', `+${s.amount} all sides — ${s.label}`]));
+  if (unit.debugSideBonus) {
+    const sign = unit.debugSideBonus > 0 ? '+' : '';
+    rows.push([unit.debugSideBonus > 0 ? 'positive' : 'negative', unit.debugSideBonus > 0 ? '▲' : '▼', `${sign}${unit.debugSideBonus} all sides — Debug Panel`]);
+  }
+  // Everything else that currently feeds getSideValue's total but isn't individually
+  // attributed yet — kept as one honest catch-all so the listed amounts never silently
+  // undercount the real total shown in cp-dirs above.
+  const otherTotal = (unit.tempSideBonus || 0) + (unit.grantedSideBonus || 0) + (unit.objSideBonus || 0);
+  if (otherTotal !== 0) {
+    const sign = otherTotal > 0 ? '+' : '';
+    rows.push([otherTotal > 0 ? 'positive' : 'negative', otherTotal > 0 ? '▲' : '▼', `${sign}${otherTotal} all sides — other effects (Command/Hero Power/Objective)`]);
+  }
+  if (armorMax > 0) {
+    rows.push(['protect', '⬤', `${kwList.includes('Heavy Armor') ? 'Heavy Armor' : 'Armor'} — ${armorMax - unit.armorHits} of ${armorMax} remaining`]);
+  }
+  if (unit.rotation) rows.push(['positive', '⟳', `Rotated ${unit.rotation}°`]);
+
+  const effectsEl = document.getElementById('cp-effects');
+  effectsEl.innerHTML = rows.length
+    ? `<div class="cp-effects-title">CURRENT EFFECTS</div>` +
+      rows.map(([cls, icon, text]) => `<div class="cp-effect-row ${cls}"><span class="cp-eff-icon">${icon}</span>${text}</div>`).join('')
+    : '';
+
+  document.getElementById('cp-effect').textContent = card.ability || '';
   document.getElementById('card-preview').style.display = 'flex';
   document.getElementById('preview-hint').style.display = 'none';
 }
@@ -3473,6 +3633,7 @@ function showAttackPreview(attackerKey, targetKey) {
     `<div class="cp-dir-row"><span class="cp-dl">${dir.toUpperCase()}</span><span class="cp-dv">${attVal}</span></div>` +
     `<div class="cp-dir-row"><span class="cp-dl">${oppDir.toUpperCase()}</span><span class="cp-dv">${defVal}</span></div>`;
   document.getElementById('cp-keyword').textContent = '';
+  document.getElementById('cp-effects').innerHTML = '';
   document.getElementById('cp-effect').textContent = outcome;
   document.getElementById('card-preview').style.display = 'flex';
   document.getElementById('preview-hint').style.display = 'none';
@@ -3498,6 +3659,7 @@ function showObjectivePreview(tileKey) {
     : 'OBJECTIVE · NEUTRAL';
   document.getElementById('cp-dirs').innerHTML = '';
   document.getElementById('cp-keyword').innerHTML = '';
+  document.getElementById('cp-effects').innerHTML = '';
   const levels = [objCard.l1, objCard.l2, objCard.l3, objCard.l4];
   document.getElementById('cp-effect').innerHTML = levels.map((eff, i) => {
     const isCurrent = (i + 1) === obj.level;
@@ -3527,7 +3689,7 @@ document.getElementById('board').addEventListener('mouseover', e => {
     return;
   }
   const unit = state?.board[tile.dataset.key];
-  if (unit && unit.state !== 'destroyed') showCardPreview(unit.cardId);
+  if (unit && unit.state !== 'destroyed') showBoardUnitPreview(tile.dataset.key);
   else if (state?.objectives[tile.dataset.key]) showObjectivePreview(tile.dataset.key);
 });
 document.getElementById('board').addEventListener('mouseleave', hideCardPreview);

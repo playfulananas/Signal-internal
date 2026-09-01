@@ -1,6 +1,6 @@
-import { CARD_BY_ID, registerGeneratedCard } from './cards.js?v=1788275462';
-import { getSideValue, getKeywords, attackBeats, applyHit, oppositeDir, unsuppressOnBoard, drawCards, addDiscount, remainingAttacks, spendAttack, grantTempAttacks, resetPersistentAttacks, fuelCapOf, gainFuel } from './state.js?v=1788275462';
-import { canPlaceOnTerrain, getTerrain } from './maps.js?v=1788275462';
+import { CARD_BY_ID, registerGeneratedCard } from './cards.js?v=1788281953';
+import { getSideValue, getKeywords, attackBeats, applyHit, oppositeDir, unsuppressOnBoard, drawCards, addDiscount, remainingAttacks, spendAttack, grantTempAttacks, resetPersistentAttacks, fuelCapOf, gainFuel } from './state.js?v=1788281953';
+import { canPlaceOnTerrain, getTerrain } from './maps.js?v=1788281953';
 
 // Orthogonal directions and their row/col offsets.
 const DIRS = ["n", "e", "s", "w"];
@@ -125,12 +125,16 @@ export function resolveEmptyBoardStrike(state, attackerKey, hits) {
 // Does not call resolveSingleAttack/applyHit and never touches boardMutations/kill-tracking,
 // so it cannot trigger Rally (which requires an actual attack against an enemy Unit).
 export function evaluateDirectHQ(state, activePlayer) {
-  if (state.turn === 1) return { state, log: [], hqDamageToP1: 0, hqDamageToP2: 0 };
+  if (state.turn === 1) return { state, log: [], hqDamageToP1: 0, hqDamageToP2: 0, sources: [] };
 
   const opponent = activePlayer === 'p1' ? 'p2' : 'p1';
   let s = state;
   const log = [];
   let hqDamageToP1 = 0, hqDamageToP2 = 0;
+  // Which unit(s) actually converted this sweep, and which HQ each one hit — purely additive
+  // tracking alongside the existing loop, read only by the UI (source-pulse feedback on the
+  // triggering unit); the damage/log computation above is unchanged.
+  const sources = [];
 
   for (const key of fixedScanOrder(Object.keys(s.board))) {
     const unit = s.board[key];
@@ -142,16 +146,19 @@ export function evaluateDirectHQ(state, activePlayer) {
     const card = CARD_BY_ID[unit.cardId];
     let u = unit;
     let currentOppHq = opponent === 'p1' ? s.p1.hq - hqDamageToP1 : s.p2.hq - hqDamageToP2;
+    let struck = false;
     for (let i = 0; i < remaining && currentOppHq > 0; i++) {
       u = spendAttack(u);
       if (opponent === 'p1') hqDamageToP1 += 1; else hqDamageToP2 += 1;
       currentOppHq -= 1;
       log.push(`${card?.name ?? 'Unit'} strikes ${opponent.toUpperCase()}'s HQ directly — 1 HQ damage (no legal target)`);
+      struck = true;
     }
+    if (struck) sources.push({ key, targetPlayer: opponent });
     s = { ...s, board: { ...s.board, [key]: u } };
   }
 
-  return { state: s, log, hqDamageToP1, hqDamageToP2 };
+  return { state: s, log, hqDamageToP1, hqDamageToP2, sources };
 }
 
 // ── Hero column-freedom (Supreme Commander, H13) ────────────────────────────
@@ -280,6 +287,41 @@ export function computeDynamicSideBonus(state, key) {
   }
 
   return bonus;
+}
+
+// Same computation as computeDynamicSideBonus above, but returns a per-source breakdown
+// instead of just the total. Used only by the "why does this unit have this stat" preview
+// (game.js showCardPreview) — never by the hot combat/turn-resolution path, so this is purely
+// additive: computeDynamicSideBonus/recalculateDynamicStats and every one of their existing
+// callers are untouched.
+export function describeDynamicSideBonus(state, key) {
+  const unit = state.board[key];
+  if (!unit || unit.state === 'destroyed') return { total: 0, sources: [] };
+  const card = CARD_BY_ID[unit.cardId];
+  if (!card) return { total: 0, sources: [] };
+  const sources = [];
+
+  const [row, col] = tileCoords(key);
+  for (const { key: adjKey } of adjacentTiles(row, col)) {
+    const adj = state.board[adjKey];
+    if (!adj || adj.state === 'destroyed' || adj.owner !== unit.owner) continue;
+    if (getKeywords(adj).includes('Inspire')) {
+      const adjCard = CARD_BY_ID[adj.cardId];
+      sources.push({ amount: 1, label: `Inspire — ${adjCard?.name ?? 'adjacent unit'}` });
+    }
+  }
+
+  if (getKeywords(unit).includes('Muster')) {
+    const otherFriendlyInfantry = unitsOnBoard(state, unit.owner).filter(
+      ({ key: k, unit: u }) => k !== key && CARD_BY_ID[u.cardId]?.cls === 'Infantry'
+    ).length;
+    if (otherFriendlyInfantry > 0) {
+      sources.push({ amount: otherFriendlyInfantry, label: `Muster — ${otherFriendlyInfantry} other friendly Infantry` });
+    }
+  }
+
+  const total = sources.reduce((sum, s) => sum + s.amount, 0);
+  return { total, sources };
 }
 
 export function recalculateDynamicStats(state) {

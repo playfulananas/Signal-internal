@@ -23,6 +23,7 @@
   --gold-bg:        #1a1a00;
   --gold-bg-b:      #333308;
   --red:            #dd3344;
+  --red-glow:       rgba(221,51,68,0.25);
   --p1:             #5599ff;
   --p1-bg:          #0a1428;
   --p1-obj-bg:      #08101e;
@@ -89,6 +90,7 @@ body[data-theme="light"] {
   --gold-bg:        #fff8e0;
   --gold-bg-b:      #cc9900;
   --red:            #cc2233;
+  --red-glow:       rgba(204,34,51,0.25);
   --p1:             #2266cc;
   --p1-bg:          #e8f0ff;
   --p1-obj-bg:      #d8e8ff;
@@ -616,6 +618,13 @@ body.viewer-p2 .stats-panel {
 .tile.valid-drop { border-color: #4a7830 !important; background: #111e08 !important; cursor: crosshair; }
 .tile.valid-drop:hover { border-color: #6aaa40 !important; background: #182808 !important; }
 
+/* Empty tile that terrain rules out for the currently-selected card (Forest vs Tank, etc.)
+   — previously identical to any other non-highlighted tile; clicking it only produced a log
+   line. Dashed border reuses the same "blocked/reduced" idiom as Suppressed rather than a new
+   pattern; opacity keeps it a passive background cue, not an alarm — most of the board reads
+   this way whenever a Tank is selected on a forest-heavy map, so it needs to stay quiet. */
+.tile.terrain-blocked { border-color: var(--red) !important; border-style: dashed; opacity: 0.6; }
+
 .terrain-label {
   position: absolute;
   bottom: 2px; right: 3px;
@@ -738,24 +747,115 @@ body.viewer-p2 .stats-panel {
 .board-card.suppressed { opacity: 0.55; border-style: dashed; }
 .board-card.destroyed  { opacity: 0.25; filter: grayscale(1); }
 
-/* One-shot flash on the exact render where a unit transitions — see transitionFlags in
-   game.js/ui.js. Plays automatically on the freshly-created node (renderBoard rebuilds
-   every tile every render, so no "toggle off/on" restart trick is needed here, unlike the
-   persistent #turn-toast node). */
-@keyframes suppress-flash {
-  0%   { filter: brightness(1); box-shadow: 0 0 0 0 rgba(240,192,48,0); }
-  25%  { filter: brightness(1.35); box-shadow: 0 0 14px 4px rgba(240,192,48,0.85); }
-  100% { filter: brightness(1); box-shadow: 0 0 0 0 rgba(240,192,48,0); }
+/* ── FxFlash — one shared, parameterized one-shot flash system ──────────────────
+   Generalizes what used to be two bespoke keyframes (suppress-flash/destroy-flash) into
+   two reusable shapes (glow / inset) × the visual-language categories (positive/negative/
+   protection), driven by a --fx-flash-color custom property per variant. Any future
+   one-shot state-change effect (armor absorb, direct hit, etc.) should reuse one of these
+   classes instead of adding another bespoke keyframe.
+   Plays automatically on the freshly-created node — see transitionFlags in game.js/ui.js.
+   renderBoard rebuilds every tile every render, so no "toggle off/on" restart trick is
+   needed here, unlike the persistent #turn-toast node. */
+@keyframes fx-flash-glow {
+  0%   { filter: brightness(1); box-shadow: 0 0 0 0 transparent; }
+  25%  { filter: brightness(1.35); box-shadow: 0 0 14px 4px var(--fx-flash-color, transparent); }
+  100% { filter: brightness(1); box-shadow: 0 0 0 0 transparent; }
 }
-.board-card.just-suppressed { animation: suppress-flash 0.5s ease-out; }
+.fx-flash-positive { animation: fx-flash-glow 0.5s ease-out; --fx-flash-color: rgba(240,192,48,0.85); }
+.fx-flash-negative { animation: fx-flash-glow 0.5s ease-out; --fx-flash-color: rgba(200,40,40,0.85); }
+.fx-flash-protect  { animation: fx-flash-glow 0.5s ease-out; --fx-flash-color: rgba(68,136,170,0.85); }
 
-@keyframes destroy-flash {
-  0%   { box-shadow: inset 0 0 0 0 rgba(200,40,40,0); }
-  30%  { box-shadow: inset 0 0 0 3px rgba(200,40,40,0.85); background: rgba(200,40,40,0.22); }
-  100% { box-shadow: inset 0 0 0 0 rgba(200,40,40,0); }
+@keyframes fx-flash-inset {
+  0%   { box-shadow: inset 0 0 0 0 transparent; background: transparent; }
+  30%  { box-shadow: inset 0 0 0 3px var(--fx-flash-color, transparent); background: var(--fx-flash-bg, transparent); }
+  100% { box-shadow: inset 0 0 0 0 transparent; }
 }
-.tile.tile-just-destroyed { animation: destroy-flash 0.45s ease-out; }
+.fx-flash-inset-negative { animation: fx-flash-inset 0.45s ease-out; --fx-flash-color: rgba(200,40,40,0.85); --fx-flash-bg: rgba(200,40,40,0.22); }
+
+@media (prefers-reduced-motion: reduce) {
+  .fx-flash-positive, .fx-flash-negative, .fx-flash-protect, .fx-flash-inset-negative { animation: none; }
+}
+
+/* FxPopupText — small floating label near a screen position, rises and fades. See
+   showFxPopup in ui.js. Reuses the negative/red vocabulary since its first use (terrain-
+   blocked placement) is a rejection; a future positive use (e.g. a floating "+1") should get
+   its own .fx-popup-text.positive variant rather than repurposing this one's color. */
+@keyframes fx-popup-rise {
+  0%   { opacity: 0; transform: translate(-50%, 0); }
+  15%  { opacity: 1; transform: translate(-50%, -6px); }
+  75%  { opacity: 1; transform: translate(-50%, -14px); }
+  100% { opacity: 0; transform: translate(-50%, -20px); }
+}
+.fx-popup-text {
+  position: fixed;
+  pointer-events: none;
+  z-index: 1600;
+  font-size: 11px;
+  font-weight: bold;
+  font-family: 'Arial Narrow', Arial, sans-serif;
+  letter-spacing: 0.5px;
+  padding: 3px 8px;
+  border-radius: 3px;
+  background: var(--bg-alt);
+  border: 1px solid var(--red-glow);
+  color: var(--red);
+  animation: fx-popup-rise 0.9s ease-out forwards;
+}
+@media (prefers-reduced-motion: reduce) {
+  /* Static, fully visible for the JS removal timeout's duration — no rise/fade motion, but
+     still legible (opacity:0 here would just hide the text, defeating the point). */
+  .fx-popup-text { animation: none; opacity: 1; transform: none; }
+}
+
+/* Suppression is a debuff — it must flash negative (red), not positive (gold). Was
+   previously wired to the gold glow (an artifact of suppress-flash being written before
+   the positive/negative color language was formalized), which taught the wrong
+   association the moment a real positive one-shot flash existed anywhere else. */
+.board-card.just-suppressed { animation: fx-flash-glow 0.5s ease-out; --fx-flash-color: rgba(200,40,40,0.85); }
+/* Destruction — reticle + shake on the tile the dying unit occupied. The engine nulls a
+   destroyed unit out of state.board the instant it dies (no lingering "dying" card to animate
+   across multiple renders without a larger render-pipeline change — see the plan doc), so this
+   is the "light" version: everything plays on the now-empty tile rather than on a held-alive
+   ghost card. A WW2-gunsight-style reticle (circled bullseye, not a sci-fi HUD) plus a brief
+   shake, restrained rather than explosive, matching SIGNAL's tactical-board-game tone. */
+.tile.tile-just-destroyed {
+  animation: fx-flash-inset 0.45s ease-out, fx-destroy-shake 0.3s ease-in-out;
+  --fx-flash-color: rgba(200,40,40,0.85);
+  --fx-flash-bg: rgba(200,40,40,0.22);
+}
+.tile.tile-just-destroyed::after {
+  content: '◎';
+  position: absolute;
+  top: 50%; left: 50%;
+  font-size: calc(var(--tile-size) * 0.35);
+  line-height: 1;
+  color: var(--red);
+  pointer-events: none;
+  z-index: 5;
+  animation: fx-reticle-pulse 0.45s ease-out;
+}
+@keyframes fx-destroy-shake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-3px); }
+  40% { transform: translateX(3px); }
+  60% { transform: translateX(-2px); }
+  80% { transform: translateX(2px); }
+}
+@keyframes fx-reticle-pulse {
+  0%   { opacity: 0; transform: translate(-50%, -50%) scale(1.5); }
+  30%  { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  70%  { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  100% { opacity: 0; transform: translate(-50%, -50%) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tile.tile-just-destroyed { animation: none; }
+  .tile.tile-just-destroyed::after { animation: none; opacity: 0; }
+}
 .board-card.buffed { box-shadow: 0 0 8px 2px var(--gold-glow); }
+/* Parity fix: a buffed unit gets a persistent halo, but nothing equivalent existed for a
+   debuffed one — a unit weakened on every side didn't read as "currently weak" the way a
+   buffed unit reads as "currently strong." Same mechanism, negative color. */
+.board-card.debuffed { box-shadow: 0 0 8px 2px var(--red-glow); }
 
 .bc-name {
   padding: 2px 16px 2px 4px;
@@ -786,11 +886,53 @@ body.viewer-p2 .stats-panel {
   border-radius: 2px; padding: 0 3px; line-height: 1.5;
   letter-spacing: 0.3px; cursor: help;
 }
-.bc-state { position: absolute; bottom: 1px; right: 2px; font-size: 7px; color: var(--gold); font-weight: bold; }
-.bc-rotation { position: absolute; bottom: 1px; left: 2px; font-size: 7px; color: #88ccff; font-weight: bold; z-index: 2; }
+/* Status strip — Zone C: a flow row between the stats grid and the keyword row (bc-dirs
+   is flex:1, so this sits just above bc-keyword-row, which is always the last flow child).
+   Replaces the old .bc-rotation/.bc-state, which were both position:absolute pinned to the
+   same bottom corners bc-keyword-row naturally occupies — a suppressed+rotated card with
+   any keyword tag would render "SUP"/"⟳" directly on top of the tag text. Being flow
+   elements in their own row instead of absolute means nothing below Zone D can collide
+   with this again, regardless of how many keyword tags wrap. */
+.bc-status-strip {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1px 3px;
+  font-size: 7px;
+  font-weight: bold;
+  font-family: 'Arial Narrow', Arial, sans-serif;
+}
+.bc-status-icon { line-height: 1; }
+.bc-status-suppressed, .bc-status-destroyed { color: var(--red); }
+.bc-status-rotation { color: #88ccff; }
 .bc-armor { position: absolute; top: 2px; right: 3px; display: flex; flex-direction: column; gap: 1px; font-size: 9px; line-height: 1; z-index: 2; }
 .armor-pip.full  { color: var(--gold); }
 .armor-pip.spent { color: var(--text-d); }
+
+/* Protection ring — a thin inset frame in the protection hue (var(--log-absorb), same teal-
+   blue already used for "armor absorbed" log lines), giving Armor/Heavy Armor a whole-card
+   "this is protected" read instead of only the small corner pips. Heavy Armor gets both rings
+   (outer + inner); Armor gets only the outer one. Visibility is keyed off REMAINING
+   protection in ui.js, so a layer disappears the instant that hit is absorbed rather than
+   staying fixed to the card's printed maximum. */
+.board-card.armor-ring::before {
+  content: '';
+  position: absolute;
+  inset: 2px;
+  border: 1px solid var(--log-absorb);
+  border-radius: 1px;
+  pointer-events: none;
+  z-index: 1;
+}
+.board-card.armor-ring-heavy::after {
+  content: '';
+  position: absolute;
+  inset: 5px;
+  border: 1px solid var(--log-absorb);
+  border-radius: 1px;
+  pointer-events: none;
+  z-index: 1;
+}
 .bc-ability-pip {
   font-size: 7.5px; font-weight: bold;
   color: #88ccff; border: 1px solid rgba(100,180,255,0.35);
@@ -926,6 +1068,34 @@ body.viewer-p2 .stats-panel {
   color: var(--text-b);
   line-height: 1.6;
 }
+
+/* ── Current Effects — "why does this unit look/behave this way" breakdown, shown only
+   for a live board unit (see showBoardUnitPreview in game.js). Empty for hand cards/Heroes/
+   objectives, where it collapses to nothing via :empty rather than needing a JS toggle.
+   Reuses the same positive/negative/protection color vocabulary as the battlefield itself
+   (gold/red/teal-blue) so the preview panel teaches the same visual language it displays. ── */
+.cp-effects:empty { display: none; }
+.cp-effects {
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  margin-bottom: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.cp-effects-title {
+  font-size: 9px;
+  color: var(--text-c);
+  letter-spacing: 1.5px;
+  font-family: 'Arial Narrow', Arial, sans-serif;
+  margin-bottom: 2px;
+}
+.cp-effect-row { font-size: 12px; line-height: 1.4; color: var(--text-b); }
+.cp-effect-row .cp-eff-icon { display: inline-block; width: 14px; font-weight: bold; }
+.cp-effect-row.positive .cp-eff-icon { color: var(--gold); }
+.cp-effect-row.negative .cp-eff-icon { color: var(--red); }
+.cp-effect-row.protect  .cp-eff-icon { color: var(--log-absorb); }
+.cp-effect-sub { font-size: 10px; color: var(--text-c); padding-left: 16px; }
 
 /* ── Hand ── */
 .hand-area { width: 100%; }
