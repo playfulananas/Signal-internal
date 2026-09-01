@@ -87,7 +87,15 @@ match the v1.1 map art exactly.
 
 - **Online lobby setup order** doesn't match doc 04 §1's locked "map before deck" sequence for
   P1's direct-code-join or for P2 in either online flow. Not fixed — restructuring the Firebase
-  lobby handshake timing needs a live 2-client test session to verify safely.
+  lobby handshake timing needs a live 2-client test session to verify safely. Confirmed still
+  exactly this (not worse) via a live 2-client Playwright run, 2026-09-01.
+- **Craft (H25) / Training Officer (H19) crash the OTHER client in online play** —
+  `registerGeneratedCard`'s dynamically-created card definition is never transmitted through
+  Firebase, only its bare id. Confirmed via a live 2-client test, 2026-09-01: placing a crafted
+  Aircraft throws `Cannot read properties of undefined (reading 'ability')` on the receiving
+  client. A real fix needs an architecture decision (what to embed in synced state, how to
+  namespace `Craft-N` ids so two independent clients crafting in the same match don't collide —
+  see `CHANGELOG.md` for detail) — not attempted yet.
 - **Deck builder** has no custom-deck UI — only the 8 hardcoded Recommended Decks are playable.
 - **`pendingArtyHits`** (the old Artillery-Position "click an enemy to deal 1 hit" targeting
   mode) is fully dormant — no current card triggers it — but not removed, since removing it

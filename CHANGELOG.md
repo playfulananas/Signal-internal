@@ -9,6 +9,47 @@ Newest first.
 
 ---
 
+## 2026-09-01 — Multiplayer test pass: confirmed a real cross-client crash for Craft/Training Officer
+
+Wrote and ran two Playwright two-context scripts (`multiplayer_craft_test.mjs`,
+`multiplayer_disconnect_test.mjs` — new, checked in alongside the existing `open_lobby_test.mjs`,
+whose deck-picker selectors were also stale from before the Run 1 deck-name migration and are now
+fixed) against the live Firebase project per `docs/plans/2026-09-01-multiplayer-test-plan.md`.
+
+- **Confirmed, live-reproduced bug**: a Craft-generated Aircraft (H25) placed on the board in an
+  online match crashes the OTHER client with `Cannot read properties of undefined (reading
+  'ability')`. Root cause: `registerGeneratedCard` (combat.js) only writes the new card's
+  definition into the CRAFTING client's own in-memory `CARD_BY_ID` — `pushState` (firebase.js)
+  only ever transmits the bare card id (e.g. `"Craft-1"`) as part of the board/hand state, never
+  the definition. The receiving client's `CARD_BY_ID['Craft-1']` is `undefined`, and rendering
+  that board tile dereferences it. Verified directly: after the host crafted and placed `Craft-1`,
+  `await joiner.evaluate(() => CARD_BY_ID['Craft-1'])` came back `undefined` on the joiner's page,
+  with the exact console error above. Same exposure applies to Training Officer (H19)'s hand-buff
+  clones, which use the same `registerGeneratedCard` mechanism.
+- **Compounding risk found by inspection, not yet independently live-tested**: `cards.js`'s
+  `nextGeneratedCardSeq` counter is a plain per-page `let` starting at 1 on every load — not
+  derived from shared match state. Two independent clients each crafting/buffing once in the same
+  match would each produce a card literally named `Craft-1` with unrelated stats, so a fix that
+  just "transmits the definition and re-registers by id" isn't sufficient on its own; the id
+  needs to be made unique across both clients too (e.g. namespaced by role, or derived from a
+  counter that's part of the synced state rather than local to each page).
+- **Confirmed working correctly**: the open-lobby happy path end-to-end through mulligan and into
+  a live, synced board (both the existing smoke test and the new scripts); the explicit-Exit
+  disconnect flow (`multiplayer_disconnect_test.mjs` — the other client correctly shows "OPPONENT
+  DISCONNECTED"); Fuel/Hero-zone-deployment state pushed via the debug panel syncing correctly to
+  the other client once given time to settle (see next point).
+- **Test-script-only gotcha worth recording**: a raw local-state mutation immediately after
+  reaching the live board can get silently wiped by an in-flight incoming Firebase replace — both
+  players' mulligan confirmations push a full state replace (`commitState` pushes regardless of
+  whose "turn" it conceptually is), and if the other side's mulligan-triggered push is still in
+  flight when a script does a same-tick local mutation, `receiveRemoteState`'s full replace
+  clobbers it a moment later. Not a game bug — `commitState`'s always-push behavior is correct —
+  just something a synced-two-client test needs to wait out (a short settle delay after both
+  sides reach the board) rather than something to "fix."
+- Not yet fixed — this needs an actual architecture decision (what gets embedded in synced state,
+  how ids get namespaced) before writing the fix, so it's left as a confirmed, reproducible open
+  item rather than a same-session patch.
+
 ## 2026-09-01 — Card-by-card verification pass, Commands: C15 zero-target waste + C09 Overrun's Suppress bonus never fired
 
 Continuing the per-card verification (Heroes done, moving through the 35 Commands): found and fixed

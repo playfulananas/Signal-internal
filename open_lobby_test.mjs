@@ -29,7 +29,7 @@ try {
   const rowText = (await row.textContent()) ?? '';
   if (!rowText.includes('HostPlayer')) fail(`lobby row missing host name, got: "${rowText}"`);
   if (!rowText.toLowerCase().includes('kursk')) fail(`lobby row missing map name, got: "${rowText}"`);
-  if (rowText.toLowerCase().match(/aggro|control|counter|power|hammer strike|iron fortress|blitz breaker|steel column/)) {
+  if (rowText.toLowerCase().match(/infantry formation|tank blitz|artillery fire control|air superiority|last stand sacrifice|command engine|combined arms|objective tempo/)) {
     fail(`lobby row leaked deck information: "${rowText}"`);
   }
 
@@ -38,12 +38,12 @@ try {
     .catch(() => fail('joiner was not navigated into game.html after clicking the lobby row'));
 
   // Host picks a deck — map-picker should be skipped since mapId came from the lobby.
-  await host.locator('.deck-option[data-deck="aggro"]').click();
+  await host.locator('.deck-option[data-deck="infantry-formation"]').click();
   await host.waitForSelector('#waiting-screen', { state: 'visible', timeout: 8000 })
     .catch(() => fail('host did not reach the waiting screen — map-picker may not have been skipped'));
 
   // Joiner picks a deck — this should complete the handshake and start the game.
-  await joiner.locator('.deck-option[data-deck="control"]').click();
+  await joiner.locator('.deck-option[data-deck="tank-blitz"]').click();
 
   await host.waitForSelector('#mulligan-screen', { state: 'visible', timeout: 8000 })
     .catch(() => fail('game did not start for host after both decks were picked'));
