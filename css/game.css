@@ -833,6 +833,39 @@ body.viewer-p2 .stats-panel {
   color: var(--red);
   animation: fx-popup-rise 1.6s ease-out forwards;
 }
+/* FxConnector — a line drawn from a causing unit to whatever it affected (Rally's targets,
+   Direct Hit's HQ), so the relationship is visible instead of only implied by timing. Single
+   shared full-viewport SVG overlay (#fx-connector-svg in game.html), lines appended/removed by
+   drawFxConnector (ui.js) per occurrence. Sits below .fx-popup-text (z-index 1600) so a popup
+   text never gets crossed out by a line, above the board itself. */
+.fx-connector-svg {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  pointer-events: none;
+  z-index: 1550;
+}
+.fx-connector-line {
+  stroke: var(--gold);
+  stroke-width: 2.5;
+  fill: none;
+  opacity: 0;
+  animation: fx-connector-fade 1s ease-out forwards;
+}
+.fx-connector-arrowhead {
+  fill: var(--gold);
+}
+@keyframes fx-connector-fade {
+  0%   { opacity: 0; }
+  15%  { opacity: 0.85; }
+  70%  { opacity: 0.85; }
+  100% { opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .fx-connector-line { animation: none; opacity: 0; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   /* Static, fully visible for the JS removal timeout's duration — no rise/fade motion, but
      still legible (opacity:0 here would just hide the text, defeating the point). */

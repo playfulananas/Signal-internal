@@ -1,4 +1,4 @@
-import { CARD_BY_ID, CARDS, ensureGeneratedCard } from './cards.js?v=1788355385';
+import { CARD_BY_ID, CARDS, ensureGeneratedCard } from './cards.js?v=1788358457';
 import {
   createInitialState,
   startOfTurn,
@@ -27,15 +27,15 @@ import {
   hasEscalated,
   markEscalateUse,
   expireTempFuelGrant,
-} from './state.js?v=1788355385';
-import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkCounteroffensiveGeneral, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff, getObjectivePickEffectType, computeObjectivePickTargets, describeDynamicSideBonus } from './combat.js?v=1788355385';
-import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones, showFxPopup } from './ui.js?v=1788355385';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1788355385';
-import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby, updatePlayerState } from './firebase.js?v=1788355385';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1788355385';
-import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1788355385';
-import { runBotTurn } from './bot_player.js?v=1788355385';
-import { bestHeroDeployment } from './bot_ai.js?v=1788355385';
+} from './state.js?v=1788358457';
+import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkCounteroffensiveGeneral, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff, getObjectivePickEffectType, computeObjectivePickTargets, describeDynamicSideBonus } from './combat.js?v=1788358457';
+import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones, showFxPopup, drawFxConnector } from './ui.js?v=1788358457';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1788358457';
+import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby, updatePlayerState } from './firebase.js?v=1788358457';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1788358457';
+import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1788358457';
+import { runBotTurn } from './bot_player.js?v=1788358457';
+import { bestHeroDeployment } from './bot_ai.js?v=1788358457';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
@@ -2245,7 +2245,14 @@ document.getElementById('board').addEventListener('click', e => {
     }
     const delayedCausalityTargets = causalityTargets.filter(k => k !== attackerKey);
     if (delayedCausalityTargets.length > 0) {
-      setTimeout(() => delayedCausalityTargets.forEach(flashCausalityTarget), 150);
+      setTimeout(() => {
+        const sourceEl = document.querySelector(`.tile[data-key="${attackerKey}"] .board-card`);
+        delayedCausalityTargets.forEach(k => {
+          flashCausalityTarget(k);
+          const targetEl = document.querySelector(`.tile[data-key="${k}"] .board-card`);
+          if (sourceEl) drawFxConnector(sourceEl, targetEl);
+        });
+      }, 150);
     }
 
     commitState(newState, [...rallyLog, ...result.logEntries, ...overrunLog, ...postDestroyLog, ...coGenLog], transitionFlags);
@@ -3566,6 +3573,17 @@ document.getElementById('btn-end-turn').addEventListener('click', () => {
   // steps, layered over the existing synchronous resolution.
   if (directHQ.hqDamageToP1 > 0) setTimeout(() => flashDirectHit('p1', directHQ.hqDamageToP1), 200);
   if (directHQ.hqDamageToP2 > 0) setTimeout(() => flashDirectHit('p2', directHQ.hqDamageToP2), 200);
+  // One connector line per converting unit, timed to the same 200ms mark as the HQ flash above
+  // — draws "this unit's unused attack" straight to "this HQ damage", the one causality
+  // pairing on the board that's genuinely hard to follow from timing alone (source and result
+  // sit on opposite ends of the screen).
+  directHQ.sources.forEach(({ key, targetPlayer }) => {
+    setTimeout(() => {
+      const fromEl = document.querySelector(`.tile[data-key="${key}"] .board-card`);
+      const toEl = document.getElementById(`${targetPlayer}-hq`);
+      if (fromEl && toEl) drawFxConnector(fromEl, toEl);
+    }, 200);
+  });
 
   // Local hotseat only — both players share this screen, so flash whose turn it now is.
   // Online is handled separately in receiveRemoteState (fires on the receiving client only).

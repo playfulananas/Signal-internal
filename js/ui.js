@@ -1,7 +1,7 @@
-import { CARD_BY_ID } from './cards.js?v=1788355385';
-import { getKeywords, maxArmorHits, discountFor, fuelCapOf, rotatedDir } from './state.js?v=1788355385';
-import { getTerrain } from './maps.js?v=1788355385';
-import { nextCraftCost } from './combat.js?v=1788355385';
+import { CARD_BY_ID } from './cards.js?v=1788358457';
+import { getKeywords, maxArmorHits, discountFor, fuelCapOf, rotatedDir } from './state.js?v=1788358457';
+import { getTerrain } from './maps.js?v=1788358457';
+import { nextCraftCost } from './combat.js?v=1788358457';
 
 const TERRAIN_SHORT = { plains: 'P', forest: 'F', water: 'W', desert: 'D', city: 'C' };
 
@@ -493,6 +493,29 @@ export function showFxPopup(x, y, text) {
   document.body.appendChild(el);
   el.addEventListener('animationend', () => el.remove());
   setTimeout(() => el.remove(), 2000); // safety net only — animationend removes it at 1.6s normally
+}
+
+// ── FxConnector ──────────────────────────────────────────────────────────────
+// Draws a fading line + arrowhead from fromEl's center to toEl's center, into the shared
+// #fx-connector-svg overlay (game.html) — makes "this unit caused that" visible directly
+// instead of only implied by the two flashing near-simultaneously. Takes already-resolved DOM
+// elements (not tile keys) so it works for both board tiles and non-tile targets like the HQ
+// number (flashDirectHit's el). Caller is responsible for timing this alongside whatever flash
+// it's paired with (see the Rally and Direct Hit call sites in game.js).
+export function drawFxConnector(fromEl, toEl) {
+  const svg = document.getElementById('fx-connector-svg');
+  if (!svg || !fromEl || !toEl) return;
+  const a = fromEl.getBoundingClientRect();
+  const b = toEl.getBoundingClientRect();
+  const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+  line.setAttribute('x1', a.left + a.width / 2);
+  line.setAttribute('y1', a.top + a.height / 2);
+  line.setAttribute('x2', b.left + b.width / 2);
+  line.setAttribute('y2', b.top + b.height / 2);
+  line.setAttribute('class', 'fx-connector-line');
+  line.setAttribute('marker-end', 'url(#fx-connector-arrow)');
+  svg.appendChild(line);
+  setTimeout(() => line.remove(), 1200);
 }
 
 // ── HQ / fuel / turn display ──────────────────────────────────────────────────
