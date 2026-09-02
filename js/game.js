@@ -1,4 +1,4 @@
-import { CARD_BY_ID, CARDS, ensureGeneratedCard } from './cards.js?v=1788298462';
+import { CARD_BY_ID, CARDS, ensureGeneratedCard } from './cards.js?v=1788355385';
 import {
   createInitialState,
   startOfTurn,
@@ -27,15 +27,15 @@ import {
   hasEscalated,
   markEscalateUse,
   expireTempFuelGrant,
-} from './state.js?v=1788298462';
-import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkCounteroffensiveGeneral, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff, getObjectivePickEffectType, computeObjectivePickTargets, describeDynamicSideBonus } from './combat.js?v=1788298462';
-import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones, showFxPopup } from './ui.js?v=1788298462';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1788298462';
-import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby, updatePlayerState } from './firebase.js?v=1788298462';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1788298462';
-import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1788298462';
-import { runBotTurn } from './bot_player.js?v=1788298462';
-import { bestHeroDeployment } from './bot_ai.js?v=1788298462';
+} from './state.js?v=1788355385';
+import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkCounteroffensiveGeneral, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff, getObjectivePickEffectType, computeObjectivePickTargets, describeDynamicSideBonus } from './combat.js?v=1788355385';
+import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones, showFxPopup } from './ui.js?v=1788355385';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1788355385';
+import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby, updatePlayerState } from './firebase.js?v=1788355385';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1788355385';
+import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1788355385';
+import { runBotTurn } from './bot_player.js?v=1788355385';
+import { bestHeroDeployment } from './bot_ai.js?v=1788355385';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
@@ -548,11 +548,21 @@ function runHeroPhase(role) {
     return;
   }
 
-  showHeroDeploy(`${role.toUpperCase()} — ${isFirstHero ? 'FIRST HERO' : 'REINFORCEMENT'}`,
-    isFirstHero
-      ? 'Round 2 — deploy your first Hero.'
-      : 'Objective level rose — deploy another Hero.',
-    roster, ps.heroZones, finish);
+  // Delayed so the full-screen modal doesn't cover the End Turn visual sequence still playing
+  // (Direct Hit's source pulse fires immediately, its HQ-side flash 200ms later plus its own
+  // ~0.5s animation — see the End Turn handler). Re-reads roster/heroZones fresh off `state`
+  // at fire time rather than using the values snapshotted above, in case anything legitimately
+  // changes in that window (nothing normally can, since the board isn't meaningfully
+  // interactive between End Turn and this modal, but re-deriving costs nothing and avoids
+  // relying on that assumption).
+  setTimeout(() => {
+    const freshPs = state[role];
+    showHeroDeploy(`${role.toUpperCase()} — ${isFirstHero ? 'FIRST HERO' : 'REINFORCEMENT'}`,
+      isFirstHero
+        ? 'Round 2 — deploy your first Hero.'
+        : 'Objective level rose — deploy another Hero.',
+      freshPs.heroRoster ?? [], freshPs.heroZones, finish);
+  }, 700);
 }
 
 // ── Start game ────────────────────────────────────────────────────────────────
@@ -900,10 +910,26 @@ function redraw() {
   window.__SIGNAL_DEBUG__ = { state, uiState, selectedHandCardId, pendingAttackerKey, attackedThisTurn: [...attackedThisTurn.entries()] };
   renderHQ(state);
 
+  // One-shot transition flags (destroy reticle, objective-captured flash, hero-activation glow)
+  // are meant to play exactly once, on the render right after the commitState that set them —
+  // but several code paths (placing a card chief among them) call redraw() directly instead of
+  // going through commitState, and commitState is the only place that used to reset these. Left
+  // alone, a stale flag would keep replaying its animation (and, for objective capture, its
+  // popup text) on every unrelated future redraw until some later commitState happened to
+  // overwrite it. Snapshotting locally and clearing the module-level vars right after this one
+  // render consumes them makes them genuinely one-shot regardless of which path triggered this
+  // redraw.
+  const transitionFlagsForThisRender = lastTransitionFlags;
+  const objectiveTransitionFlagsForThisRender = lastObjectiveTransitionFlags;
+  const heroActivationKeyForThisRender = lastHeroActivationKey;
+  lastTransitionFlags = new Map();
+  lastObjectiveTransitionFlags = new Map();
+  lastHeroActivationKey = null;
+
   if (uiState === "placing") {
-    renderBoard(state, null, getValidTiles(), lastChangedKeys, lastTransitionFlags, getTerrainBlockedTiles(), lastObjectiveTransitionFlags);
+    renderBoard(state, null, getValidTiles(), lastChangedKeys, transitionFlagsForThisRender, getTerrainBlockedTiles(), objectiveTransitionFlagsForThisRender);
   } else {
-    renderBoard(state, null, null, lastChangedKeys, lastTransitionFlags, null, lastObjectiveTransitionFlags);
+    renderBoard(state, null, null, lastChangedKeys, transitionFlagsForThisRender, null, objectiveTransitionFlagsForThisRender);
   }
 
   if (uiState === "targeting" && pendingAttackerKey) {
@@ -994,6 +1020,8 @@ function redraw() {
   // always a legal click). Maneuver's 2nd step also marks the already-chosen source Unit as
   // "locked in" via the existing selectedTileKey-style highlight class, so it's visually obvious
   // the player is now picking a destination, not another Unit.
+  const modeBanner = document.getElementById('mode-banner');
+  if (modeBanner) modeBanner.style.display = 'none';
   if (uiState === 'objective-picking' && state.pendingObjectivePick) {
     const pick = state.pendingObjectivePick;
     const obj = state.objectives[pick.objectiveKey];
@@ -1007,12 +1035,16 @@ function redraw() {
         const srcEl = document.querySelector(`[data-key="${pick.sourceKey}"]`);
         if (srcEl) srcEl.classList.add('highlight');
       }
+      if (modeBanner) {
+        modeBanner.textContent = objectivePickBannerText(state, pick);
+        modeBanner.style.display = 'block';
+      }
     }
   }
 
   const handRole = myRole ?? state.initiative;
   renderHand(state[handRole].hand, 'p1-hand', selectedHandCardId, { playerState: state[handRole] });
-  renderHeroZones(state, selectedHeroZone, lastHeroActivationKey);
+  renderHeroZones(state, selectedHeroZone, heroActivationKeyForThisRender);
 
   const cancelBtn = document.getElementById('btn-cancel');
   if (cancelBtn) {
@@ -2338,6 +2370,32 @@ function objectivePickPrompt(objName, instruction) {
   return `${objName.toUpperCase()}: ${instruction}`;
 }
 
+// Single source of truth for each pick effect's step-1 instruction wording, shared between the
+// log line pushed when the pick opens (applyObjectiveEffects, below) and the persistent
+// #mode-banner shown while uiState === 'objective-picking' (redraw()) — the log alone wasn't
+// prominent enough (buried in a scrolling panel) for a player to notice what they're supposed
+// to click.
+const OBJECTIVE_PICK_INSTRUCTIONS = {
+  maneuver: 'choose a friendly Unit to Maneuver',
+  removeSuppression: 'choose a Suppressed friendly Unit to un-suppress',
+  grantGuard: 'choose a friendly Unit to receive Guard',
+  rotate: 'choose a friendly Unit to Rotate',
+};
+
+// Banner text for the current objective pick, covering Maneuver's 2-step case (source, then
+// destination) the same way resolveObjectivePickClick's own log line does.
+function objectivePickBannerText(s, pick) {
+  const obj = s.objectives[pick.objectiveKey];
+  if (!obj) return '';
+  const nm = CARD_BY_ID[obj.cardId]?.name ?? 'Objective';
+  const effectType = getObjectivePickEffectType(obj.cardId, obj.level);
+  if (effectType === 'maneuver' && pick.sourceKey) {
+    const unitName = CARD_BY_ID[s.board[pick.sourceKey]?.cardId]?.name ?? 'Unit';
+    return objectivePickPrompt(nm, `choose a destination for ${unitName}`);
+  }
+  return objectivePickPrompt(nm, OBJECTIVE_PICK_INSTRUCTIONS[effectType] ?? 'choose a target');
+}
+
 // Resumable (2026-09-01): 4 of the 20 secondary effects (Airfield L2, Supply Depot L1, City L1,
 // Artillery Position L1) don't say "random" in their card text, unlike the other 16 — doc 04 §6
 // only locks auto-random selection for effects that DO say "random". Doc 04 is silent on
@@ -2422,7 +2480,7 @@ function applyObjectiveEffects(s, player, resumeAfterKey = null) {
           // targets: player chooses both which friendly Unit and its destination.
           const targets = computeObjectivePickTargets(s, key, 'maneuver', null);
           if (targets.length) {
-            log.push(objectivePickPrompt(nm, 'choose a friendly Unit to Maneuver'));
+            log.push(objectivePickPrompt(nm, OBJECTIVE_PICK_INSTRUCTIONS.maneuver));
             return { state: recalculateDynamicStats(s), log, pendingArtyHits: artyHits, pendingPick: { objectiveKey: key, sourceKey: null } };
           }
           log.push(`${nm} L2: no Unit has a legal Maneuver destination.`);
@@ -2444,7 +2502,7 @@ function applyObjectiveEffects(s, player, resumeAfterKey = null) {
           // Card text doesn't say "random" — player chooses which adjacent Suppressed Unit.
           const targets = computeObjectivePickTargets(s, key, 'removeSuppression', null);
           if (targets.length) {
-            log.push(objectivePickPrompt(nm, 'choose a Suppressed friendly Unit to un-suppress'));
+            log.push(objectivePickPrompt(nm, OBJECTIVE_PICK_INSTRUCTIONS.removeSuppression));
             return { state: recalculateDynamicStats(s), log, pendingArtyHits: artyHits, pendingPick: { objectiveKey: key, sourceKey: null } };
           }
           log.push(`${nm} L1: no adjacent Suppressed Unit.`);
@@ -2469,7 +2527,7 @@ function applyObjectiveEffects(s, player, resumeAfterKey = null) {
           // lands, "has Guard right now" is the eligibility bar.
           const targets = computeObjectivePickTargets(s, key, 'grantGuard', null);
           if (targets.length) {
-            log.push(objectivePickPrompt(nm, 'choose a friendly Unit to receive Guard'));
+            log.push(objectivePickPrompt(nm, OBJECTIVE_PICK_INSTRUCTIONS.grantGuard));
             return { state: recalculateDynamicStats(s), log, pendingArtyHits: artyHits, pendingPick: { objectiveKey: key, sourceKey: null } };
           }
           log.push(`${nm} L1: no eligible friendly Unit.`);
@@ -2502,7 +2560,7 @@ function applyObjectiveEffects(s, player, resumeAfterKey = null) {
           // Formation (C16) and Field Coordinator's Hero Power already use.
           const targets = computeObjectivePickTargets(s, key, 'rotate', null);
           if (targets.length) {
-            log.push(objectivePickPrompt(nm, 'choose a friendly Unit to Rotate'));
+            log.push(objectivePickPrompt(nm, OBJECTIVE_PICK_INSTRUCTIONS.rotate));
             return { state: recalculateDynamicStats(s), log, pendingArtyHits: artyHits, pendingPick: { objectiveKey: key, sourceKey: null } };
           }
           log.push(`${nm} L1: no eligible friendly Unit.`);

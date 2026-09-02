@@ -1,7 +1,7 @@
-import { CARD_BY_ID } from './cards.js?v=1788300820';
-import { getKeywords, maxArmorHits, discountFor, fuelCapOf, rotatedDir } from './state.js?v=1788300820';
-import { getTerrain } from './maps.js?v=1788300820';
-import { nextCraftCost } from './combat.js?v=1788300820';
+import { CARD_BY_ID } from './cards.js?v=1788355385';
+import { getKeywords, maxArmorHits, discountFor, fuelCapOf, rotatedDir } from './state.js?v=1788355385';
+import { getTerrain } from './maps.js?v=1788355385';
+import { nextCraftCost } from './combat.js?v=1788355385';
 
 const TERRAIN_SHORT = { plains: 'P', forest: 'F', water: 'W', desert: 'D', city: 'C' };
 
@@ -202,7 +202,13 @@ function buildBoardCard(unit, viewer = 'p1', transitionFlag = null) {
   const armorRingHeavy = maxArmor > 1 && remaining >= 2 ? ' armor-ring-heavy' : '';
   el.className = `board-card ${unit.owner} ${unit.state}${buffed ? ' buffed' : ''}${debuffed ? ' debuffed' : ''}${opponent ? ' opponent-card' : ''}${justSuppressed}${directHqSource}${armorAbsorbed}${causalitySource}${armorRing}${armorRingHeavy}`;
 
-  const kwList = getKeywords(unit);
+  // Armor / Heavy Armor are tiers, not stacking keywords (maxArmorHits treats them the same
+  // way — Heavy Armor wins outright) — but a Unit that starts with printed/granted Armor and
+  // then gets upgraded (e.g. Field Repairs) ends up with both strings sitting in its keyword
+  // set, since nothing removes the old 'Armor' entry on upgrade. Collapsing at display time
+  // only, here, covers every provenance combination without needing to touch every grant site.
+  const rawKwList = getKeywords(unit);
+  const kwList = rawKwList.includes('Heavy Armor') ? rawKwList.filter(k => k !== 'Armor') : rawKwList;
   // Provenance styling (§3): printed (today's look, unchanged) / permanently granted (filled
   // background) / temporarily granted (dashed border + ⧗ glyph). getKeywords already merges
   // base+temp+granted+permanent into one deduped list for gameplay logic — this re-derives
@@ -486,7 +492,7 @@ export function showFxPopup(x, y, text) {
   el.textContent = text;
   document.body.appendChild(el);
   el.addEventListener('animationend', () => el.remove());
-  setTimeout(() => el.remove(), 1200);
+  setTimeout(() => el.remove(), 2000); // safety net only — animationend removes it at 1.6s normally
 }
 
 // ── HQ / fuel / turn display ──────────────────────────────────────────────────
