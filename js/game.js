@@ -3875,9 +3875,28 @@ for (const role of ['p1', 'p2']) {
 
 // ── Keyboard shortcuts ────────────────────────────────────────────────────────
 
+// These 6 "pick one of N" modals (Forward Observer, Radio Operator, Field Reserves, rotate
+// direction, Craft, Hero deploy) all commit their Fuel/cost/activation-lock BEFORE opening —
+// by design, none of them refund on cancel (see e.g. confirmCraftPick's own doc comment) — and
+// none has an external close path, only their own confirm handler. Found 2026-09-02: Escape
+// still fired the generic Cancel button underneath them (via the button's plain .click(), which
+// bypasses whatever is visually on top), silently resetting uiState while leaving the modal
+// itself open and blocking every other click on the page — the player loses whatever they
+// already paid with no way forward except completing the very modal they thought they'd
+// cancelled. "E" (end turn) has the same bypass risk (a raw .click() call ignores that the
+// button is visually obscured), so it's guarded here too.
+const MODAL_IDS_BLOCKING_SHORTCUTS = [
+  'fo-modal', 'radio-op-modal', 'field-reserves-modal',
+  'rotate-direction-modal', 'craft-picker-modal', 'hero-deploy-modal',
+];
+function anyBlockingModalOpen() {
+  return MODAL_IDS_BLOCKING_SHORTCUTS.some(id => document.getElementById(id)?.style.display === 'flex');
+}
+
 document.addEventListener('keydown', e => {
   if (gameOver || !state) return;
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+  if (anyBlockingModalOpen()) return;
   if (e.key === 'Escape') document.getElementById('btn-cancel').click();
   if (e.key === 'e' || e.key === 'E') document.getElementById('btn-end-turn').click();
 });
