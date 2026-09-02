@@ -1,4 +1,4 @@
-import { CARD_BY_ID, CARDS, ensureGeneratedCard } from './cards.js?v=1788358457';
+import { CARD_BY_ID, CARDS, ensureGeneratedCard } from './cards.js?v=1788362361';
 import {
   createInitialState,
   startOfTurn,
@@ -27,15 +27,15 @@ import {
   hasEscalated,
   markEscalateUse,
   expireTempFuelGrant,
-} from './state.js?v=1788358457';
-import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkCounteroffensiveGeneral, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff, getObjectivePickEffectType, computeObjectivePickTargets, describeDynamicSideBonus } from './combat.js?v=1788358457';
-import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones, showFxPopup, drawFxConnector } from './ui.js?v=1788358457';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1788358457';
-import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby, updatePlayerState } from './firebase.js?v=1788358457';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1788358457';
-import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1788358457';
-import { runBotTurn } from './bot_player.js?v=1788358457';
-import { bestHeroDeployment } from './bot_ai.js?v=1788358457';
+} from './state.js?v=1788362361';
+import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkCounteroffensiveGeneral, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff, getObjectivePickEffectType, computeObjectivePickTargets, describeDynamicSideBonus } from './combat.js?v=1788362361';
+import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones, showFxPopup, drawFxConnector } from './ui.js?v=1788362361';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1788362361';
+import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby, updatePlayerState } from './firebase.js?v=1788362361';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1788362361';
+import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1788362361';
+import { runBotTurn } from './bot_player.js?v=1788362361';
+import { bestHeroDeployment } from './bot_ai.js?v=1788362361';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
@@ -548,13 +548,13 @@ function runHeroPhase(role) {
     return;
   }
 
-  // Delayed so the full-screen modal doesn't cover the End Turn visual sequence still playing
-  // (Direct Hit's source pulse fires immediately, its HQ-side flash 200ms later plus its own
-  // ~0.5s animation — see the End Turn handler). Re-reads roster/heroZones fresh off `state`
-  // at fire time rather than using the values snapshotted above, in case anything legitimately
-  // changes in that window (nothing normally can, since the board isn't meaningfully
-  // interactive between End Turn and this modal, but re-deriving costs nothing and avoids
-  // relying on that assumption).
+  // Delayed so the full-screen modal doesn't cover the End Turn visual sequence still playing.
+  // 1800ms covers the longest piece of that sequence: Direct Hit's HQ flash fires 200ms in and
+  // its "DIRECT HIT" text popup (fx-popup-rise, 1.6s) doesn't finish fading until 1800ms total —
+  // see the End Turn handler. Re-reads roster/heroZones fresh off `state` at fire time rather
+  // than using the values snapshotted above, in case anything legitimately changes in that
+  // window (nothing normally can, since the board isn't meaningfully interactive between End
+  // Turn and this modal, but re-deriving costs nothing and avoids relying on that assumption).
   setTimeout(() => {
     const freshPs = state[role];
     showHeroDeploy(`${role.toUpperCase()} — ${isFirstHero ? 'FIRST HERO' : 'REINFORCEMENT'}`,
@@ -562,7 +562,7 @@ function runHeroPhase(role) {
         ? 'Round 2 — deploy your first Hero.'
         : 'Objective level rose — deploy another Hero.',
       freshPs.heroRoster ?? [], freshPs.heroZones, finish);
-  }, 700);
+  }, 1800);
 }
 
 // ── Start game ────────────────────────────────────────────────────────────────
@@ -1218,9 +1218,17 @@ function receiveRemoteState(remoteState) {
 }
 
 function showEndScreen(winner) {
+  // gameOver flips synchronously so every `!gameOver` guard elsewhere (Hero Phase, turn
+  // toasts, etc.) reacts immediately — only the visual reveal is delayed, so the killing
+  // blow's own flash/popup/connector-line sequence gets to finish before the full-screen
+  // overlay covers the board. 1800ms matches the Hero modal's delay (see runHeroPhase): the
+  // longest piece of any single hit's sequence is the "DIRECT HIT" text popup's 1.6s fade,
+  // starting 200ms after the hit lands.
   gameOver = true;
-  document.getElementById('end-winner').textContent = `${winner} WINS`;
-  document.getElementById('end-screen').style.display = 'flex';
+  setTimeout(() => {
+    document.getElementById('end-winner').textContent = `${winner} WINS`;
+    document.getElementById('end-screen').style.display = 'flex';
+  }, 1800);
 }
 
 function checkWin() {
