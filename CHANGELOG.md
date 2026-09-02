@@ -9,6 +9,25 @@ Newest first.
 
 ---
 
+## 2026-09-02 — Fixed `?v=` cache-bust drift re-fragmenting `cards.js` into separate module instances (Craft recurrence)
+
+While live-verifying the click-target fix below with an actual screenshot (no test-harness version
+unification), `confirmCraftPick` crashed with `TypeError: Cannot read properties of undefined
+(reading 'name')` and no card reached hand — a clean repeat of the exact bug already fixed once on
+2026-09-01 ("module-instance fragmentation"). Cause was the same: `js/game.js` had drifted to
+importing `cards.js?v=1788362786` while `js/combat.js` still imported `cards.js?v=1788297094` (and
+several other files carried their own independent stale values) — different query strings resolve
+to different ES module instances in the browser, so `registerGeneratedCard` (called from
+`combat.js`'s copy) populated a `CARD_BY_ID` object that `game.js`'s own copy never saw. The
+2026-09-01 fix unified all `?v=` strings at the time, but nothing stops a later single-file edit
+from re-versioning just that one file and quietly reintroducing the split — which is exactly what
+happened here. Fixed the same way: unified every `.js?v=` import across `digital/js/*.js`,
+`index.html`, and `game.html` to one shared value again. **Not a durable fix** — this is a
+structural footgun (manual per-file cache-busting with no enforcement), the second time it's
+caused a full break of Craft specifically; worth a follow-up to make version drift impossible
+rather than just re-synced (e.g. a single shared version constant/build step) rather than relying
+on remembering to re-run the unification by hand each time.
+
 ## 2026-09-02 — Fixed Craft candidate cards being unclickable in the picker modal
 
 Follow-up to the Escape/E fix below: player reported the same symptom again ("picked an aircraft
