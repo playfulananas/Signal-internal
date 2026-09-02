@@ -9,6 +9,20 @@ Newest first.
 
 ---
 
+## 2026-09-02 — Fixed Craft candidate cards being unclickable in the picker modal
+
+Follow-up to the Escape/E fix below: player reported the same symptom again ("picked an aircraft
+but haven't received it in hand") after explicitly ruling out pressing Escape. Reproduced live:
+`showCraftPickerModal` built each candidate's preview via `buildPreviewCardDiv`, a plain `<div>`
+with no click listener — only the separate "CRAFT THIS" button beneath it called
+`confirmCraftPick`. Clicking the card itself (the natural move, since hand cards and hero-deploy
+cards ARE directly clickable everywhere else in this game) was a silent dead click: modal stayed
+open, the Fuel/activation cost was already spent by `tryActivateHero` before the modal opened, and
+nothing was added to hand. Fixed by attaching the same `confirmCraftPick(card.id)` handler (plus
+`cursor: pointer`) to the preview card, so either the card or the button now works.
+
+---
+
 ## 2026-09-02 — Fixed Escape/E shortcuts breaking Chief Aircraft Engineer and 5 other modals
 
 Per direct report: "chief aircraft engineer didnt give me the card in the hand and it dint cost 1
