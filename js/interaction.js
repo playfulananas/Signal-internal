@@ -33,7 +33,6 @@ export function getInteractionDecision({
   hasBlockingModal = false,
   pendingCommandId = null,
   selectedHeroZone = null,
-  pendingHalftrackMove = null,
 } = {}) {
   if (pendingObjectivePick || uiState === 'objective-picking') {
     return { pending: true, mandatory: true, reason: LABELS['objective-picking'] };
@@ -55,9 +54,6 @@ export function getInteractionDecision({
   }
   if (selectedHeroZone !== null) {
     return { pending: true, mandatory: false, reason: 'Finish or cancel Hero repositioning' };
-  }
-  if (pendingHalftrackMove !== null) {
-    return { pending: true, mandatory: false, reason: 'Move a Hero or skip the optional move' };
   }
   return { pending: false, mandatory: false, reason: null };
 }

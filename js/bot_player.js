@@ -34,18 +34,6 @@ async function handleForwardObserver() {
   await sleep(CLICK_DELAY_MS);
 }
 
-// Radio Operator on-play: look at top 2 of the deck, put one on top. Binary choice, resolves on
-// a single click — no separate Confirm button (see game.js's showRadioOperatorModal). Note: the
-// old numeric-id Radio Operator card this was built for isn't in the new 125-card pool — kept
-// since the underlying modal/mechanic (js/game.js's showRadioOperatorModal) is still live code,
-// just currently unreachable from any Run-1 card; harmless to leave wired.
-async function handleRadioOperator() {
-  const modal = document.getElementById("radio-op-modal");
-  if (!modal || modal.style.display === "none") return;
-  document.querySelector("#radio-op-cards .fo-pos-btn")?.click();
-  await sleep(CLICK_DELAY_MS);
-}
-
 async function handleArtyTargeting() {
   for (let i = 0; i < 4; i++) {
     const debug = readDebug();
@@ -137,7 +125,6 @@ async function playBotTurnSteps() {
 
   for (let i = 0; i < 12; i++) {
     await handleForwardObserver();
-    await handleRadioOperator();
     await handleRotateDirection();
     await handleCraftPicker();
     // Must run before flushPendingUiState below: there's no Cancel button for
@@ -276,11 +263,9 @@ async function playBotTurnSteps() {
 export async function runBotTurn() {
   await sleep(CLICK_DELAY_MS);
   await handleForwardObserver();
-  await handleRadioOperator();
   await handleArtyTargeting();
   await playBotTurnSteps();
   await handleForwardObserver();
-  await handleRadioOperator();
   await handleRotateDirection();
   if (isGameOver()) return;
 

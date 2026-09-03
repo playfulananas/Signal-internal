@@ -41,11 +41,10 @@ test('open modals block hidden buttons and keyboard-triggered actions', () => {
   assert.equal(canCancelInteraction(context), false);
 });
 
-test('Hero reposition, Command Shuffle, and optional Halftrack move stay explicit', () => {
+test('Hero reposition and Command Shuffle stay explicit', () => {
   const contexts = [
     { selectedHeroZone: 0 },
     { pendingCommandId: 'C15' },
-    { pendingHalftrackMove: 0 },
   ];
   for (const context of contexts) {
     assert.equal(getInteractionDecision(context).pending, true);

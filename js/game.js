@@ -337,7 +337,7 @@ let lastHeroActivationKey = null; // "role-col" of the Hero Zone that just fired
 let gameOver = false;
 
 const BLOCKING_MODAL_IDS = [
-  'fo-modal', 'radio-op-modal', 'field-reserves-modal',
+  'fo-modal', 'field-reserves-modal',
   'rotate-direction-modal', 'craft-picker-modal', 'hero-deploy-modal',
 ];
 
@@ -353,7 +353,6 @@ function currentInteractionContext() {
     hasBlockingModal: anyBlockingModalOpen(),
     pendingCommandId,
     selectedHeroZone,
-    pendingHalftrackMove,
   };
 }
 
@@ -1221,7 +1220,6 @@ function receiveRemoteState(remoteState) {
   pendingHeroId = null;
   pendingHeroColumn = null;
   pendingHeroTargets = null;
-  pendingHalftrackMove = null;
   redraw();
   checkWin();
   // The opponent's End Turn handler can't prompt us, so an inbound state that hands us the
@@ -1690,11 +1688,6 @@ function resolveUnitManeuverDestination(destKey) {
   checkWin();
 }
 
-// Mobile Command Halftrack (114) on-play: column index awaiting an optional Hero move into
-// its (confirmed-empty) zone, or null. Set at placement, cleared by a move, a click on the
-// target zone itself (skip), or any of the usual transient-state resets.
-let pendingHalftrackMove = null;
-
 // ── Hero Zone interaction — reposition ────────────────────────────────────────
 // One command-line action per turn: move a deployed Hero to an empty zone, OR swap two
 // deployed Heroes. A reinforcement already consumed it. Click a Hero to pick it up, then
@@ -1712,26 +1705,6 @@ function handleHeroZoneClick(role, col, shiftKey = false) {
     if (isOnline && myRole !== state.initiative) return;
     if (role === state.initiative) return; // must pick the opponent's Hero, not your own
     resolveEnemyHeroTargeting(role, col);
-    return;
-  }
-  // Mobile Command Halftrack (114) on-play: click one of your OTHER deployed Heroes to move
-  // it into pendingHalftrackMove's (empty) column, or click that column itself to skip.
-  if (pendingHalftrackMove != null) {
-    if (role !== state.initiative || (isOnline && myRole !== role)) return;
-    if (col === pendingHalftrackMove) { pendingHalftrackMove = null; appendLog(['Mobile Command Halftrack: skipped']); redraw(); return; }
-    const ps = state[role];
-    const zones = ps.heroZones ?? [null, null, null, null];
-    if (zones[col] == null) return; // nothing to move from an empty zone
-    const target = pendingHalftrackMove;
-    const next = [...zones];
-    const movedName = CARD_BY_ID[next[col]]?.name ?? 'Hero';
-    next[target] = next[col];
-    next[col] = null;
-    pendingHalftrackMove = null;
-    commitState(
-      { ...state, [role]: { ...ps, heroZones: next } },
-      [`Mobile Command Halftrack: ${movedName} moves to column ${target + 1}`],
-    );
     return;
   }
   if (state.initiative !== role) return;                 // only on your own turn
@@ -2084,35 +2057,6 @@ document.getElementById('board').addEventListener('click', e => {
       appendLog(heroPassiveLog);
     } else {
       state = afterHeroPassives;
-    }
-
-    // Mobile Command Halftrack (114) — on-play, offers to move a Hero into this (empty)
-    // column. Needs UI state (which card.id checks can't set), so it stays here rather
-    // than in checkUnitOnPlayAbility.
-    if (card.id === 114) {
-      const zones = state[active].heroZones ?? [null, null, null, null];
-      const hasOtherHero = zones.some((z, i) => z != null && i !== c);
-      if (zones[c] == null && hasOtherHero) {
-        pendingHalftrackMove = c;
-        appendLog(['Mobile Command Halftrack: click one of your other Heroes to move it here (optional)']);
-      }
-    }
-
-    // Radio Operator (111) — on-play, if a friendly Hero is in this column, look at top 2.
-    if (card.id === 111) {
-      const zones = state[active].heroZones ?? [null, null, null, null];
-      if (zones[c] != null) {
-        const deck = state[active].deck;
-        if (deck.length >= 2) {
-          const drawn = deck.slice(0, 2);
-          state = { ...state, [active]: { ...state[active], deck: deck.slice(2) } };
-          showRadioOperatorModal(drawn, active);
-        } else if (deck.length === 1) {
-          appendLog(['Radio Operator: only 1 card left in deck — stays on top']);
-        } else {
-          appendLog(['Radio Operator: deck is empty']);
-        }
-      }
     }
 
     selectedHandCardId = null;
@@ -3273,36 +3217,6 @@ function resolveEnemyHeroTargeting(role, col) {
   commitState(s, [`Radio Interference: ${heroName}'s Power costs +1F during ${role.toUpperCase()}'s next turn`]);
 }
 
-// Shared by Air Strike (20) and Suppressing Fire (79): 1 hit on targetKey per friendly unit
-// of the given class currently on board. Returns the updated state, log lines, and whether
-// the target became Suppressed (so the caller can check Counteroffensive General).
-function applyClassCountHits(s, active, targetKey, unit, cls, cardName) {
-  const log = [];
-  const count = unitsOnBoard(s, active).filter(({ unit: u }) => CARD_BY_ID[u.cardId]?.cls === cls).length;
-  if (count === 0) {
-    log.push(`${cardName}: no friendly ${cls} on board`);
-    return { state: s, log, becameSuppressed: false };
-  }
-  const unitName = CARD_BY_ID[unit?.cardId]?.name ?? '?';
-  let tgt = unit; let dmg = 0; let becameSuppressed = false;
-  for (let i = 0; i < count && tgt; i++) {
-    const { newUnit, hqDamage } = applyHit(tgt);
-    dmg += hqDamage;
-    if (newUnit.state === 'suppressed') becameSuppressed = true;
-    tgt = newUnit?.state === 'destroyed' ? null : newUnit;
-  }
-  s = { ...s, board: { ...s.board, [targetKey]: tgt },
-        [unit.owner]: { ...s[unit.owner], hq: s[unit.owner].hq - dmg } };
-  log.push(`${cardName}: ${count} hit(s) on ${unitName} — ${dmg} HQ damage`);
-  if (tgt === null) {
-    const pd = applyPostDestructionEffects(s, { unitKey: targetKey, dyingUnit: unit, sourceUnitKey: null });
-    s = pd.state;
-    log.push(...pd.log);
-  }
-  s = recalculateDynamicStats(s);
-  return { state: s, log, becameSuppressed };
-}
-
 // Apply the effect of a targeted command to the clicked tile.
 function applyCommandEffect(commandId, targetKey) {
   const active = state.initiative;
@@ -3567,31 +3481,6 @@ document.getElementById('btn-end-turn').addEventListener('click', () => {
     }
   }
 
-  // Supply Runner ability: at start of turn, if on a controlled objective → +1 Fuel
-  const supplyLog = [];
-  for (const { key: bk, unit: u } of unitsOnBoard(newState, newActive)) {
-    if (CARD_BY_ID[u.cardId]?.id !== 5) continue;
-    if (getAdjacentKeys(bk).some(k => newState.objectives[k]?.controller === newActive)) {
-      newState = { ...newState, [newActive]: gainFuel(newState[newActive], 1, false) };
-      supplyLog.push(`Supply Runner: controlled objective → +1 Fuel`);
-    }
-  }
-
-  // Quartermaster ability: at start of turn, if you control every objective on the map → draw 1.
-  // Wording was "both objectives" until 2026-08-19 — accurate back when every map had exactly
-  // 2 slots; now objectiveSlots varies 1-4 per map (see maps.js), so this checks ALL objectives
-  // currently placed, whatever the count, same as it always has (objs.every(...) was never
-  // hardcoded to 2 — only the card text and this log line's wording were).
-  for (const { unit: u } of unitsOnBoard(newState, newActive)) {
-    if (CARD_BY_ID[u.cardId]?.id !== 69) continue;
-    const objs = Object.values(newState.objectives);
-    const controlsAll = objs.length > 0 && objs.every(o => o.controller === newActive);
-    if (controlsAll) {
-      newState = { ...newState, [newActive]: drawCards(newState[newActive], 1) };
-      supplyLog.push(`Quartermaster: controls every objective on the map → draw 1`);
-    }
-  }
-
   const { state: afterEffects, log: effectLog, pendingArtyHits, pendingPick } = applyObjectiveEffects(newState, newActive, null);
   // Synced onto state (not just a local variable) so the controlling player's own client — not just
   // whoever clicked End Turn — knows to enter arty-targeting mode. See syncArtyTargetingUiState().
@@ -3608,7 +3497,7 @@ document.getElementById('btn-end-turn').addEventListener('click', () => {
   pendingHeroTargets = null;
 
   const newRound = Math.ceil(newState.turn / 2);
-  const turnLog = [...directHQLog, `--- Round ${newRound} — ${newState.initiative.toUpperCase()} ---`, ...supplyLog, ...effectLog];
+  const turnLog = [...directHQLog, `--- Round ${newRound} — ${newState.initiative.toUpperCase()} ---`, ...effectLog];
   // Direct HQ source-unit pulse — set on the exact keys evaluateDirectHQ reports converted
   // this sweep, so it plays on the very next render alongside everything else this commit
   // already redraws (same transitionFlags mechanism as Suppressed/Destroyed).
@@ -3677,7 +3566,6 @@ document.getElementById('btn-cancel').addEventListener('click', () => {
   pendingHeroId = null;
   pendingHeroColumn = null;
   pendingHeroTargets = null;
-  pendingHalftrackMove = null;
   selectedHandCardId = null;
   pendingAttackerKey = null;
   pendingCommandId = null;
@@ -3944,7 +3832,7 @@ for (const role of ['p1', 'p2']) {
 
 // ── Keyboard shortcuts ────────────────────────────────────────────────────────
 
-// These 6 "pick one of N" modals (Forward Observer, Radio Operator, Field Reserves, rotate
+// These 5 "pick one of N" modals (Forward Observer, Field Reserves, rotate
 // direction, Craft, Hero deploy) all commit their Fuel/cost/activation-lock BEFORE opening —
 // by design, none of them refund on cancel (see e.g. confirmCraftPick's own doc comment) — and
 // none has an external close path, only their own confirm handler. Found 2026-09-02: Escape
@@ -4023,7 +3911,7 @@ if (isOnline && myRole === 'p2') {
   });
 }
 
-// ── Shared deck-look card preview (Forward Observer, Radio Operator, Field Reserves) ──
+// ── Shared deck-look card preview (Forward Observer, Field Reserves) ──────────
 // Read-only card face — same markup renderHand uses for a unit/command/mission hand card,
 // but built directly (these modals show cards that are NOT in hand yet, mid-choice).
 function buildPreviewCardDiv(card) {
@@ -4045,8 +3933,8 @@ function buildPreviewCardDiv(card) {
 
 // ── Forward Observer modal ────────────────────────────────────────────────────
 
-// Shared by the 3 "look at N cards from your deck" modals (Forward Observer, Radio
-// Operator, Field Reserves) — each builds one .fo-slot per drawn card the same way and only
+// Shared by the 2 "look at N cards from your deck" modals (Forward Observer and Field
+// Reserves) — each builds one .fo-slot per drawn card the same way and only
 // differs in what buttons a slot gets and how picking one resolves. `buildExtras(slot, card,
 // cardId, i)` appends whatever's specific to that modal onto the freshly-built slot.
 function renderDeckPeekSlots(containerId, drawn, buildExtras) {
@@ -4121,33 +4009,6 @@ function confirmFO() {
 }
 
 document.getElementById('fo-confirm').addEventListener('click', confirmFO);
-
-// ── Radio Operator modal (111) ────────────────────────────────────────────────
-// Only 2 cards and a binary choice, so it resolves on a single click — no separate
-// Confirm button, unlike Forward Observer's 3-way keep/top/bottom assignment.
-let radioOpPlayer = null;
-
-function showRadioOperatorModal(drawn, player) {
-  radioOpPlayer = player;
-  renderDeckPeekSlots('radio-op-cards', drawn, (slot, card, cardId) => {
-    const btn = document.createElement('button');
-    btn.className = 'fo-pos-btn fo-top';
-    btn.textContent = 'PUT ON TOP';
-    btn.addEventListener('click', () => confirmRadioOperator(cardId, drawn.find(id => id !== cardId)));
-    slot.appendChild(btn);
-  });
-  document.getElementById('radio-op-modal').style.display = 'flex';
-}
-
-function confirmRadioOperator(topId, bottomId) {
-  document.getElementById('radio-op-modal').style.display = 'none';
-  const ps = state[radioOpPlayer];
-  const s = { ...state, [radioOpPlayer]: { ...ps, deck: [topId, ...ps.deck, bottomId] } };
-  const topName = CARD_BY_ID[topId]?.name ?? '?';
-  const bottomName = CARD_BY_ID[bottomId]?.name ?? '?';
-  commitState(s, [`Radio Operator: ${topName} → top · ${bottomName} → bottom`]);
-  radioOpPlayer = null;
-}
 
 // ── Field Reserves modal (125) ────────────────────────────────────────────────
 // Look at top 4; may take ONE Unit into hand; the rest go to the bottom, original order

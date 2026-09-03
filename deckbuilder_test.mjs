@@ -1,6 +1,6 @@
 // Smoke test: build a deck in the builder, save it, verify it's playable from the lobby.
-// Requires the dev server: npx serve . -p 3000
-// Run with: node deckbuilder_test.mjs
+// Requires the dev server: npm run dev
+// Run in another terminal with: npm run test:browser
 import { chromium } from 'playwright';
 import { STARTER_DECKS } from './js/decks.js';
 

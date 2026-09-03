@@ -53,15 +53,6 @@ async function handleForwardObserver(page) {
   await page.waitForTimeout(30);
 }
 
-// Radio Operator (111) on-play: look at top 2 of the deck, put one on top. Binary choice,
-// resolves on a single click — no separate Confirm button (see game.js's showRadioOperatorModal).
-async function handleRadioOperator(page) {
-  const modal = page.locator("#radio-op-modal");
-  if (!(await modal.isVisible().catch(() => false))) return;
-  await page.locator("#radio-op-cards .fo-pos-btn").first().click().catch(() => {});
-  await page.waitForTimeout(30);
-}
-
 // Change Formation (C16) / Field Coordinator's Hero Power (H11): direction doesn't affect
 // scoring, always CW.
 async function handleRotateDirection(page) {
@@ -183,7 +174,6 @@ async function playTurnSmart(page) {
 
   for (let i = 0; i < 12; i++) {
     await handleForwardObserver(page);
-    await handleRadioOperator(page);
     await handleRotateDirection(page);
     await handleCraftPicker(page);
     // Must run before flushPendingUiState below — there's no Cancel button for
@@ -356,11 +346,9 @@ async function playOneGame(page) {
 
     await handleHeroDeploy(page);   // reinforcement can fire at the start of a turn
     await handleForwardObserver(page);
-    await handleRadioOperator(page);
     await handleArtyTargeting(page);
     await playTurnSmart(page);
     await handleForwardObserver(page);
-    await handleRadioOperator(page);
     await handleRotateDirection(page);
     await handleCraftPicker(page);
 

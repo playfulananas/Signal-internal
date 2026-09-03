@@ -2,7 +2,7 @@
 // P2's turns resolve on their own with no P2-side clicks from this script at all.
 //
 // Fixed 2026-08-31: this used to navigate to /game?ai=1 (not /game.html?ai=1) on a claimed
-// theory that the local `npx serve` dev server clean-URL-redirects /game to game.html while
+// theory that the old `npx serve` dev server clean-URL-redirects /game to game.html while
 // dropping the query string on .html requests. Verified directly (Playwright): /game?ai=1
 // 404s outright in this environment — the redirect theory was simply wrong, not a
 // version-specific quirk. This script had never actually run successfully as a result.
