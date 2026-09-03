@@ -13,6 +13,14 @@ const ROUNDS_TO_PLAY = 3;
 
 async function readDebug(page) { return page.evaluate(() => window.__SIGNAL_DEBUG__ ?? null); }
 
+async function resolveHeroDeployIfShown(page) {
+  const modal = page.locator("#hero-deploy-modal");
+  const shown = await modal.waitFor({ state: "visible", timeout: 2200 }).then(() => true).catch(() => false);
+  if (!shown) return;
+  await modal.locator(".hero-card").first().click();
+  await modal.locator(".hero-zone-pick:not([disabled])").first().click();
+}
+
 (async () => {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
@@ -42,6 +50,9 @@ async function readDebug(page) { return page.evaluate(() => window.__SIGNAL_DEBU
       break;
     }
     // P1 does nothing but pass — this test only cares whether P2's turn resolves unattended.
+    // Hero deployment is a mandatory start-of-turn choice and appears after an intentional
+    // 1800ms animation delay, so complete it before trying to click End Turn.
+    await resolveHeroDeployIfShown(page);
     await page.locator("#btn-end-turn").click();
 
     // Poll for control to return to P1. The bot can take up to 12 actions, and each action may
