@@ -22,12 +22,12 @@
 //   fuel: number,               — capped at fuelCap (default 9)
 //   fuelCap: number,            — per-player storage cap; a Hero can raise it
 //   pendingFuelGain: number,    — delayed fuel (Industrial Surge), added at next startOfTurn
-//   hand: number[],             — cardIds in hand
-//   deck: number[],             — cardIds remaining (top = index 0)
+//   hand: string[],             — cardIds in hand
+//   deck: string[],             — cardIds remaining (top = index 0)
 //   pendingDiscounts: [{ appliesTo, column, amount, min }],  — unspent Fuel discounts
 //   pendingUnitBuffs: [{ appliesTo, amount }],  — unspent stat buffs (Deathrattle: Convoy Escort)
 //   fieldMarshalUses: number,   — Field Marshal (144) activation count this match, never reset
-//   discardPile: number[],      — cardIds destroyed/resolved/discarded (doc 02 Q026-Q028): destroyed
+//   discardPile: string[],      — cardIds destroyed/resolved/discarded (doc 02 Q026-Q028): destroyed
 //                                 Units, resolved Commands, and any card that would enter hand while
 //                                 hand is already at the 10-card max. Tracked but currently has no
 //                                 gameplay effect that reads it (no retrieval/counting/targeting) —
@@ -229,13 +229,14 @@ function createPlayerState(deckCardIds, heroIds = []) {
 
 // ── Turn transitions ─────────────────────────────────────────────────────────
 
-// Active player gains 3 fuel, capped at 6, then pendingFuelGain (Industrial Surge) on top of that,
-// uncapped — may push Fuel past 6 for this turn only. Resets pendingFuelGain to 0.
+// Active player gains 3 Fuel up to fuelCapOf (9 normally, 11 with Logistics Chief), then adds
+// pendingFuelGain uncapped. The temporary excess may sit above the normal cap. Resets
+// pendingFuelGain to 0.
 // Clears grantedKeywords from all units owned by the active player.
 export function startOfTurn(state) {
   const activePlayer = state.initiative;
   let ps = { ...state[activePlayer] };
-  ps = gainFuel(ps, 3); // base per-turn gain, capped at 6 as normal
+  ps = gainFuel(ps, 3); // base per-turn gain, capped at fuelCapOf(ps)
   ps = gainFuel(ps, ps.pendingFuelGain, false); // Industrial Surge — may exceed the storage cap this turn
   ps.pendingFuelGain = 0;
   // Hero Phase allowances refresh here rather than in endTurn: this runs for the active
@@ -516,7 +517,7 @@ export function getSideValue(boardUnit, dir) {
   return Math.max(0, total);
 }
 
-// Returns card's base keyword(s) + tempKeywords + grantedKeywords.
+// Returns card's base keyword(s) + temporary, owner-turn-granted, and permanent keywords.
 // card.keyword may be a string or array.
 export function getKeywords(boardUnit) {
   const card = CARD_BY_ID[boardUnit.cardId];

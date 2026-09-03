@@ -1,158 +1,111 @@
 # SIGNAL — Developer Notes
 
-Quick orientation for anyone reading the code cold.
+Quick orientation for someone opening the current prototype for the first time. For detailed
+rules status, use `STATUS.md`; for historical changes, use `CHANGELOG.md`.
 
----
+## Run and verify
 
-## File map
-
-```
-digital/
-├── index.html          — lobby (Create Game / Join Game / Local Play)
-├── game.html           — game screen HTML shell only (no logic)
-├── package.json        — one script: npm run dev
-│
-├── js/
-│   ├── game.js         — ALL game logic: event handlers, FSM, turn flow, objectives, missions
-│   ├── state.js        — pure state functions (no DOM): endTurn, startOfTurn, applyHit, etc.
-│   ├── combat.js       — attack resolution: getAttackableTargets, resolveSingleAttack
-│   ├── cards.js        — card data array (CARDS) + CARD_BY_ID lookup map
-│   ├── maps.js         — map terrain layouts + canPlaceOnTerrain
-│   ├── ui.js           — DOM rendering: renderBoard, renderHand, renderHQ, appendLog
-│   └── firebase.js     — Firebase read/write: pushState, subscribeState
-│
-└── css/
-    └── game.css        — all styles
+```sh
+npm run dev
+npm test
+npm run test:browser
 ```
 
-**The split that matters:** `state.js` / `combat.js` are pure functions with no DOM access — safe to unit test. `game.js` owns the DOM and the mutable `state` variable.
+`npm run dev` starts the repository-owned static server at `http://localhost:3000`.
+`npm run test:browser` expects that server to be running. GitHub Actions runs both the unit
+suite and browser smoke suite automatically.
 
----
+## Current module map
 
-## State shape
-
-```js
-state = {
-  turn: Number,
-  initiative: 'p1' | 'p2',
-  mapId: String,
-  board: { "row,col": BoardUnit | null },   // e.g. "2,3"
-  objectives: { "row,col": ObjectiveState },
-  log: String[],
-  p1: PlayerState,
-  p2: PlayerState,
-}
-
-PlayerState = {
-  hq: Number,           // starts 30, win condition
-  fuel: Number,         // max 6, gain 3/turn
-  hand: Number[],       // array of card IDs
-  deck: Number[],       // remaining deck (top = index 0)
-  missions: ActiveMission[],
-  pendingFuelGain: Number,
-  tempFuelDiscount: Number,
-  overrun: Boolean,
-  killsThisTurn: Number,
-  totalKills: Number,
-}
-
-BoardUnit = {
-  cardId: Number,
-  owner: 'p1' | 'p2',
-  state: 'normal' | 'suppressed' | 'destroyed',
-  armorHits: Number,      // hits absorbed by armor so far
-  tempKeywords: String[], // keywords granted this turn (Guard, Armor, etc.)
-  tempSideBonus: Number,  // +N to all four sides this turn
-  justPlaced: Boolean,    // cleared at end of turn
-}
-```
-
----
-
-## UI state machine (game.js)
-
-The variable `uiState` controls what a board click does:
-
-| uiState | Board click behaviour |
+| File | Responsibility |
 |---|---|
-| `"idle"` | Select a friendly unit → enter targeting |
-| `"placing"` | Place the selected hand card on an empty tile |
-| `"targeting"` | Resolve attack from `pendingAttackerKey` onto clicked enemy |
-| `"command-targeting"` | Resolve targeted command (`pendingCommandId`) onto clicked tile |
+| `js/cards.js` | Active Unit, Hero, Command, and Objective definitions |
+| `js/state.js` | Pure state factories and transitions, including unit identity and attack allowances |
+| `js/combat.js` | Pure targeting, attack, destruction, keyword, Maneuver, and Craft rules |
+| `js/interaction.js` | Pure rules for whether the player may start/cancel another action |
+| `js/sync.js` | Pure online revision, remote-normalization, and compatibility helpers |
+| `js/ui.js` | Board, hand, Hero, HQ, effects, and battle-log rendering |
+| `js/firebase.js` | Firebase reads, subscriptions, lobby writes, and revision-checked game writes |
+| `js/decks.js` / `js/deckbuilder.js` | Deck rules, starter decks, and custom deck builder |
+| `js/debug.js` | Pure debug-panel state transitions; the panel remains available online for testing |
+| `js/bot_ai.js` / `js/bot_player.js` | Shared bot scoring and in-page P2 driver |
+| `js/game.js` | Browser controller: setup, turn flow, card dispatch, UI events, and sync orchestration |
 
-`uiState` resets to `"idle"` after every resolved action and on every remote state receive.
+The important dependency direction is `cards → state → combat/debug/bot → UI/controller`.
+Pure modules do not access the DOM or Firebase, which keeps their rules easy to test.
 
----
+## Identity and card IDs
 
-## Turn flow
+Card IDs are strings such as `I1`, `T23`, `H01`, and `C01`. A card ID identifies the printed
+definition, not a physical copy. Every deployed Unit also has an `instanceId` such as `unit-7`.
+That identity follows the Unit when it Maneuvers and distinguishes two copies of the same card.
 
-```
-End Turn click
-  → checkActiveMissions (endOfTurn) for current player
-  → reset killsThisTurn
-  → endTurn()           — swap initiative, clear tempKeywords/tempSideBonus/justPlaced
-  → drawCards(1)        — new active player draws
-  → startOfTurn()       — +3 fuel, decrement mission timers
-  → updateObjectiveLevels()
-  → checkObjectiveControl()
-  → applyObjectiveEffects()
-  → commitState()
-```
+`nextUnitInstance` in shared game state supplies these IDs. Older online matches without them
+receive deterministic `legacy-unit-row-col` compatibility IDs when loaded.
 
----
+## Modifier lifetimes
 
-## Firebase sync
+Do not use a large turn count as a substitute for permanence.
 
-Two functions in `firebase.js`:
-- `pushState(gameId, state)` — writes the whole state to Firebase under the game ID
-- `subscribeState(gameId, callback)` — fires callback on every remote write
+| Field | Lifetime |
+|---|---|
+| `tempSideBonus` | Until the current turn ends |
+| `grantedSideBonus` + `sideBonusTurns` | Until the relevant future owner-turn refresh |
+| `permanentSideBonus` | Rest of the match |
+| `objSideBonus` | Recomputed from Objectives |
+| `dynamicSideBonus` | Recomputed from live Inspire/Muster relationships |
+| `debugSideBonus` | Until a tester changes it |
+| `perm_n/e/s/w` | Permanent, printed-side-relative H24 bonus |
 
-**The array problem.** Firebase strips empty arrays and converts non-empty arrays to `{0: x, 1: y}` objects on retrieval. Every receive goes through `normalizeFirebaseState()` in `game.js`, which restores all arrays. If you add a new array field to state, add it to `normalizeFirebaseState` too or it will break in multiplayer.
+`getSideValue()` is the authoritative sum. Remote normalization migrates the retired
+`sideBonusTurns: 99` representation into `permanentSideBonus`.
 
-**Echo filtering.** When P1 pushes state, Firebase also fires P1's own subscription. We filter this with `_pushId`: every push attaches a random ID, stored in `myLastPushId`. On receive, if `remoteState._pushId === myLastPushId` we skip it.
+## Attack allowance
 
----
+The Unit object is the only attack authority:
 
-## Card IDs
+- `persistentSpent` records ordinary/Double Attack uses.
+- `tempExtraAttacks` and `tempExtraAttacksSpent` record temporary additional attacks.
+- `remainingAttacks()`, `spendAttack()`, and `resetPersistentAttacks()` are the shared API.
 
-Cards are identified by stable numeric IDs throughout the codebase. `CARD_BY_ID` in `cards.js` is a `Map<number, Card>` built from the `CARDS` array. The card list CSV in the parent folder is the source of truth for design; `cards.js` is the coded version.
+There is no second tile-keyed attack map. Because the counters live on the Unit, Maneuver
+naturally carries its attack history with it.
 
-Card types: `"unit"` | `"command"` | `"mission"` | `"objective"`.
+## UI decisions
 
----
+`uiState` describes the current board-click mode. `getInteractionDecision()` combines that
+with pending Objective/Artillery choices, blocking modals, Hero repositioning, and online-sync
+status. Mandatory choices cannot be dismissed through the generic Cancel button; voluntary
+targeting can be cancelled.
 
-## Keywords
+## Online state safety
 
-Keywords live in two places per unit:
-- `card.keyword` — base keyword from the card definition (one per card max)
-- `unit.tempKeywords[]` — keywords granted this turn (cleared at `endTurn`)
+Lobby setup still uses narrow or pre-game writes. Once a shared game snapshot exists, every
+full gameplay update has a monotonically increasing `_revision` and is committed with a Firebase
+transaction. A write succeeds only when the server still has the revision on which it was based.
 
-Always use `getKeywords(unit)` from `state.js` — it merges both.
+If a stale update loses that comparison, it cannot overwrite the newer move. The client reloads
+the server snapshot and displays a retry message. If connectivity fails, gameplay actions pause
+until a shared snapshot is received again. `_pushId` still filters a client's own subscription
+echoes; revision comparison also prevents an older echo from rolling optimistic local state back.
 
----
+This prevents accidental lost updates. It is not player authentication or private-hand security;
+those require Firebase rules and a different public/private data layout.
 
-## Hit sequence
+## Retired content
 
-```
-applyHit(unit) in state.js:
+Missions, old numeric-ID cards, Mobile Command Halftrack, Radio Operator, Supply Runner,
+Quartermaster, and reactive Empty-Board HQ Strike belong to earlier prototypes. Their history is
+preserved in `js/archive/`, archived tests, and Git, but they are not runtime branches in the
+current string-ID Set 1 game.
 
-No armor:    normal → suppressed (1 HQ dmg) → destroyed (2 HQ dmg)
-Armor:       normal → normal (armor absorbs) → suppressed → destroyed
-Heavy Armor: normal → normal → normal → suppressed → destroyed
-```
+## Safe change checklist
 
-HQ damage is returned from `applyHit` and from `resolveSingleAttack`. Callers apply it to `state.p1.hq` / `state.p2.hq`.
-
----
-
-## Known gaps (not yet implemented)
-
-See `CLAUDE.md` section "Digital prototype — implementation status" for the full list. Short version (verified against code 2026-07-07):
-
-- Bridge, Radar Station, Airfield L1 objective effects still need targeting UI (log-only, manual resolution)
-- Coordinated Strike, Pincer Maneuver commands still need multi-select UI (no logic at all)
-- Inspire, Breakthrough keywords are data tags only, no behavior wired
-- Missions: full system is live, including Factory L2 Tank discount and Forward Observer's deck-order modal
-- Deck builder: currently 4 hardcoded starter decks
-- GitHub Pages deploy: live, no local server needed
-- Debug panel (`js/debug.js` + wiring in `js/game.js`) is live — see `specs/2026-07-08-debug-panel-design.md` for full scope.
+1. Use string card IDs and the shared `CARD_BY_ID` registry.
+2. Create deployed Units with `createBoardUnit()`.
+3. Use attack/modifier helpers instead of adding a parallel counter.
+4. Route a new suppression source through the ordered `UNIT_SUPPRESSED` event.
+5. Add new remote array fields to normalization.
+6. Keep every local runtime import on the shared `?v=20260902` cache version.
+7. Run `npm test`; add a browser scenario when DOM or multiplayer behavior changes.
+8. Do not deploy or merge into the protected client-testing repository without explicit approval.

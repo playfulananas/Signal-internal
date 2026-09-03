@@ -9,36 +9,39 @@ Newest first.
 
 ---
 
-## 2026-09-02 — Fixed `?v=` cache-bust drift re-fragmenting `cards.js` into separate module instances (Craft recurrence)
+## 2026-09-02 — Internal stability and architecture pass
 
-While live-verifying the click-target fix below with an actual screenshot (no test-harness version
-unification), `confirmCraftPick` crashed with `TypeError: Cannot read properties of undefined
-(reading 'name')` and no card reached hand — a clean repeat of the exact bug already fixed once on
-2026-09-01 ("module-instance fragmentation"). Cause was the same: `js/game.js` had drifted to
-importing `cards.js?v=1788362786` while `js/combat.js` still imported `cards.js?v=1788297094` (and
-several other files carried their own independent stale values) — different query strings resolve
-to different ES module instances in the browser, so `registerGeneratedCard` (called from
-`combat.js`'s copy) populated a `CARD_BY_ID` object that `game.js`'s own copy never saw. The
-2026-09-01 fix unified all `?v=` strings at the time, but nothing stops a later single-file edit
-from re-versioning just that one file and quietly reintroducing the split — which is exactly what
-happened here. Fixed the same way: unified every `.js?v=` import across `digital/js/*.js`,
-`index.html`, and `game.html` to one shared value again. **Not a durable fix** — this is a
-structural footgun (manual per-file cache-busting with no enforcement), the second time it's
-caused a full break of Craft specifically; worth a follow-up to make version drift impossible
-rather than just re-synced (e.g. a single shared version constant/build step) rather than relying
-on remembering to re-run the unification by hand each time.
+Completed on the isolated `codex/stability-and-architecture` branch of
+`playfulananas/Signal-internal`. The client-testing `Shonetronic/Signal` repository and its live
+GitHub Pages site were not configured as remotes, changed, merged, or deployed. The debug panel
+was deliberately retained for online and local testing.
 
-## 2026-09-02 — Fixed Craft candidate cards being unclickable in the picker modal
-
-Follow-up to the Escape/E fix below: player reported the same symptom again ("picked an aircraft
-but haven't received it in hand") after explicitly ruling out pressing Escape. Reproduced live:
-`showCraftPickerModal` built each candidate's preview via `buildPreviewCardDiv`, a plain `<div>`
-with no click listener — only the separate "CRAFT THIS" button beneath it called
-`confirmCraftPick`. Clicking the card itself (the natural move, since hand cards and hero-deploy
-cards ARE directly clickable everywhere else in this game) was a silent dead click: modal stayed
-open, the Fuel/activation cost was already spent by `tryActivateHero` before the modal opened, and
-nothing was added to hand. Fixed by attaching the same `confirmCraftPick(card.id)` handler (plus
-`cursor: pointer`) to the preview card, so either the card or the button now works.
+- Standardized every runtime module import on one cache-version query and kept card IDs as
+  strings in the custom deck builder, preventing split browser registries and mixed ID formats.
+- Removed the tile-keyed duplicate attack tracker. `persistentSpent`, `tempExtraAttacks`, and
+  `tempExtraAttacksSpent` on each BoardUnit are now the sole attack authority, including after
+  Maneuver.
+- Added pure interaction locks so required Objective/Artillery/Maneuver choices and blocking
+  modals must finish before another action or End Turn; voluntary targeting remains cancellable.
+- Routed every suppression reaction through the ordered `UNIT_SUPPRESSED` event path so H06 and
+  future reactions behave consistently.
+- Added repository-owned development serving, unit/browser npm scripts, and GitHub Actions jobs
+  for the pure suite plus deck-builder and in-page-AI browser smoke tests.
+- Removed retired live paths for Missions, old numeric-ID cards, Mobile Command Halftrack, Radio
+  Operator, Supply Runner, Quartermaster, and reactive Empty-Board HQ Strike. Their historical
+  record remains in archives, earlier changelog entries, and Git.
+- Added monotonically revisioned Firebase gameplay transactions. A stale write can no longer
+  silently replace a newer move; the client restores the latest snapshot, reports the conflict,
+  and asks for a retry. Connection failures pause actions until shared state returns. This is
+  concurrency protection, not authentication or private-hand security.
+- Split permanent all-side bonuses from timed grants and added compatibility migration for old
+  `sideBonusTurns: 99` snapshots.
+- Added `instanceId` to every deployed Unit, allocated by shared `nextUnitInstance`; older online
+  matches get deterministic compatibility IDs. Moving a Unit preserves its physical identity.
+- Replaced stale developer/status documentation and added
+  `docs/INTERNAL_STABILITY_CHANGES.md`, a non-technical explanation and safe rollout checklist.
+- Pure-function verification: 226/226 passing. Browser smoke is configured for CI; this machine
+  still needs the Playwright Chromium binary before the same browser run can execute locally.
 
 ---
 

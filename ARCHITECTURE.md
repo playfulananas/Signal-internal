@@ -1,10 +1,16 @@
 # SIGNAL Digital Prototype — Living Architecture Doc
 
-**Purpose:** Every subagent reads this before starting a task and updates it after completing one. This is the single source of truth for how the codebase is structured. The DEVPLAN tells you *what* to build; this doc tells you *how* things are built so far.
+**Purpose:** Every contributor or coding agent reads this before starting a task and updates it
+after completing one. This is the single source of truth for how the codebase is structured. The
+DEVPLAN tells you *what* to build; this doc tells you *how* things are built so far.
 
 **Rule:** If you write code that contradicts something in this doc, update this doc. If something here is wrong, fix it here. Never silently drift.
 
-**Doc set (2026-08-31):** `STATUS.md` is the current-state implementation summary (edited in place, no history); `CHANGELOG.md` is the append-only detailed history (never edited after the fact); this file is the code-structure reference, with its own terse Session Log below for quick module-level orientation. Don't duplicate the same fact across all three — put current facts in STATUS.md, structure/architecture here, and narrative "what happened and why" in CHANGELOG.md.
+**Doc set (updated 2026-09-02):** `STATUS.md` is the current-state implementation summary
+(edited in place, no history); `CHANGELOG.md` is the append-only detailed history; this file is
+the code-structure reference, with its own terse Session Log below for quick module-level
+orientation. Put current facts in STATUS.md, structure here, and narrative history in
+CHANGELOG.md.
 
 ---
 
@@ -36,6 +42,7 @@
 | 22 | 2026-08-14 | Empty-Board HQ Strike (GDD Locked Decision) — `canStrikeHQDirectly`/`resolveEmptyBoardStrike` in `combat.js`, wired into all 3 places a unit's attack can resolve in `game.js` (idle click, post-placement auto-target, Double Attack's 2nd-hit re-entry — the last of which also fixes a pre-existing bug where a Double Attack unit's 2nd hit was silently lost if the 1st hit emptied the board). `bot_ai.js`/`bot_player.js`/`selfplay_test.mjs` updated so the bot actually uses it. See `tests/empty_board_hq_strike.test.mjs`. |
 | 23 | 2026-08-31 | **Run 1 — Set 1 truth-lock migration.** Full card pool replaced (65 Units/25 Heroes/35 Commands/5 Objectives, string ids), Naval class and Deathrattle cut (archived), Guard rewritten, Direct HQ built to replace the old reactive Empty-Board HQ Strike, shared destruction chain, Blast/Barrage/Rally/Inspire/Muster/Last Stand/Breakthrough/Maneuver/Escalate/Craft all newly built. See STATUS.md for full detail — this table row exists mainly to keep the log continuous; Run 1's narrative lives in STATUS.md/CLAUDE.md, not here. |
 | 24 | 2026-08-31 | **Run 2 — Maps/Objectives migration**, same day, separate pass, against doc 04 (Objectives & Maps Truth). Normandy + Midway cut (archived in `maps.js`'s new `ARCHIVED_MAPS`); Stalingrad/Kursk/El Alamein/Ardennes kept with corrected objective-slot geometry; all water/Naval terrain code removed. `applyObjectiveEffects` (game.js) rewired from dead pre-Run-1 numeric-id code to the live O1-O5 scheme — this was the actual bug: every Objective had done nothing at all since Run 1 shipped. Universal 1/1/2/2 HQ backbone, fixed column-major multi-objective resolution order with lethal-stop, and all 5 objectives' L1-L4 secondary effects now execute for real. `discountFor` gained an `appliesTo: 'unit'` dimension. Objective identities now randomize after mulligan, not before. `tests/maps.test.mjs` rewritten for the 4-map reality. |
+| 25 | 2026-09-02 | **Internal stability/architecture pass.** Standardized browser module identity and string IDs; made BoardUnit attack counters the sole attack authority; locked conflicting actions during pending choices; routed suppression reactions through ordered events; added CI and browser smoke jobs; removed retired runtime paths; added revision-checked Firebase gameplay writes; separated permanent/timed bonuses; and gave each deployed Unit a stable instance ID. |
 
 *(Session Log entries above are milestone summaries, not one-per-commit — see `git log` for full commit-level history.)*
 
@@ -49,8 +56,10 @@
 | `js/maps.js` | `MAPS` (4 live maps), `ARCHIVED_MAPS` (Normandy/Midway, cut Run 2), `getTerrain`, `canPlaceOnTerrain` | nothing |
 | `js/state.js` | see State API below | `cards.js` |
 | `js/combat.js` | see Combat API below (incl. Hero passives — see below) | `cards.js`, `state.js` |
+| `js/interaction.js` | `getInteractionDecision`, `canCancelInteraction` — pure pending-action/choice locks | nothing |
+| `js/sync.js` | `stateRevision`, `prepareVersionedState`, `shouldAcceptRemoteState`, `normalizeRemoteUnit`, `normalizeRemoteBoard` — pure online revision and compatibility helpers | nothing |
 | `js/ui.js` | see UI API below | `cards.js`, `state.js`, `maps.js` |
-| `js/firebase.js` | see Firebase API below | Firebase SDK (CDN) |
+| `js/firebase.js` | see Firebase API below, including revision-checked gameplay transactions | Firebase SDK (CDN) |
 | `js/debug.js` | `debugAddCard`, `debugSetFuel`, `debugAdjustFuel`, `debugSetHQ`, `debugAdjustHQ`, `debugSetObjective`, `debugSetUnitState`, `debugBuffUnit`, `debugDrawCards`, `debugSkipToTurn` — pure, same `{state, log}` return shape as combat.js | `cards.js`, `state.js` |
 | `js/decks.js` | `DECK_RULES`, `STARTER_DECKS`, `getDeckPool`, `getHeroPool`, `countCopies`, `copyCap`, `validateDeck`, `validateHeroRoster`, `loadCustomDecks`/`saveCustomDeck`/`deleteCustomDeck`/`replaceAllCustomDecks` (localStorage, browser-only), `mergeRemoteDecks` (pure) | `cards.js` |
 | `js/bot_ai.js` | `bestAttackForUnit`, `maxAttacksFor`, `bestExistingAttack`, `findLethal`, `bestPlacement`, `bestDamageCommandTarget` — pure move-scoring, shared by the in-page "vs AI" bot and the Playwright self-play harness so both can never drift from real game rules | `cards.js`, `state.js`, `combat.js`, `maps.js` |
@@ -58,26 +67,33 @@
 | `js/lobbies.js` | `filterStale`, `sortByNewest`, `formatWaiting` — pure list helpers | nothing |
 | `js/lobby-browser.js` | (side-effects only — open lobby list UI: host/browse/join without a code) | `firebase.js`, `lobbies.js`, `maps.js` |
 | `js/deckbuilder.js` | (side-effects only — deck builder page: pool/build/validate/save) | `cards.js`, `decks.js`, `firebase.js` |
-| `js/game.js` | (side-effects only — entry point for `game.html`: FSM, turn flow, event handlers, card-effect dispatch for objectives/commands/Hero powers) | `cards.js`, `state.js`, `combat.js`, `ui.js`, `maps.js`, `firebase.js`, `debug.js`, `decks.js`, `bot_player.js` |
+| `js/game.js` | (side-effects only — entry point for `game.html`: FSM, turn flow, event handlers, card-effect dispatch for objectives/commands/Hero powers, and online-sync orchestration) | `cards.js`, `state.js`, `combat.js`, `interaction.js`, `sync.js`, `ui.js`, `maps.js`, `firebase.js`, `debug.js`, `decks.js`, `bot_player.js` |
+| `scripts/serve.mjs` | repository-owned static development server used locally and in CI | Node built-ins |
 | `game.html` | (entry point) | `js/game.js` |
 | `index.html` | (entry point) | `js/lobby-browser.js` |
 | `deckbuilder.html` | (entry point) | `js/deckbuilder.js` |
 
-**Dependency rule:** `cards.js` and `state.js` must never import from `ui.js`, `firebase.js`, `game.js`, or any UI-facing module. The dependency graph flows one way: cards → state → combat/debug/bot_ai → ui/decks/bot_player → firebase/lobbies → entry points (`game.js`, `deckbuilder.js`, `lobby-browser.js`).
+**Dependency rule:** `cards.js` and `state.js` must never import from `ui.js`, `firebase.js`,
+`game.js`, or any UI-facing module. Rules, interaction, and sync-format helpers stay pure; entry
+points compose them with the DOM and Firebase.
 
 ---
 
 ## State Shape
 
-This is the canonical game state object. Firebase stores this exact shape. Do not add fields without updating this doc.
+This shows the core gameplay shape. `createInitialState`/`createPlayerState` in `js/state.js` are
+the field-level authority; Firebase may also carry transport/setup metadata such as `_pushId` and
+disconnect/mulligan flags. Update this section when adding durable gameplay fields.
 
 ```js
 {
+  _revision: number,           // monotonic online gameplay snapshot version; starts at 0
   turn: number,               // starts at 1, increments on endTurn
   initiative: "p1" | "p2",   // whose turn it is
   phase: "play",              // reserved for future phases; always "play" for now
   p2Joined: boolean,          // set by lobby when opponent joins; not game logic
   mapId: string,              // key into MAPS in maps.js — determines terrain layout
+  readyForPlay: boolean,      // online mulligans/setup finished
 
   p1: PlayerState,
   p2: PlayerState,
@@ -90,11 +106,15 @@ This is the canonical game state object. Firebase stores this exact shape. Do no
   },
 
   objectives: {
-    "row,col": { cardId: number, level: number },
+    "row,col": { cardId: string, level: number, controller: "p1"|"p2"|null },
     // only tiles that have an objective card placed on them
   },
 
-  log: string[],   // last N action strings, appended by commitState
+  log: string[],
+  pendingArtyHits: number,
+  pendingObjectivePick: { objectiveKey: string, sourceKey: string|null } | null,
+  nextUnitInstance: number,
+  generatedCards: { [cardId: string]: CardDefinition },
 }
 ```
 
@@ -102,38 +122,41 @@ This is the canonical game state object. Firebase stores this exact shape. Do no
 
 ```js
 {
-  hq: number,                // HQ HP, starts 30, game ends at 0
-  fuel: number,              // current fuel, max 6
-  pendingFuelGain: number,   // delayed fuel (Industrial Surge), added at next startOfTurn
-  hand: number[],            // cardIds in hand, order matters for display
-  deck: number[],            // cardIds remaining, index 0 = top of deck
-  missions: ActiveMission[], // active mission cards
-  tempFuelDiscount: number,  // discount on next card of matching class (Armored Spearhead)
-}
-```
-
-### ActiveMission
-
-```js
-{
-  cardId: number,
-  turnsRemaining: number,
-  progress: any,   // mission-specific tracking; structure varies by card
+  hq: number,                         // starts 30; game ends at 0
+  fuel: number,
+  fuelCap: number,                    // 9 normally; H02 can raise effective cap to 11
+  pendingFuelGain: number,
+  hand: string[],                     // card IDs, index order is display/draw order
+  deck: string[],
+  discardPile: string[],
+  fatigueCount: number,
+  pendingDiscounts: Discount[],
+  pendingUnitBuffs: UnitBuff[],
+  heroRoster: string[],
+  heroZones: [string|null, string|null, string|null, string|null],
+  heroesActivatedThisTurn: string[],
+  heroActivatedLastTurn: boolean,
+  heroRepositioned: boolean,
+  heroTriggeredThisTurn: { [heroId: string]: true },
+  pendingHeroDiscount: number,
+  heroTaxedColumns: { [column: string]: number },
+  fieldMarshalUses: number,
+  overrun: boolean,
 }
 ```
 
 ### BoardUnit
 
-This shape drifted out of sync with the real one in `state.js` well before Run 1 (missing
-`grantedSideBonus`/`sideBonusTurns`/`debugSideBonus`/`rotation`/`persistentSpent`/
-`tempExtraAttacks`/`tempExtraAttacksSpent`/`dynamicSideBonus`, and — as of 2026-08-31 —
-`permanentKeywords`, the field added to fix Breakthrough/Blitzkrieg Order/Field Repairs
-grants being wiped every turn). Rather than duplicate it here again, **the canonical, current
-BoardUnit shape is the top-of-file comment in `js/state.js`** — read that instead of trusting
-the snippet that used to live here. The one distinction worth restating since it's easy to
-mix up: `grantedKeywords` clears every `startOfTurn` (for "until your next turn" effects like
-Dig In's Guard grant) — a genuinely *permanent* keyword grant (no "until" on the card) must use
-`permanentKeywords` instead, which nothing ever clears.
+The canonical BoardUnit shape is the top-of-file comment in `js/state.js`. Two identity rules are
+especially important:
+
+- `cardId` identifies the printed card definition; `instanceId` identifies this physical copy and
+  follows it through Maneuver.
+- timed bonuses use `grantedSideBonus` plus `sideBonusTurns`; match-long bonuses use
+  `permanentSideBonus`. Never represent permanence with a large turn count.
+
+Likewise, `grantedKeywords` clears at the owner's next `startOfTurn`, while
+`permanentKeywords` never clears automatically.
 
 ---
 
@@ -142,13 +165,19 @@ Dig In's Guard grant) — a genuinely *permanent* keyword grant (no "until" on t
 All functions are **pure** — they return new state, never mutate in place.
 
 ```js
-createInitialState(p1DeckIds: number[], p2DeckIds: number[]) → GameState
+createInitialState(p1DeckIds: string[], p2DeckIds: string[], mapId?: string,
+                   p1HeroIds?: string[], p2HeroIds?: string[]) → GameState
 // Shuffles decks, deals 4 cards to each hand, sets hq=30, fuel=0.
 
+createBoardUnit(state: GameState, cardId: string, owner: "p1"|"p2", overrides?: object)
+  → { state: GameState, unit: BoardUnit }
+// Creates a deployed physical copy with a stable instanceId and advances nextUnitInstance.
+
 startOfTurn(state: GameState) → GameState
-// Active player gains 3 fuel (+pendingFuelGain, capped at 6).
+// Active player gains 3 Fuel up to the effective cap (9 normally, 11 with H02), then applies
+// any explicitly uncapped pending gain.
 // Resets pendingFuelGain to 0.
-// Decrements mission turnsRemaining, removes expired missions.
+// Refreshes Hero and persistent-attack allowances and expires owner-turn grants.
 
 endTurn(state: GameState) → GameState
 // Swaps initiative, increments turn counter.
@@ -158,20 +187,21 @@ updateObjectiveLevels(state: GameState) → GameState
 // Recalculates objective level for current turn and sets it on all placed objectives.
 
 drawCards(playerState: PlayerState, n: number) → PlayerState
-// Draws up to n cards from deck into hand. Stops if deck empty.
+// Resolves n draws sequentially; empty-deck attempts deal escalating Fatigue damage.
 
 spendFuel(playerState: PlayerState, amount: number) → PlayerState
 gainFuel(playerState: PlayerState, amount: number) → PlayerState
 
 getSideValue(boardUnit: BoardUnit, dir: "n"|"e"|"s"|"w") → number
-// Returns card's base side value + tempSideBonus + objSideBonus.
+// Returns the rotated printed value plus temporary, timed, permanent, Objective, debug,
+// dynamic, and printed-side-specific permanent bonuses, floored at 0.
 // Owner-independent — a card's printed N/E/S/W always maps to physical N/E/S/W, same
 // as in hand. (The 2026-07-02 owner-based P2_FLIP was removed 2026-08-14 — it was the
 // other half of a per-viewer board rotation whose visual half was reverted 2026-07-30,
 // left orphaned in the meantime and silently mismatching P2's board display vs hand.)
 
 getKeywords(boardUnit: BoardUnit) → string[]
-// Returns card's base keyword (if any) + tempKeywords + grantedKeywords arrays.
+// Returns printed, temporary, owner-turn-granted, and permanent keywords.
 
 maxArmorHits(boardUnit: BoardUnit) → number
 // Heavy Armor → 2, Armor → 1, else → 0.
@@ -182,8 +212,8 @@ hitsToDestroy(boardUnit: BoardUnit) → number
 applyHit(boardUnit: BoardUnit) → { newUnit: BoardUnit, hqDamage: number }
 // Applies one hit following the sequence:
 //   armorHits < maxArmorHits → absorb (hqDamage = 0, state unchanged)
-//   state === "normal"       → "suppressed" (hqDamage = 1)
-//   state === "suppressed"   → "destroyed"  (hqDamage = 2)
+//   state === "normal"       → "suppressed" (hqDamage = 0)
+//   state === "suppressed"   → "destroyed"  (hqDamage = 2, or 0 with Guard)
 // hqDamage is dealt to the unit owner's HQ (the one being attacked).
 
 attackBeats(attacker: BoardUnit, attDir: "n"|"e"|"s"|"w", defender: BoardUnit) → boolean
@@ -201,13 +231,15 @@ objectiveLevel(turn: number) → 0|1|2|3|4
 ## Turn Structure (locked)
 
 On your turn:
-1. Gain 3 fuel (startOfTurn)
-2. Play cards from hand and/or attack with board units — in any order, as many times as you have fuel/targets
-3. **Placing a unit** → immediately enter targeting mode: player must click 1 adjacent enemy to attack (or cancel, which returns the card to hand and refunds fuel)
-4. **Existing alive units** (state === "normal") can each attack once per turn — click the unit, then click 1 adjacent enemy
-5. **Suppressed units** cannot attack but still occupy their tile and count for objectives
-6. **Destroyed units** are removed from the board immediately (tile becomes null, free for new placement)
-7. End Turn
+1. Draw 1 card (except the already-resolved pre-game first draw).
+2. Gain 3 Fuel, refresh attack/Hero allowances, update control and Objective effects, then run
+   any scheduled Hero Phase choice.
+3. Play cards and/or attack in any legal order while Fuel and targets allow.
+4. **Placing a Unit** enters targeting mode; the player finishes the attack or cancels placement.
+5. **Existing normal Units** may use their remaining persistent/temporary attacks; Suppressed
+   Units cannot attack but still occupy tiles and count for Objectives.
+6. Destroyed Units leave the board immediately.
+7. End Turn resolves Direct HQ and cleanup, then starts the opponent's turn sequence.
 
 ## Combat API (`js/combat.js`)
 
@@ -244,7 +276,7 @@ resolveSingleAttack(state: GameState, attackerKey: string, targetKey: string)
 Added 2026-08-01 to 2026-08-13 (Session Log 20). Heroes are a separate fixed roster of 4 cards per player (`type:"hero"` in `cards.js`), never shuffled into the main 30-card deck — see `DECK_RULES.heroRosterSize` in `decks.js`.
 
 **State (`PlayerState`, see `createPlayerState` in `state.js`):**
-- `heroRoster: number[]` — the 4 chosen hero card IDs (fixed for the match).
+- `heroRoster: string[]` — the 4 chosen Hero card IDs (fixed for the match).
 - `heroZones: [id|null, id|null, id|null, id|null]` — index = board column (0-3), value = hero cardId currently deployed in that zone, or `null`. Every hero has a `scope` of `"column"` (only affects its own column) or `"board"` (affects the whole board) — scope is an authoritative field on the card, never inferred from ability text (see `tests/hero_primitives.test.mjs`).
 **Corrected 2026-08-31 (post-Run-1 QA pass) — this whole section was pre-Run-1 stale**: old
 numeric Hero ids, a `heroActivated`/`heroesActivatedEver` shape that no longer exists, and Fuel
@@ -296,13 +328,15 @@ resolves.
 ## UI API (`js/ui.js`)
 
 ```js
-renderBoard(state: GameState, selectedTileKey: string|null, validDropKeys: Set<string>|null, changedKeys?: Set<string>|null, flip?: boolean) → void
-// Writes into #board element. Highlights selectedTileKey, marks validDropKeys green.
-// flip=true reverses row/col iteration so P2 sees board from their side.
-// viewer is derived from flip: flip=true → 'p2' viewer (opponent cards swap N↔S/E↔W in display).
+renderBoard(state: GameState, selectedTileKey: string|null, validDropKeys: Set<string>|null,
+            changedKeys?: Set<string>|null, transitionFlags?: Map|null,
+            terrainBlockedKeys?: Set<string>|null, objectiveTransitionFlags?: Map|null) → void
+// Writes into #board, highlights selections/legal or blocked destinations, and renders transition
+// feedback. Board orientation is fixed for both players; printed directions never viewer-flip.
 
-renderHand(handCardIds: number[], containerId: string, selectedCardId: number|null) → void
-// Writes into element with given id. Marks selectedCardId as selected.
+renderHand(handCardIds: string[], containerId: string, selectedCardId: string|null,
+           extras?: object) → void
+// Writes into the requested hand element and shows live discounts/buffs from extras.
 
 renderHQ(state: GameState) → void
 // Updates #p1-hq, #p2-hq, #p1-fuel, #p2-fuel, #turn-display text content.
@@ -319,7 +353,12 @@ appendLog(entries: string[]) → void
 
 ```js
 pushState(gameId: string, state: GameState) → Promise<void>
-// Writes full state to Firebase at path games/{gameId}.
+// Blind full write reserved for initial/pre-game setup before concurrent gameplay begins.
+
+pushVersionedState(gameId: string, state: GameState, expectedRevision: number)
+  → Promise<GameState>
+// Firebase transaction for gameplay. Commits only if the server revision still equals
+// expectedRevision; otherwise throws state-conflict with the latest server snapshot.
 
 fetchState(gameId: string) → Promise<GameState | null>
 // One-time read. Returns null if game doesn't exist.
@@ -331,7 +370,9 @@ generateGameCode() → string
 // Returns a random 6-character uppercase alphanumeric string.
 ```
 
-**Firebase path convention:** All game data lives at `games/{gameId}`. Never write to any other path.
+**Firebase paths:** shared match snapshots live at `games/{gameId}`; pre-game coordination at
+`lobbies/{gameId}`; discoverable sessions at `openLobbies/{lobbyId}`; and saved custom decks at
+`users/{uid}/decks`. Add a new top-level path only as an explicit data-model decision.
 
 ---
 
@@ -372,16 +413,13 @@ Active and Command has a real implementation; see `STATUS.md` for the current-st
 ### Immutability
 All state transitions return new objects. Never do `state.p1.hq -= 1`. Always do `{ ...state, p1: { ...state.p1, hq: state.p1.hq - 1 } }`.
 
-### Committing a move (game.html)
-```js
-async function commitState(newState, logLines) {
-  state = newState;
-  appendLog(logLines || []);
-  redraw();
-  if (isOnline) await pushState(gameId, state);
-}
-```
-Every action goes through `commitState`. Never write to `state` directly and then call `redraw()` separately.
+### Committing a move (`js/game.js`)
+
+Every gameplay action goes through `commitState`. It updates the local snapshot, appends log
+entries, synchronizes mandatory-choice UI, redraws, and queues an online write. Online gameplay
+writes use `prepareVersionedState` plus `pushVersionedState`; they must not call a blind Firebase
+`set()` directly. A revision conflict restores the newest server state and asks the player to
+retry. A connection failure pauses actions until a shared snapshot arrives again.
 
 ### Tile keys
 Always `"row,col"` strings. Row 0 is top, row 3 is bottom. Column 0 is left, column 3 is right. Never use any other format.
@@ -391,10 +429,14 @@ Always `"row,col"` strings. Row 0 is top, row 3 is bottom. Column 0 is left, col
 
 ---
 
-## Deferred — Do Not Implement Yet
+## Deliberate boundaries / future architecture
 
-**This list was stale as of 2026-08-13 and has been corrected.** Interactive Command effects, Guard targeting enforcement, the deck builder, the win condition popup/screen, and copy limits are all now implemented — this section previously described Phase 1-2 scope from 2026-07-02 and was never updated as those phases completed. Breakthrough and Inspire are no longer "deferred to implement" either — the Breakthrough- and Inspire-keyword cards (Blitz Tank, Tank Destroyer, Vanguard Tank, Field Commander, Chief of Staff) and the entire Commander class were **retired** 2026-08-13 as a balance decision (unimplemented + unbalanced, and the Commander class's strategic-presence role is now covered by Heroes) — see the `retired:true` comments in `cards.js`. Missions are similarly retired (2026-07-30), not deferred — see the dead-code note called out where the codebase's optimization plan removes them.
-
-**Still genuinely incomplete** — check `STATUS.md`'s "Known workarounds / prototype shortcuts" section for the current, authoritative list (Rally Cry choose-2, Artillery Position L2/L4 auto-hit, Bridge return-to-hand, Airfield L1 double-attack-on-placement, Factory L2 Tank discount) rather than duplicating it here, since that list changes faster than this doc gets reviewed.
-
-**One remaining genuine simplification, not a gap to close without discussion:** map orientation is fixed per map rather than agreed/flipped pre-game by both players (the GDD's tabletop rule) — see the comment in `ui.js`'s `renderBoard`. This was a deliberate prototype simplification (reverted from an earlier per-viewer flip attempt on 2026-07-30), not an oversight.
+- Map orientation is fixed per map rather than agreed/flipped before the match. This is a known
+  prototype simplification, not an accidental missing viewer flip.
+- Revision-checked writes prevent accidental lost updates, but do not provide player secrecy or
+  authorization. Private hands/rosters require authenticated per-player data and Firebase-rule
+  changes; do not treat `_revision` as a security boundary.
+- Missions, numeric-ID runtime branches, and reactive Empty-Board HQ Strike are retired. History
+  remains in archives, Git, and older changelog entries; do not reconnect those paths to current
+  Set 1 rules without a new design decision.
+- See `STATUS.md` for current open items rather than duplicating fast-changing product status here.
