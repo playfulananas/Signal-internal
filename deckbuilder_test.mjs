@@ -2,14 +2,11 @@
 // Requires the dev server: npx serve . -p 3000
 // Run with: node deckbuilder_test.mjs
 import { chromium } from 'playwright';
+import { STARTER_DECKS } from './js/decks.js';
 
 const BASE_URL = 'http://localhost:3000';
 const DECK_NAME = 'Smoke Test Deck';
-// 15 cheap Commons ×2 = exactly 30 cards (the v0.4 fixed deck size), no copy-limit issues
-const CARD_NAMES = ['Rifle Squad', 'Riflemen', 'Scouts', 'Supply Runner',
-  'Shock Troopers', 'Trench Runners', 'Light Skirmishers', 'Quartermaster',
-  'Mountain Troops', 'Panzer II', 'Reserve Infantry', 'Field Medic',
-  'Smoke Screen', 'Tactical Withdrawal', 'Recon Jeep'];
+const STARTER = STARTER_DECKS[0];
 
 function fail(msg) { console.error(`FAIL: ${msg}`); process.exitCode = 1; }
 
@@ -22,14 +19,25 @@ try {
   await page.evaluate(() => localStorage.removeItem('signal-custom-decks'));
   await page.reload();
 
-  for (const name of CARD_NAMES) {
-    const row = page.locator('.db-card-row', { hasText: name }).first();
-    await row.click();
-    await row.click();
+  const cardCounts = STARTER.ids.reduce((counts, id) => {
+    (counts[id] ??= []).push(id);
+    return counts;
+  }, {});
+  for (const [id, copies] of Object.entries(cardCounts)) {
+    const row = page.locator(`.db-card-row[data-id="${id}"]`);
+    for (let i = 0; i < copies.length; i++) await row.click();
   }
 
   const count = await page.locator('#db-ap').textContent();
   if (count !== '30 / 30 cards') fail(`expected "30 / 30 cards", got "${count}"`);
+
+  // A legal saved deck also requires four distinct Heroes.
+  await page.locator('.db-filter[data-filter="hero"]').click();
+  for (const id of STARTER.heroIds) {
+    await page.locator(`.db-card-row[data-id="${id}"]`).click();
+  }
+  const heroCount = await page.locator('#db-hero-count').textContent();
+  if (heroCount !== '4 / 4 heroes') fail(`expected "4 / 4 heroes", got "${heroCount}"`);
 
   await page.fill('#db-deck-name', DECK_NAME);
   const saveBtn = page.locator('#db-save');
@@ -41,8 +49,10 @@ try {
   if (saved !== 1) fail('saved deck not listed after save');
 
   // ── 2. Copy-limit guard: third copy is blocked ──
-  const rifle = page.locator('.db-card-row', { hasText: 'Rifle Squad' }).first();
-  if (!(await rifle.getAttribute('class')).includes('maxed')) fail('Rifle Squad not maxed at 2 copies');
+  await page.locator('.db-filter[data-filter="all"]').click();
+  const duplicateId = Object.entries(cardCounts).find(([, copies]) => copies.length === 2)?.[0];
+  const duplicate = page.locator(`.db-card-row[data-id="${duplicateId}"]`);
+  if (!(await duplicate.getAttribute('class')).includes('maxed')) fail(`${duplicateId} not maxed at 2 copies`);
 
   // ── 3. Deck appears in lobby and starts a game ──
   await page.goto(`${BASE_URL}/game.html`);

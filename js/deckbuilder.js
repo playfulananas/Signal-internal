@@ -1,13 +1,13 @@
 // Deck builder page. Pool on the left, working deck on the right.
 // Copy-limit adds are blocked outright; going over/under 30 cards is allowed
 // while editing (meter turns red) but blocks saving.
-import { CARD_BY_ID } from './cards.js?v=1788363405';
+import { CARD_BY_ID } from './cards.js?v=20260902';
 import {
   getDeckPool, getHeroPool, validateDeck, validateHeroRoster, countCopies, copyCap,
   DECK_RULES, STARTER_DECKS, loadCustomDecks, saveCustomDeck, deleteCustomDeck,
   mergeRemoteDecks, replaceAllCustomDecks,
-} from './decks.js?v=1788363405';
-import { initAuth, pushUserDecks, fetchUserDecks } from './firebase.js?v=1788363405';
+} from './decks.js?v=20260902';
+import { initAuth, pushUserDecks, fetchUserDecks } from './firebase.js?v=20260902';
 
 let deckIds = [];
 let heroIds = [];
@@ -179,7 +179,7 @@ document.getElementById('db-filters').addEventListener('click', e => {
 document.getElementById('db-pool').addEventListener('click', e => {
   const row = e.target.closest('.db-card-row');
   if (!row || row.classList.contains('maxed')) return;
-  const id = Number(row.dataset.id);
+  const id = row.dataset.id;
   if (filter === 'hero') heroIds.push(id); else deckIds.push(id);
   redraw();
 });
@@ -187,7 +187,7 @@ document.getElementById('db-pool').addEventListener('click', e => {
 document.getElementById('db-deck-list').addEventListener('click', e => {
   const row = e.target.closest('.db-deck-row');
   if (!row) return;
-  const id = Number(row.dataset.id);
+  const id = row.dataset.id;
   const i = deckIds.indexOf(id);
   if (i !== -1) deckIds.splice(i, 1);
   redraw();
@@ -196,7 +196,7 @@ document.getElementById('db-deck-list').addEventListener('click', e => {
 document.getElementById('db-hero-list').addEventListener('click', e => {
   const row = e.target.closest('.db-deck-row');
   if (!row) return;
-  const id = Number(row.dataset.id);
+  const id = row.dataset.id;
   const i = heroIds.indexOf(id);
   if (i !== -1) heroIds.splice(i, 1);
   redraw();

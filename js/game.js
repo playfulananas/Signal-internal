@@ -1,4 +1,4 @@
-import { CARD_BY_ID, CARDS, ensureGeneratedCard } from './cards.js?v=1788363405';
+import { CARD_BY_ID, CARDS, ensureGeneratedCard } from './cards.js?v=20260902';
 import {
   createInitialState,
   startOfTurn,
@@ -27,15 +27,15 @@ import {
   hasEscalated,
   markEscalateUse,
   expireTempFuelGrant,
-} from './state.js?v=1788363405';
-import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkCounteroffensiveGeneral, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff, getObjectivePickEffectType, computeObjectivePickTargets, describeDynamicSideBonus } from './combat.js?v=1788363405';
-import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones, showFxPopup, drawFxConnector } from './ui.js?v=1788363405';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1788363405';
-import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby, updatePlayerState } from './firebase.js?v=1788363405';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1788363405';
-import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1788363405';
-import { runBotTurn } from './bot_player.js?v=1788363405';
-import { bestHeroDeployment } from './bot_ai.js?v=1788363405';
+} from './state.js?v=20260902';
+import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkCounteroffensiveGeneral, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff, getObjectivePickEffectType, computeObjectivePickTargets, describeDynamicSideBonus } from './combat.js?v=20260902';
+import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones, showFxPopup, drawFxConnector } from './ui.js?v=20260902';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=20260902';
+import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby, updatePlayerState } from './firebase.js?v=20260902';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=20260902';
+import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=20260902';
+import { runBotTurn } from './bot_player.js?v=20260902';
+import { bestHeroDeployment } from './bot_ai.js?v=20260902';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
@@ -4166,14 +4166,7 @@ function showCraftPickerModal(role) {
   candidates.forEach(card => {
     const slot = document.createElement('div');
     slot.className = 'fo-slot';
-    const preview = buildPreviewCardDiv(card);
-    // Found 2026-09-02: the preview card had no click handler, only the "CRAFT THIS" button
-    // did — clicking the card itself (the natural move, since every other card-selection UI in
-    // this game, hand cards and hero-deploy cards, IS directly clickable) silently did nothing,
-    // leaving the modal open with the activation cost already spent and nothing added to hand.
-    preview.style.cursor = 'pointer';
-    preview.addEventListener('click', () => confirmCraftPick(card.id));
-    slot.appendChild(preview);
+    slot.appendChild(buildPreviewCardDiv(card));
     const btn = document.createElement('button');
     btn.className = 'fo-pos-btn fo-top';
     btn.textContent = 'CRAFT THIS';

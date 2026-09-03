@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff } from '../js/combat.js';
-import { CARD_BY_ID, ensureGeneratedCard } from '../js/cards.js';
+import { CARD_BY_ID, ensureGeneratedCard } from '../js/cards.js?v=20260902';
 
 function boardWith(entries) {
   const board = {};
@@ -89,12 +89,6 @@ test('a zero-value side actually occurs across many random27 rolls', () => {
 });
 
 test('craftCandidateToCard produces a real Aircraft card definition, not in the static pool', () => {
-  // Doesn't cross-check the module-level CARD_BY_ID registry here — this test file imports
-  // cards.js via a different specifier (no cache-busting query string) than combat.js's
-  // internal import, so Node's ESM loader treats them as separate module instances with
-  // separate CARD_BY_ID objects; that's a test-harness artifact of the versioned-import
-  // convention, not a real bug (every real file consistently uses the same ?v= suffix).
-  // What actually matters for gameplay — the returned card's shape — is checked directly.
   const candidate = { stats: { n: 6, e: 6, s: 6, w: 6 }, keyword: 'Armor', drawback: 'ownHqDamage' };
   const card = craftCandidateToCard(candidate, 'p1');
   assert.ok(card.id.startsWith('Craft-p1-'), `id should be namespaced by role, got: ${card.id}`);
@@ -102,6 +96,7 @@ test('craftCandidateToCard produces a real Aircraft card definition, not in the 
   assert.equal(card.cost, 1);
   assert.equal(card.generated, true);
   assert.equal(card.craftDrawback, 'ownHqDamage');
+  assert.equal(CARD_BY_ID[card.id], card, 'generated card must be visible through the shared card registry');
 });
 
 test('resolveCraftDrawback: ownHqDamage deals exactly 3 to the owner\'s HQ', () => {
