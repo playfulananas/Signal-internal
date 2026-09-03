@@ -109,10 +109,15 @@ async function handleHeroDeploy(page) {
 }
 
 async function handleArtyTargeting(page) {
-  const targets = page.locator(".tile.targetable");
-  const count = await targets.count();
-  if (count > 0) await targets.nth(Math.floor(Math.random() * count)).click();
-  await page.waitForTimeout(30);
+  for (let i = 0; i < 4; i++) {
+    const debug = await readDebug(page);
+    if (debug?.uiState !== 'arty-targeting') return;
+    const targets = page.locator(".tile.targetable");
+    const count = await targets.count();
+    if (count === 0) return;
+    await targets.nth(Math.floor(Math.random() * count)).click();
+    await page.waitForTimeout(30);
+  }
 }
 
 // Objective player-choice targeting (2026-09-01) — mirrors bot_player.js's handleObjectivePicking

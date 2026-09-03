@@ -47,9 +47,14 @@ async function handleRadioOperator() {
 }
 
 async function handleArtyTargeting() {
-  const targets = document.querySelectorAll(".tile.targetable");
-  if (targets.length > 0) targets[0].click();
-  await sleep(CLICK_DELAY_MS);
+  for (let i = 0; i < 4; i++) {
+    const debug = readDebug();
+    if (debug?.uiState !== 'arty-targeting') return;
+    const targets = document.querySelectorAll(".tile.targetable");
+    if (targets.length === 0) return;
+    targets[0].click();
+    await sleep(CLICK_DELAY_MS);
+  }
 }
 
 // Objective player-choice targeting (2026-09-01): Airfield L2/Supply Depot L1/City L1/Artillery

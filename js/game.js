@@ -36,6 +36,7 @@ import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ,
 import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=20260902';
 import { runBotTurn } from './bot_player.js?v=20260902';
 import { bestHeroDeployment } from './bot_ai.js?v=20260902';
+import { canCancelInteraction, getInteractionDecision } from './interaction.js?v=20260902';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
@@ -334,6 +335,27 @@ let lastTransitionFlags = new Map(); // tileKey -> 'suppressed'|'destroyed'|'arm
 let lastObjectiveTransitionFlags = new Map(); // tileKey -> 'obj-captured'|'obj-leveled' this commit — same one-shot idea, kept separate from lastTransitionFlags since it describes the objective at that tile, not a unit
 let lastHeroActivationKey = null; // "role-col" of the Hero Zone that just fired this commit, or null
 let gameOver = false;
+
+const BLOCKING_MODAL_IDS = [
+  'fo-modal', 'radio-op-modal', 'field-reserves-modal',
+  'rotate-direction-modal', 'craft-picker-modal', 'hero-deploy-modal',
+];
+
+function anyBlockingModalOpen() {
+  return BLOCKING_MODAL_IDS.some(id => document.getElementById(id)?.style.display === 'flex');
+}
+
+function currentInteractionContext() {
+  return {
+    uiState,
+    pendingObjectivePick: state?.pendingObjectivePick ?? null,
+    pendingArtyHits: state?.pendingArtyHits ?? 0,
+    hasBlockingModal: anyBlockingModalOpen(),
+    pendingCommandId,
+    selectedHeroZone,
+    pendingHalftrackMove,
+  };
+}
 
 // ── Forward Observer state ─────────────────────────────────────────────────────
 let foCards = [];        // 3 cardIds drawn by FO
@@ -1050,21 +1072,24 @@ function redraw() {
     const rallyCryAlreadyPicked = ((pendingCommandId === 'C03' || pendingCommandId === 'C10') && pendingRallyCryCount < 2)
     || (pendingCommandId === 'C32' && pendingRallyCryCount === 1);
     cancelBtn.textContent = rallyCryAlreadyPicked ? 'Done' : 'Cancel';
+    cancelBtn.disabled = !canCancelInteraction(currentInteractionContext());
   }
 
   const endTurnBtn = document.getElementById('btn-end-turn');
+  const interactionDecision = getInteractionDecision(currentInteractionContext());
   if (isOnline) {
     const isMyTurn = state.initiative === myRole;
     const round = Math.ceil(state.turn / 2);
     document.getElementById('turn-display').textContent = isMyTurn
       ? `Round ${round} — YOUR TURN`
       : `Round ${round} — WAITING FOR OPPONENT`;
-    endTurnBtn.disabled = !isMyTurn;
-    endTurnBtn.textContent = isMyTurn ? 'End Turn' : 'Waiting...';
+    endTurnBtn.disabled = !isMyTurn || interactionDecision.pending;
+    endTurnBtn.textContent = !isMyTurn ? 'Waiting...' : interactionDecision.pending ? 'Finish Choice' : 'End Turn';
   } else {
-    endTurnBtn.disabled = false;
-    endTurnBtn.textContent = `End ${state.initiative.toUpperCase()} Turn`;
+    endTurnBtn.disabled = interactionDecision.pending;
+    endTurnBtn.textContent = interactionDecision.pending ? 'Finish Choice' : `End ${state.initiative.toUpperCase()} Turn`;
   }
+  endTurnBtn.title = interactionDecision.reason ?? '';
 
   populateDebugObjectiveDropdown();
   fitBoardArea();
@@ -1708,10 +1733,15 @@ function handleHeroZoneClick(role, col, shiftKey = false) {
   }
   if (state.initiative !== role) return;                 // only on your own turn
   if (isOnline && myRole !== role) return;               // and only your own heroes
-  if (uiState === 'hero-targeting') return;              // finish the current power first
   // Command Shuffle (C15): reuses this exact pick-up/drop flow, but must not activate a
   // power on pick-up and must not spend (or require) the normal Hero Phase reposition.
   const shuffleActive = pendingCommandId === 'C15';
+  // A picked-up Hero or Command Shuffle must be allowed to finish through this handler.
+  // Every other pending action owns the input until it resolves or is cancelled.
+  if (uiState !== 'idle' && !shuffleActive) return;
+  if (anyBlockingModalOpen()) return;
+  const continuingHeroMove = selectedHeroZone !== null || shuffleActive;
+  if (getInteractionDecision(currentInteractionContext()).pending && !continuingHeroMove) return;
   const ps = state[role];
   const zones = ps.heroZones ?? [null, null, null, null];
 
@@ -1774,12 +1804,16 @@ document.getElementById('p1-hand').addEventListener('click', e => {
   const card = CARD_BY_ID[cardId];
   if (!card) return;
 
-  if (selectedHandCardId === cardId) {
+  if (selectedHandCardId === cardId && uiState === 'placing') {
     selectedHandCardId = null;
     uiState = "idle";
     redraw();
     return;
   }
+
+  // Do not let a second card replace an attack, paid target selection, Hero choice, or other
+  // unresolved decision. The current action must finish (or use Cancel when allowed) first.
+  if (getInteractionDecision(currentInteractionContext()).pending) return;
 
   if (card.type === 'unit') {
     const active = state.initiative;
@@ -3476,6 +3510,7 @@ function applyCommandEffect(commandId, targetKey) {
 document.getElementById('btn-end-turn').addEventListener('click', () => {
   if (gameOver || !state) return;
   if (isOnline && state.initiative !== myRole) return;
+  if (getInteractionDecision(currentInteractionContext()).pending) return;
 
   const currentPlayer = state.initiative;
 
@@ -3621,6 +3656,7 @@ document.getElementById('btn-end-turn').addEventListener('click', () => {
 // ── Cancel ────────────────────────────────────────────────────────────────────
 
 document.getElementById('btn-cancel').addEventListener('click', () => {
+  if (!canCancelInteraction(currentInteractionContext())) return;
   // Rally Cry / Hold Position: once the first unit is picked and committed, "Cancel" during
   // the second pick means "stop here" (keep the first pick) — not a full revert of the cast.
   const rallyCryAlreadyPicked = ((pendingCommandId === 'C03' || pendingCommandId === 'C10') && pendingRallyCryCount < 2)
@@ -3918,14 +3954,6 @@ for (const role of ['p1', 'p2']) {
 // already paid with no way forward except completing the very modal they thought they'd
 // cancelled. "E" (end turn) has the same bypass risk (a raw .click() call ignores that the
 // button is visually obscured), so it's guarded here too.
-const MODAL_IDS_BLOCKING_SHORTCUTS = [
-  'fo-modal', 'radio-op-modal', 'field-reserves-modal',
-  'rotate-direction-modal', 'craft-picker-modal', 'hero-deploy-modal',
-];
-function anyBlockingModalOpen() {
-  return MODAL_IDS_BLOCKING_SHORTCUTS.some(id => document.getElementById(id)?.style.display === 'flex');
-}
-
 document.addEventListener('keydown', e => {
   if (gameOver || !state) return;
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
