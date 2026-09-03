@@ -56,12 +56,16 @@ try {
 
   // ── 3. Deck appears in lobby and starts a game ──
   await page.goto(`${BASE_URL}/game.html`);
-  const tile = page.locator('.deck-option', { hasText: DECK_NAME });
+
+  // Map selection is the locked first setup step. Choosing it reveals the
+  // deck picker for P1, followed by the same picker for P2.
+  await page.locator('#map-grid .deck-option[data-map="kursk"]').click();
+
+  const tile = page.locator('#deck-grid .deck-option', { hasText: DECK_NAME });
   if (await tile.count() !== 1) fail('custom deck tile missing in lobby');
 
   await tile.click();                                        // P1 deck
   await tile.click();                                        // P2 deck
-  await page.locator('.deck-option[data-map="kursk"]').click(); // map
   await page.waitForSelector('#mulligan-screen', { state: 'visible', timeout: 3000 })
     .catch(() => fail('mulligan screen did not appear — game did not start'));
 

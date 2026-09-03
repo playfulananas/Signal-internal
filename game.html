@@ -40,13 +40,13 @@
     <div class="lobby-title">SIGNAL</div>
     <div class="lobby-subtitle">WWII TACTICAL CARD GAME — PROTOTYPE</div>
 
-    <!-- Step 1 & 2: Deck selection (tiles rendered by game.js from decks.js + localStorage) -->
+    <!-- Steps 2 & 3: Deck selection after the map (tiles rendered by game.js from decks.js + localStorage) -->
     <div id="deck-picker">
       <div class="picker-label" id="picker-label">PLAYER 1 — CHOOSE YOUR DECK</div>
       <div class="deck-grid" id="deck-grid"></div>
     </div>
 
-    <!-- Step 3: Map selection (hidden until both decks chosen) -->
+    <!-- Step 1: Map selection; game.js reveals this first for local and AI play -->
     <div id="map-picker" style="display:none">
       <div class="picker-label">CHOOSE MAP</div>
       <div class="deck-grid" id="map-grid">
