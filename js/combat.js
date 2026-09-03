@@ -240,6 +240,30 @@ export function checkCounteroffensiveGeneral(s, key) {
   return { state, log: [`${CARD_BY_ID['H06'].name}: ${card?.name ?? 'unit'} +1 all sides (until your next turn) — first Suppression this turn`] };
 }
 
+// Ordered game-event funnel. Rules that make a Unit become Suppressed emit this event instead
+// of remembering H06 individually. New suppression sources therefore inherit the same passive
+// behavior automatically once they route their transition through applyGameEvents.
+export const GAME_EVENT = Object.freeze({
+  UNIT_SUPPRESSED: 'UNIT_SUPPRESSED',
+});
+
+export function unitSuppressedEvent(unitKey, beforeUnit, afterUnit) {
+  if (!beforeUnit || beforeUnit.state === 'suppressed' || afterUnit?.state !== 'suppressed') return null;
+  return { type: GAME_EVENT.UNIT_SUPPRESSED, unitKey };
+}
+
+export function applyGameEvents(s, events = []) {
+  let state = s;
+  const log = [];
+  for (const event of events.filter(Boolean)) {
+    if (event.type !== GAME_EVENT.UNIT_SUPPRESSED) continue;
+    const result = checkCounteroffensiveGeneral(state, event.unitKey);
+    state = result.state;
+    log.push(...result.log);
+  }
+  return { state, log };
+}
+
 // Single funnel for "remove Suppression from this tile" so every command/Hero power that
 // heals Suppression shares one hook point. Mirrors unsuppressOnBoard's own comment in state.js.
 export function removeSuppression(s, key) {
@@ -725,8 +749,12 @@ export function resolveCraftDrawback(s, ownerRole, unitKey, drawback) {
     const list = unitsOnBoard(s, ownerRole).filter(({ unit }) => unit.state === 'normal');
     if (list.length) {
       const pick = list[Math.floor(Math.random() * list.length)];
-      s = { ...s, board: { ...s.board, [pick.key]: { ...pick.unit, state: 'suppressed' } } };
+      const suppressed = { ...pick.unit, state: 'suppressed' };
+      s = { ...s, board: { ...s.board, [pick.key]: suppressed } };
       log.push(`Craft drawback: ${CARD_BY_ID[pick.unit.cardId]?.name ?? 'a friendly Unit'} suppressed`);
+      const triggered = applyGameEvents(s, [unitSuppressedEvent(pick.key, pick.unit, suppressed)]);
+      s = triggered.state;
+      log.push(...triggered.log);
     }
   }
   return { state: recalculateDynamicStats(s), log };
@@ -911,18 +939,21 @@ function resolveSecondaryHits(state, keys, attackerOwner) {
   const boardMutations = [];
   let hqDamageToP1 = 0, hqDamageToP2 = 0;
   const logEntries = [];
+  const events = [];
   for (const key of fixedScanOrder(keys)) {
     const tile = state.board[key];
     if (!tile || tile.owner === attackerOwner || tile.state === 'destroyed') continue;
     const { newUnit, hqDamage } = applyHit(tile);
     const finalUnit = newUnit.state === 'destroyed' ? null : newUnit;
     boardMutations.push({ key, newUnit: finalUnit });
+    const suppression = unitSuppressedEvent(key, tile, finalUnit);
+    if (suppression) events.push(suppression);
     if (tile.owner === 'p1') hqDamageToP1 += hqDamage; else hqDamageToP2 += hqDamage;
     const name = CARD_BY_ID[tile.cardId]?.name ?? '?';
     const label = finalUnit === null ? 'Destroyed' : newUnit.state === 'suppressed' ? 'Suppressed' : 'armor absorbed';
     logEntries.push(`  (secondary) -> ${name}: ${label}`);
   }
-  return { boardMutations, hqDamageToP1, hqDamageToP2, logEntries };
+  return { boardMutations, hqDamageToP1, hqDamageToP2, logEntries, events };
 }
 
 // ── resolveSingleAttack ───────────────────────────────────────────────────────
@@ -940,11 +971,12 @@ function resolveSecondaryHits(state, keys, attackerOwner) {
 //   hqDamageToP1:  HQ damage dealt TO P1's HQ this attack.
 //   hqDamageToP2:  HQ damage dealt TO P2's HQ this attack.
 //   logEntries:    human-readable strings for the game log.
+//   events:        ordered state transitions for passive/event hooks.
 export function resolveSingleAttack(state, attackerKey, targetKey) {
   const attacker = state.board[attackerKey];
   const defender = state.board[targetKey];
 
-  const empty = { boardMutations: [], hqDamageToP1: 0, hqDamageToP2: 0, logEntries: [] };
+  const empty = { boardMutations: [], hqDamageToP1: 0, hqDamageToP2: 0, logEntries: [], events: [] };
 
   if (!attacker || !defender) return empty;
 
@@ -977,6 +1009,7 @@ export function resolveSingleAttack(state, attackerKey, targetKey) {
       boardMutations: [],
       hqDamageToP1: 0,
       hqDamageToP2: 0,
+      events: [],
       logEntries: [
         `${attackerName} attacked ${defenderName} — failed (${attackerSide} vs ${defenderSide})`
       ],
@@ -989,6 +1022,9 @@ export function resolveSingleAttack(state, attackerKey, targetKey) {
   const finalUnit = hitUnit.state === "destroyed" ? null : hitUnit;
 
   const boardMutations = [{ key: targetKey, newUnit: finalUnit }];
+  const events = [];
+  const primarySuppression = unitSuppressedEvent(targetKey, defender, finalUnit);
+  if (primarySuppression) events.push(primarySuppression);
 
   let hqDamageToP1 = 0;
   let hqDamageToP2 = 0;
@@ -1020,7 +1056,8 @@ export function resolveSingleAttack(state, attackerKey, targetKey) {
     hqDamageToP1 += secondary.hqDamageToP1;
     hqDamageToP2 += secondary.hqDamageToP2;
     logEntries.push(...secondary.logEntries);
+    events.push(...secondary.events);
   }
 
-  return { boardMutations, hqDamageToP1, hqDamageToP2, logEntries };
+  return { boardMutations, hqDamageToP1, hqDamageToP2, logEntries, events };
 }

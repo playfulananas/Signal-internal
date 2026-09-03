@@ -28,7 +28,7 @@ import {
   markEscalateUse,
   expireTempFuelGrant,
 } from './state.js?v=20260902';
-import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, checkCounteroffensiveGeneral, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff, getObjectivePickEffectType, computeObjectivePickTargets, describeDynamicSideBonus } from './combat.js?v=20260902';
+import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, applyGameEvents, unitSuppressedEvent, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff, getObjectivePickEffectType, computeObjectivePickTargets, describeDynamicSideBonus } from './combat.js?v=20260902';
 import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones, showFxPopup, drawFxConnector } from './ui.js?v=20260902';
 import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=20260902';
 import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby, updatePlayerState } from './firebase.js?v=20260902';
@@ -1432,6 +1432,9 @@ function applyHeroPower(s, role, col, hero, targetKey) {
       const finalUnit = newUnit.state === 'destroyed' ? null : newUnit;
       s = { ...s, board: { ...s.board, [targetKey]: finalUnit }, [opp]: { ...s[opp], hq: s[opp].hq - hqDamage } };
       log.push(`${hero.name}: Hit ${beforeName} — ${finalUnit === null ? 'Destroyed' : newUnit.state}`);
+      const triggered = applyGameEvents(s, [unitSuppressedEvent(targetKey, before, finalUnit)]);
+      s = triggered.state;
+      log.push(...triggered.log);
       if (finalUnit === null) {
         const pd = applyPostDestructionEffects(s, { unitKey: targetKey, dyingUnit: before, sourceUnitKey: null });
         s = pd.state;
@@ -1915,11 +1918,10 @@ document.getElementById('board').addEventListener('click', e => {
     };
     const stateLabel = finalUnit === null ? 'Destroyed' : newUnit.state === 'suppressed' ? 'Suppressed' : 'armor absorbed';
     const log = [`Artillery Position: ${CARD_BY_ID[unit.cardId]?.name} → ${stateLabel}`];
-    if (newUnit.state === 'suppressed') {
-      const coGen = checkCounteroffensiveGeneral(newS, clickedKey);
-      newS = coGen.state;
-      log.push(...coGen.log);
-    } else if (finalUnit === null) {
+    const triggered = applyGameEvents(newS, [unitSuppressedEvent(clickedKey, unit, finalUnit)]);
+    newS = triggered.state;
+    log.push(...triggered.log);
+    if (finalUnit === null) {
       // Last Stand / Breakthrough (shared destruction chain) — no source Unit for
       // Breakthrough attribution since this Hit came from the Objective, not a Unit attack.
       const pd = applyPostDestructionEffects(newS, { unitKey: clickedKey, dyingUnit: unit, sourceUnitKey: null });
@@ -2238,13 +2240,11 @@ document.getElementById('board').addEventListener('click', e => {
     }
     newState = recalculateDynamicStats(newState);
 
-    // Counteroffensive General (H06) — first friendly unit to get Suppressed this turn
-    let coGenLog = [];
-    if (newState.board[clickedKey]?.state === 'suppressed') {
-      const coGen = checkCounteroffensiveGeneral(newState, clickedKey);
-      newState = coGen.state;
-      coGenLog = coGen.log;
-    }
+    // Resolve ordered state-transition hooks (including every primary/Blast/Barrage
+    // UNIT_SUPPRESSED event) through one funnel.
+    const triggeredEvents = applyGameEvents(newState, result.events);
+    newState = triggeredEvents.state;
+    const eventLog = triggeredEvents.log;
 
     // Double Attack's 2nd hit: if a real target existed a moment ago (postAttackTargets,
     // computed above) but the 1st hit just removed it, the 2nd hit simply has nothing to do
@@ -2306,7 +2306,7 @@ document.getElementById('board').addEventListener('click', e => {
       }, 150);
     }
 
-    commitState(newState, [...rallyLog, ...result.logEntries, ...overrunLog, ...postDestroyLog, ...coGenLog], transitionFlags);
+    commitState(newState, [...rallyLog, ...result.logEntries, ...overrunLog, ...postDestroyLog, ...eventLog], transitionFlags);
     checkWin();
     return;
   }
