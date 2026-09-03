@@ -1301,7 +1301,6 @@ body.viewer-p2 .stats-panel {
 .log-entry.log-suppressed { color: var(--log-supp); }
 .log-entry.log-absorbed { color: var(--log-absorb); }
 .log-entry.log-positive { color: var(--log-pos); }
-.log-entry.log-mission  { color: var(--log-miss); }
 .log-entry.log-objective { color: var(--log-obj); }
 
 /* ── Lobby / Deck Picker ── */
@@ -1422,21 +1421,6 @@ body.viewer-p2 .stats-panel {
   pointer-events: none;
 }
 
-/* ── Missions strip (bottom of game area) ── */
-.missions-area {
-  width: 100%;
-  min-height: 18px;
-  display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
-}
-.missions-label { font-size: 9px; color: var(--text-d); letter-spacing: 1px; font-family: 'Arial Narrow', Arial, sans-serif; }
-.mission-badge {
-  font-size: 9px; color: var(--gold);
-  background: var(--gold-bg); border: 1px solid var(--gold-bg-b);
-  border-radius: 2px; padding: 1px 6px;
-  font-family: 'Arial Narrow', Arial, sans-serif;
-  letter-spacing: 0.5px;
-}
-
 /* ── End game overlay ── */
 #end-screen {
   position: fixed;
@@ -1507,7 +1491,6 @@ body[data-theme="light"] .stat-block.active-turn { border-color: #2266cc; box-sh
 /* Fuel and cost — neutral dark, not gold */
 body[data-theme="light"] .stat-fuel { color: #2266cc; }
 
-body[data-theme="light"] .mission-badge { color: #444455; background: #e8eeff; border-color: #b0b8cc; }
 
 /* Log turn marker — blue instead of green */
 body[data-theme="light"] .log-entry.turn-marker { color: #2266cc; }
@@ -1528,25 +1511,6 @@ body[data-theme="light"] .deck-ap { color: #2266cc; }
 body[data-theme="light"] .hand-card.hc-command { border-color: #4455bb; background: #eeeeff; }
 body[data-theme="light"] .hc-type.hc-command-label { color: #4455bb; }
 body[data-theme="light"] .hand-card.hc-command .hc-effect { color: #333355; }
-
-/* ── Mission hand cards ── */
-.hand-card.hc-mission { border-color: #c49a28; background: #140e00; }
-.hc-type.hc-mission-label { color: #c49a28; font-weight: bold; letter-spacing: 1px; }
-.hc-req { flex: 1; font-size: 9px; color: var(--text-b); padding: 4px 5px; line-height: 1.5; overflow: hidden; }
-.hc-reward-strip { padding: 4px 5px; background: rgba(196,154,40,0.18); border-top: 1px solid rgba(196,154,40,0.4); flex-shrink: 0; }
-.hc-reward-label { font-size: 7px; font-weight: bold; color: #c49a28; letter-spacing: 1px; font-family: 'Arial Narrow', Arial, sans-serif; margin-bottom: 2px; }
-.hc-reward-text { font-size: 7px; color: #f0e0a0; line-height: 1.4; }
-body[data-theme="light"] .hand-card.hc-mission { border-color: #aa7700; background: #fffae8; }
-body[data-theme="light"] .hc-type.hc-mission-label { color: #aa7700; }
-body[data-theme="light"] .hc-req { color: #444455; }
-body[data-theme="light"] .hc-reward-strip { background: rgba(170,119,0,0.12); border-top-color: rgba(170,119,0,0.35); }
-body[data-theme="light"] .hc-reward-label { color: #aa7700; }
-body[data-theme="light"] .hc-reward-text { color: #7a5500; }
-
-/* mulligan sizing for req/reward sections */
-.mulligan-card .hc-req { font-size: 12px !important; line-height: 1.6 !important; }
-.mulligan-card .hc-reward-label { font-size: 9px !important; }
-.mulligan-card .hc-reward-text { font-size: 11px !important; line-height: 1.5 !important; }
 
 /* ── Objective side bonus + fuel discount indicators ── */
 /* Per-side stat display vs. the card's printed value — any effect that changes stats

@@ -173,7 +173,7 @@ function buildBoardCard(unit, viewer = 'p1', transitionFlag = null) {
   // showed gold). A buffed unit gets a persistent gold halo; a debuffed one gets the same
   // treatment in red — previously only the positive case existed, so a unit weakened on every
   // side had no card-level tell, only the per-side red digits.
-  const totalSideBonus = (unit.tempSideBonus || 0) + (unit.grantedSideBonus || 0) + (unit.objSideBonus || 0) + (unit.debugSideBonus || 0) + (unit.dynamicSideBonus || 0);
+  const totalSideBonus = (unit.tempSideBonus || 0) + (unit.grantedSideBonus || 0) + (unit.permanentSideBonus || 0) + (unit.objSideBonus || 0) + (unit.debugSideBonus || 0) + (unit.dynamicSideBonus || 0);
   const hasKeywordGrant = (unit.tempKeywords?.length > 0) || (unit.grantedKeywords?.length > 0) || (unit.permanentKeywords?.length > 0);
   const buffed = totalSideBonus > 0 || hasKeywordGrant;
   const debuffed = totalSideBonus < 0;
@@ -227,7 +227,7 @@ function buildBoardCard(unit, viewer = 'p1', transitionFlag = null) {
   const abilityHtml = card.ability
     ? `<span class="bc-ability-pip" data-tip="${esc(card.ability)}">⚡</span>`
     : '';
-  const bonus = (unit.tempSideBonus || 0) + (unit.grantedSideBonus || 0) + (unit.objSideBonus || 0) + (unit.debugSideBonus || 0) + (unit.dynamicSideBonus || 0);
+  const bonus = (unit.tempSideBonus || 0) + (unit.grantedSideBonus || 0) + (unit.permanentSideBonus || 0) + (unit.objSideBonus || 0) + (unit.debugSideBonus || 0) + (unit.dynamicSideBonus || 0);
   const armorPips = maxArmor > 0
     ? Array.from({ length: maxArmor }, (_, i) =>
         `<span class="armor-pip ${i < remaining ? 'full' : 'spent'}">◆</span>`
@@ -253,7 +253,8 @@ function buildBoardCard(unit, viewer = 'p1', transitionFlag = null) {
   // Any side no longer matching its printed value is flagged gold (increased) or red
   // (decreased) — every stat-changing effect (objective bonuses, Hero bonuses, command
   // effects, Inspire/Muster's live recalculation, the debug panel) funnels through the same
-  // tempSideBonus/grantedSideBonus/objSideBonus/debugSideBonus/dynamicSideBonus fields, so
+  // tempSideBonus/grantedSideBonus/permanentSideBonus/objSideBonus/debugSideBonus/
+  // dynamicSideBonus fields, so
   // one comparison per side covers all of them.
   const dirClass = (val, base) => val > base ? ' class="bc-dir-up"' : val < base ? ' class="bc-dir-down"' : '';
   // Status strip (suppressed/destroyed state + rotation) — a flow row between the stats
@@ -368,18 +369,6 @@ export function renderHand(handCardIds, containerId, selectedCardId, extras = {}
         <div class="hc-cost">${cmdCostHtml}</div>
         <div class="hc-type hc-command-label">COMMAND</div>
         <div class="hc-effect">${card.effect || ''}</div>
-      `;
-    } else if (card.type === 'mission') {
-      div.classList.add('hc-mission');
-      div.innerHTML = `
-        <div class="hc-header">${card.name}</div>
-        <div class="hc-cost">${card.cost} ⛽</div>
-        <div class="hc-type hc-mission-label">MISSION</div>
-        <div class="hc-req">${card.req || ''}</div>
-        <div class="hc-reward-strip">
-          <div class="hc-reward-label">REWARD</div>
-          <div class="hc-reward-text">${card.reward || card.effect || ''}</div>
-        </div>
       `;
     } else {
       // objective (shouldn't normally be in hand, but handle gracefully)
@@ -571,9 +560,7 @@ export function appendLog(entries) {
       div.classList.add('log-suppressed');
     } else if (text.includes('armor absorbed')) {
       div.classList.add('log-absorbed');
-    } else if (text.includes('COMPLETE')) {
-      div.classList.add('log-mission');
-    } else if (text.includes('mission active') || /L[1-4]:/.test(text)) {
+    } else if (/L[1-4]:/.test(text)) {
       div.classList.add('log-objective');
     } else if (
       text.includes('un-suppressed') ||

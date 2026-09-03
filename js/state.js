@@ -14,6 +14,7 @@
 //   pendingArtyHits: number,    — Artillery Position L2/L4 hits owed to `initiative` player, synced so the
 //                                 controlling player's own client (not just whoever ended the prior turn)
 //                                 enters targeting mode; 0 once resolved.
+//   nextUnitInstance: number,   — monotonic source for stable BoardUnit identities
 // }
 //
 // PlayerState: {
@@ -23,7 +24,6 @@
 //   pendingFuelGain: number,    — delayed fuel (Industrial Surge), added at next startOfTurn
 //   hand: number[],             — cardIds in hand
 //   deck: number[],             — cardIds remaining (top = index 0)
-//   missions: ActiveMission[],
 //   pendingDiscounts: [{ appliesTo, column, amount, min }],  — unspent Fuel discounts
 //   pendingUnitBuffs: [{ appliesTo, amount }],  — unspent stat buffs (Deathrattle: Convoy Escort)
 //   fieldMarshalUses: number,   — Field Marshal (144) activation count this match, never reset
@@ -37,11 +37,9 @@
 //                                 see drawCards. Never resets.
 // }
 //
-// ActiveMission: { cardId, killsAtDeploy? } — no turn limit; stays active until its reward fires.
-// killsAtDeploy is only set for Total Onslaught (81), to track kills since THIS copy was played.
-//
 // BoardUnit: {
-//   cardId: number,
+//   instanceId: string,         — stable identity that follows this physical Unit when it moves
+//   cardId: string,
 //   owner: "p1" | "p2",
 //   state: "normal" | "suppressed" | "destroyed",
 //   armorHits: number,          — hits absorbed by armor so far
@@ -54,8 +52,9 @@
 //                                 all been storing their permanent grants in grantedKeywords, which
 //                                 silently wiped them the very next time the owner's turn started.
 //   tempSideBonus: number,      — +N to all sides this turn
-//   grantedSideBonus: number,   — +N to all sides from Rally Cry; lasts sideBonusTurns owner turn-starts
-//   sideBonusTurns: number,     — turn-starts remaining before grantedSideBonus clears (Rally Cry = 2)
+//   grantedSideBonus: number,   — +N to all sides from time-limited grants
+//   sideBonusTurns: number,     — owner turn-starts remaining before grantedSideBonus clears
+//   permanentSideBonus: number, — +N to all sides for the rest of the match; never expires
 //   debugSideBonus: number,     — +/-N to all sides from the debug panel; persists until the tester
 //                                 changes it back to 0, NOT cleared by normal turn logic
 //   justPlaced: boolean,        — true only on the turn deployed; cleared by endTurn
@@ -106,6 +105,7 @@ export function createInitialState(p1DeckIds, p2DeckIds, mapId = 'kursk', p1Hero
     objectives: {},
     log: [],
     pendingArtyHits: 0,
+    nextUnitInstance: 1,
     // Craft (H25) / Training Officer (H19) generated-card definitions, keyed by id — has to
     // travel in shared state so the OTHER client's CARD_BY_ID (per-client, in-memory only)
     // learns about a card it never itself registered. See ensureGeneratedCard (cards.js) and
@@ -118,6 +118,37 @@ export function createInitialState(p1DeckIds, p2DeckIds, mapId = 'kursk', p1Hero
     // can't do this, since it's already 1 from the moment this object is created, well before
     // either player has mulliganed.
     readyForPlay: false,
+  };
+}
+
+// Creates one physical board Unit and advances the shared identity counter. Card IDs identify
+// the printed definition; instance IDs distinguish two copies of that card and survive Maneuver.
+export function createBoardUnit(state, cardId, owner, overrides = {}) {
+  const sequence = Number.isSafeInteger(state?.nextUnitInstance) && state.nextUnitInstance > 0
+    ? state.nextUnitInstance
+    : 1;
+  return {
+    state: { ...state, nextUnitInstance: sequence + 1 },
+    unit: {
+      instanceId: `unit-${sequence}`,
+      cardId,
+      owner,
+      state: 'normal',
+      armorHits: 0,
+      tempKeywords: [],
+      grantedKeywords: [],
+      permanentKeywords: [],
+      tempSideBonus: 0,
+      grantedSideBonus: 0,
+      sideBonusTurns: 0,
+      permanentSideBonus: 0,
+      persistentSpent: 0,
+      tempExtraAttacks: 0,
+      tempExtraAttacksSpent: 0,
+      justPlaced: true,
+      rotation: 0,
+      ...overrides,
+    },
   };
 }
 
@@ -147,7 +178,6 @@ function createPlayerState(deckCardIds, heroIds = []) {
     pendingFuelGain: 0,
     hand,
     deck,
-    missions: [],
     pendingDiscounts: [],
     overrun: false,
     discardPile: [],
@@ -201,8 +231,6 @@ function createPlayerState(deckCardIds, heroIds = []) {
 
 // Active player gains 3 fuel, capped at 6, then pendingFuelGain (Industrial Surge) on top of that,
 // uncapped — may push Fuel past 6 for this turn only. Resets pendingFuelGain to 0.
-// Missions have no turn limit — they stay active until their reward condition fires
-// (checkActiveMissions removes them at that point, not here).
 // Clears grantedKeywords from all units owned by the active player.
 export function startOfTurn(state) {
   const activePlayer = state.initiative;
@@ -457,8 +485,8 @@ export function rotatedDir(dir, rotationDegrees) {
   return DIR_ORDER[(i - steps + 4) % 4];
 }
 
-// Returns card's base side value (after rotation) + tempSideBonus + grantedSideBonus +
-// objSideBonus + debugSideBonus.
+// Returns card's base side value (after rotation) + temporary, timed, permanent,
+// objective, debug, and dynamic bonuses.
 // No owner-based flip: a card's printed N/E/S/W always maps to physical N/E/S/W on the
 // fixed board grid, for both players — matching how it's shown in hand and on the tile.
 // (2026-07-02 added an owner-based P2_FLIP here, paired with a per-viewer board rotation
@@ -473,7 +501,14 @@ export function getSideValue(boardUnit, dir) {
   // as the base printed stat, so a later rotation (Change Formation etc.) carries the bonus
   // with its side exactly like every other stat does, rather than pinning it to whichever
   // physical board direction happened to face that way at grant time.
-  const total = card[d] + (boardUnit.tempSideBonus || 0) + (boardUnit.grantedSideBonus || 0) + (boardUnit.objSideBonus || 0) + (boardUnit.debugSideBonus || 0) + (boardUnit.dynamicSideBonus || 0) + (boardUnit[`perm_${d}`] || 0);
+  const total = card[d]
+    + (boardUnit.tempSideBonus || 0)
+    + (boardUnit.grantedSideBonus || 0)
+    + (boardUnit.permanentSideBonus || 0)
+    + (boardUnit.objSideBonus || 0)
+    + (boardUnit.debugSideBonus || 0)
+    + (boardUnit.dynamicSideBonus || 0)
+    + (boardUnit[`perm_${d}`] || 0);
   // doc 01 §16 / doc 02 Q127: directional stat floor = 0, no maximum cap. Not currently
   // reachable by any card in the live pool (no negative modifier exists yet) — only via the
   // debug panel's negative all-sides buff — but the rule is unconditional, not "unless no

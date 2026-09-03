@@ -353,7 +353,7 @@ export function checkRally(s, attackerKey) {
       if (others.length) {
         const pick = others[Math.floor(Math.random() * others.length)];
         const u = s.board[pick.key];
-        s = { ...s, board: { ...s.board, [pick.key]: { ...u, grantedSideBonus: (u.grantedSideBonus || 0) + 1, sideBonusTurns: 99 } } };
+        s = { ...s, board: { ...s.board, [pick.key]: { ...u, permanentSideBonus: (u.permanentSideBonus || 0) + 1 } } };
         log.push(`${tag} ${CARD_BY_ID[u.cardId].name} +1 all sides (permanent)`);
         causalityTargets.push(pick.key);
       }
@@ -363,7 +363,7 @@ export function checkRally(s, attackerKey) {
       const others = unitsOnBoard(s, owner).filter(({ key, unit: u }) => key !== attackerKey && CARD_BY_ID[u.cardId]?.cls === 'Infantry');
       for (const { key: k } of others) {
         const u = s.board[k];
-        s = { ...s, board: { ...s.board, [k]: { ...u, grantedSideBonus: (u.grantedSideBonus || 0) + 1, sideBonusTurns: 99 } } };
+        s = { ...s, board: { ...s.board, [k]: { ...u, permanentSideBonus: (u.permanentSideBonus || 0) + 1 } } };
         causalityTargets.push(k);
       }
       if (others.length) log.push(`${tag} all other friendly Infantry +1 all sides (permanent)`);
@@ -375,7 +375,7 @@ export function checkRally(s, attackerKey) {
       for (const { key: adjKey } of adjacentTiles(row, col)) {
         const u = s.board[adjKey];
         if (!u || u.state === 'destroyed' || u.owner !== owner) continue;
-        s = { ...s, board: { ...s.board, [adjKey]: { ...u, grantedSideBonus: (u.grantedSideBonus || 0) + 1, sideBonusTurns: 99 } } };
+        s = { ...s, board: { ...s.board, [adjKey]: { ...u, permanentSideBonus: (u.permanentSideBonus || 0) + 1 } } };
         any = true;
         causalityTargets.push(adjKey);
       }
@@ -520,7 +520,7 @@ function runLastStandEffect(s, key, dyingUnit, card, owner, excludeKeys) {
       if (!list.length) { log.push(`${tag} no friendly Infantry to target`); return { state: s, log, causalityTargets: [] }; }
       const pick = list[Math.floor(Math.random() * list.length)];
       const u = s.board[pick.key];
-      s = { ...s, board: { ...s.board, [pick.key]: { ...u, grantedSideBonus: (u.grantedSideBonus || 0) + 1, sideBonusTurns: 99 } } };
+      s = { ...s, board: { ...s.board, [pick.key]: { ...u, permanentSideBonus: (u.permanentSideBonus || 0) + 1 } } };
       log.push(`${tag} ${CARD_BY_ID[u.cardId].name} +1 all sides (permanent)`);
       return { state: s, log, targetKey: pick.key, causalityTargets: [pick.key] };
     }
@@ -546,7 +546,7 @@ function runBreakthroughEffect(s, key, unit, card) {
   const tag = `${card.name} (Breakthrough):`;
   switch (card.id) {
     case 'T32': case 'T38': // Tank Hunter / Armored Spearhead — this Unit +1 all sides permanently
-      s = { ...s, board: { ...s.board, [key]: { ...unit, grantedSideBonus: (unit.grantedSideBonus || 0) + 1, sideBonusTurns: 99 } } };
+      s = { ...s, board: { ...s.board, [key]: { ...unit, permanentSideBonus: (unit.permanentSideBonus || 0) + 1 } } };
       log.push(`${tag} +1 all sides (permanent)`);
       return { state: s, log, causalityTargets: [key] };
     case 'T33': { // Tank Destroyer — your next Tank costs 1 Fuel (set-cost; see discountFor's

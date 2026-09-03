@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { prepareVersionedState, shouldAcceptRemoteState, stateRevision } from '../js/sync.js?v=20260902';
+import { normalizeRemoteBoard, normalizeRemoteUnit, prepareVersionedState, shouldAcceptRemoteState, stateRevision } from '../js/sync.js?v=20260902';
 
 test('stateRevision treats missing or invalid revisions as the initial revision', () => {
   assert.equal(stateRevision(null), 0);
@@ -24,4 +24,39 @@ test('remote state cannot roll an optimistic local snapshot backward', () => {
   assert.equal(shouldAcceptRemoteState({ _revision: 5 }, { _revision: 5 }), true);
   assert.equal(shouldAcceptRemoteState({ _revision: 5 }, { _revision: 6 }), true);
   assert.equal(shouldAcceptRemoteState({ _revision: 5 }, { _revision: 4 }, { force: true }), true);
+});
+
+test('legacy permanent bonuses migrate away from the 99-turn sentinel', () => {
+  const migrated = normalizeRemoteUnit({
+    cardId: 'I1',
+    grantedSideBonus: 3,
+    sideBonusTurns: 99,
+    permanentSideBonus: 2,
+    tempKeywords: { 0: 'Armor' },
+  });
+
+  assert.equal(migrated.permanentSideBonus, 5);
+  assert.equal(migrated.grantedSideBonus, 0);
+  assert.equal(migrated.sideBonusTurns, 0);
+  assert.deepEqual(migrated.tempKeywords, ['Armor']);
+  assert.deepEqual(migrated.grantedKeywords, []);
+  assert.deepEqual(migrated.permanentKeywords, []);
+});
+
+test('current timed bonuses remain timed during remote normalization', () => {
+  const normalized = normalizeRemoteUnit({ grantedSideBonus: 2, sideBonusTurns: 1 });
+  assert.equal(normalized.permanentSideBonus ?? 0, 0);
+  assert.equal(normalized.grantedSideBonus, 2);
+  assert.equal(normalized.sideBonusTurns, 1);
+});
+
+test('older board units receive deterministic compatibility identities', () => {
+  const board = normalizeRemoteBoard({
+    '0,1': { cardId: 'I1', owner: 'p1' },
+    '2,3': { cardId: 'I1', owner: 'p2', instanceId: 'unit-8' },
+    '3,3': null,
+  });
+  assert.equal(board['0,1'].instanceId, 'legacy-unit-0-1');
+  assert.equal(board['2,3'].instanceId, 'unit-8', 'an existing identity must never be replaced');
+  assert.equal(board['3,3'], null);
 });

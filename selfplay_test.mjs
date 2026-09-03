@@ -232,8 +232,6 @@ async function playTurnSmart(page) {
     const attack = bestExistingAttack(state, active);
 
     const affordableCommandIds = ps.hand.filter(id => { const c = CARD_BY_ID[id]; return c && c.type === "command" && ps.fuel >= c.cost && !deadThisTurn.has(id); });
-    const affordableMissionId = ps.hand.find(id => { const c = CARD_BY_ID[id]; return c && c.type === "mission" && ps.fuel >= c.cost && !deadThisTurn.has(id); });
-
     let bestCommand = null;
     for (const id of affordableCommandIds) {
       const score = scoreCommand(state, active, id);
@@ -263,8 +261,6 @@ async function playTurnSmart(page) {
     if (attack) candidates.push({ type: "attack", score: attack.score, unitKey: attack.unitKey, targetKey: attack.targetKey, isHQStrike: attack.isHQStrike });
     if (bestCommand) candidates.push({ type: "command", score: bestCommand.score, cardId: bestCommand.cardId });
     if (bestHeroPower) candidates.push({ type: "heroPower", score: bestHeroPower.score, heroId: bestHeroPower.heroId, col: bestHeroPower.col });
-    if (candidates.length === 0 && affordableMissionId !== undefined) candidates.push({ type: "mission", score: 0.1, cardId: affordableMissionId });
-
     if (candidates.length === 0) break; // nothing useful left this turn
 
     candidates.sort((a, b) => b.score - a.score);
@@ -293,9 +289,6 @@ async function playTurnSmart(page) {
       const handAfter = afterDebug?.state?.[active]?.hand?.length ?? handBefore;
       if (handAfter === handBefore) deadThisTurn.add(choice.cardId); // no-op: card never left hand
       await flushPendingUiState(page, afterDebug); // clean up if it landed in command-targeting with no targets
-    } else if (choice.type === "mission") {
-      await clickHandCard(page, choice.cardId);
-      await page.waitForTimeout(30);
     } else if (choice.type === "heroPower") {
       await clickHeroZone(page, active, choice.col);
       await page.waitForTimeout(30);

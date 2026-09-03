@@ -252,7 +252,7 @@ export function bestPlacement(state, active, handUnitCardIds, emptyTileKeys) {
       const terrain = getTerrain(state.mapId, r, c);
       if (!canPlaceOnTerrain(card, terrain)) continue;
 
-      const hypoUnit = { cardId, owner: active, state: "normal", armorHits: 0, tempKeywords: [], grantedKeywords: [], tempSideBonus: 0, justPlaced: true };
+      const hypoUnit = { cardId, owner: active, state: "normal", armorHits: 0, tempKeywords: [], grantedKeywords: [], permanentKeywords: [], tempSideBonus: 0, grantedSideBonus: 0, permanentSideBonus: 0, justPlaced: true };
       const hypoState = { ...state, board: { ...state.board, [key]: hypoUnit } };
 
       const atk = bestAttackForUnit(hypoState, key);

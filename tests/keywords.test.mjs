@@ -27,6 +27,32 @@ test('getSideValue: no maximum cap — a large positive modifier passes through 
   assert.equal(getSideValue(u, 'n'), CARD_BY_ID['I1'].n + 50);
 });
 
+test('permanent and timed side bonuses coexist; only the timed bonus expires', () => {
+  const boosted = unit('p1', 'I1', {
+    permanentSideBonus: 2,
+    grantedSideBonus: 3,
+    sideBonusTurns: 1,
+  });
+  const state = baseState(boardWith({ '0,0': boosted }), {
+    initiative: 'p1',
+    p1: {
+      hq: 30,
+      hand: [],
+      fuel: 0,
+      fuelCap: 9,
+      pendingFuelGain: 0,
+      heroesActivatedThisTurn: [],
+      heroZones: [null, null, null, null],
+    },
+  });
+
+  assert.equal(getSideValue(boosted, 'n'), CARD_BY_ID['I1'].n + 5);
+  const refreshed = startOfTurn(state);
+  assert.equal(refreshed.board['0,0'].grantedSideBonus, 0);
+  assert.equal(refreshed.board['0,0'].permanentSideBonus, 2);
+  assert.equal(getSideValue(refreshed.board['0,0'], 'n'), CARD_BY_ID['I1'].n + 2);
+});
+
 // ── discountFor: 'unit' appliesTo (Run 2, Factory O1 L2/L4) ─────────────────
 // Added because addDiscount's only prior generic dimension was 'command' (special-cased) or
 // an exact card.cls match — nothing meant "any Unit, any class, but not a Command." Factory's
@@ -187,24 +213,24 @@ test('Rally (I12 Assault Trooper): draws 1 card on attack declaration', () => {
 test('Rally (I13 Combat Engager): a random OTHER friendly Infantry gets +1 permanently, never itself', () => {
   const state = baseState(boardWith({ '0,0': unit('p1', 'I13'), '0,1': unit('p1', 'I1') }));
   const { state: after } = checkRally(state, '0,0');
-  assert.equal(after.board['0,0'].grantedSideBonus ?? 0, 0, 'the Rally source itself is never a valid target');
-  assert.equal(after.board['0,1'].grantedSideBonus, 1);
+  assert.equal(after.board['0,0'].permanentSideBonus ?? 0, 0, 'the Rally source itself is never a valid target');
+  assert.equal(after.board['0,1'].permanentSideBonus, 1);
 });
 
 test('Rally (I14 Veteran Raider): ALL adjacent friendly Units get +1 permanently (not just Infantry)', () => {
   const state = baseState(boardWith({ '1,1': unit('p1', 'I14'), '0,1': unit('p1', 'T23'), '1,0': unit('p1', 'I1'), '1,2': unit('p2', 'I2') }));
   const { state: after } = checkRally(state, '1,1');
-  assert.equal(after.board['0,1'].grantedSideBonus, 1, 'adjacent friendly Tank also qualifies — not Infantry-only');
-  assert.equal(after.board['1,0'].grantedSideBonus, 1);
-  assert.equal(after.board['1,2'].grantedSideBonus ?? 0, 0, 'enemy adjacent Unit must not be buffed');
+  assert.equal(after.board['0,1'].permanentSideBonus, 1, 'adjacent friendly Tank also qualifies — not Infantry-only');
+  assert.equal(after.board['1,0'].permanentSideBonus, 1);
+  assert.equal(after.board['1,2'].permanentSideBonus ?? 0, 0, 'enemy adjacent Unit must not be buffed');
 });
 
 test('Rally (I21 Commanding Infantry): ALL other friendly Infantry get +1 permanently', () => {
   const state = baseState(boardWith({ '0,0': unit('p1', 'I21'), '0,1': unit('p1', 'I1'), '3,3': unit('p1', 'I2'), '1,1': unit('p1', 'T23') }));
   const { state: after } = checkRally(state, '0,0');
-  assert.equal(after.board['0,1'].grantedSideBonus, 1);
-  assert.equal(after.board['3,3'].grantedSideBonus, 1, 'not adjacency-limited, board-wide');
-  assert.equal(after.board['1,1'].grantedSideBonus ?? 0, 0, 'Tank does not qualify — Infantry only for I21');
+  assert.equal(after.board['0,1'].permanentSideBonus, 1);
+  assert.equal(after.board['3,3'].permanentSideBonus, 1, 'not adjacency-limited, board-wide');
+  assert.equal(after.board['1,1'].permanentSideBonus ?? 0, 0, 'Tank does not qualify — Infantry only for I21');
 });
 
 test('Rally triggers on attack declaration even without the Rally keyword actually being present -> no-op safely', () => {
@@ -252,14 +278,14 @@ test('Last Stand (I18 Last Stand Soldier): draws 1 card when destroyed', () => {
 test('Last Stand (I19 Final Defender): a random friendly Infantry (excluding the dying Unit itself) gets +1 permanently', () => {
   const state = baseState(boardWith({ '0,0': unit('p1', 'I19'), '0,1': unit('p1', 'I1') }));
   const { state: after } = resolveDestructionChain(state, { unitKey: '0,0' });
-  assert.equal(after.board['0,1'].grantedSideBonus, 1);
+  assert.equal(after.board['0,1'].permanentSideBonus, 1);
 });
 
 test('Last Stand (I22 Field Commander): adjacent friendly Infantry get +1 until end of turn (tempSideBonus, not permanent)', () => {
   const state = baseState(boardWith({ '1,1': unit('p1', 'I22'), '0,1': unit('p1', 'I1') }));
   const { state: after } = resolveDestructionChain(state, { unitKey: '1,1' });
   assert.equal(after.board['0,1'].tempSideBonus, 1);
-  assert.equal(after.board['0,1'].grantedSideBonus ?? 0, 0, 'this one is temporary, not permanent');
+  assert.equal(after.board['0,1'].permanentSideBonus ?? 0, 0, 'this one is temporary, not permanent');
 });
 
 test('Graves Registration Officer (H14) doubles Last Stand as two independent resolutions, never the same random target twice', () => {
@@ -268,14 +294,14 @@ test('Graves Registration Officer (H14) doubles Last Stand as two independent re
     { p1: { hq: 30, hand: [], heroZones: ['H14', null, null, null] } }
   );
   const { state: after } = resolveDestructionChain(state, { unitKey: '0,0' });
-  assert.equal(after.board['0,1'].grantedSideBonus, 1);
-  assert.equal(after.board['0,2'].grantedSideBonus, 1, 'both eligible Infantry got hit — doubling could not pick the same one twice');
+  assert.equal(after.board['0,1'].permanentSideBonus, 1);
+  assert.equal(after.board['0,2'].permanentSideBonus, 1, 'both eligible Infantry got hit — doubling could not pick the same one twice');
 });
 
 test('Breakthrough (T32 Tank Hunter): the surviving attacker gains +1 all sides permanently on a kill', () => {
   const state = baseState(boardWith({ '0,0': unit('p1', 'T32'), '0,1': unit('p2', 'I1') }));
   const { state: after } = resolveDestructionChain(state, { unitKey: '0,1', sourceUnitKey: '0,0' });
-  assert.equal(after.board['0,0'].grantedSideBonus, 1);
+  assert.equal(after.board['0,0'].permanentSideBonus, 1);
 });
 
 test('Breakthrough (T33 Tank Destroyer): sets a Tank set-cost discount that other reductions can still stack through', () => {

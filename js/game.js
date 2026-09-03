@@ -27,6 +27,7 @@ import {
   hasEscalated,
   markEscalateUse,
   expireTempFuelGrant,
+  createBoardUnit,
 } from './state.js?v=20260902';
 import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, applyGameEvents, unitSuppressedEvent, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff, getObjectivePickEffectType, computeObjectivePickTargets, describeDynamicSideBonus } from './combat.js?v=20260902';
 import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones, showFxPopup, drawFxConnector } from './ui.js?v=20260902';
@@ -37,7 +38,7 @@ import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from
 import { runBotTurn } from './bot_player.js?v=20260902';
 import { bestHeroDeployment } from './bot_ai.js?v=20260902';
 import { canCancelInteraction, getInteractionDecision } from './interaction.js?v=20260902';
-import { prepareVersionedState, shouldAcceptRemoteState } from './sync.js?v=20260902';
+import { normalizeRemoteBoard, prepareVersionedState, shouldAcceptRemoteState } from './sync.js?v=20260902';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
@@ -416,17 +417,6 @@ function renderMulliganCards(hand) {
         <div class="hc-cost">${card.cost} ⛽</div>
         <div class="hc-type hc-command-label">COMMAND</div>
         <div class="hc-effect">${card.effect || ''}</div>`;
-    } else if (card.type === 'mission') {
-      div.classList.add('hc-mission');
-      div.innerHTML = `
-        <div class="hc-header">${card.name}</div>
-        <div class="hc-cost">${card.cost} ⛽</div>
-        <div class="hc-type hc-mission-label">MISSION</div>
-        <div class="hc-req">${card.req || ''}</div>
-        <div class="hc-reward-strip">
-          <div class="hc-reward-label">REWARD</div>
-          <div class="hc-reward-text">${card.reward || card.effect || ''}</div>
-        </div>`;
     } else {
       div.innerHTML = `
         <div class="hc-header">${card.name}</div>
@@ -1185,11 +1175,6 @@ function setOnlineSyncStatus(message = '', tone = '') {
 // This restores them to real arrays for all fields that must be arrays.
 function normalizeFirebaseState(raw) {
   const toArray = v => Array.isArray(v) ? v : Object.values(v ?? {});
-  const fixUnit = u => u ? { ...u, tempKeywords: toArray(u.tempKeywords), grantedKeywords: toArray(u.grantedKeywords), permanentKeywords: toArray(u.permanentKeywords) } : u;
-  const fixBoard = b => {
-    if (!b) return {};
-    return Object.fromEntries(Object.entries(b).map(([k, v]) => [k, fixUnit(v)]));
-  };
   // heroZones is POSITIONAL (index = board column) and usually sparse, e.g. [null,87,null,null].
   // Firebase strips nulls, so toArray() would collapse that to [87] and silently move the hero
   // to column 0. Rebuild by index instead.
@@ -1206,7 +1191,6 @@ function normalizeFirebaseState(raw) {
     ...p,
     hand:     toArray(p.hand),
     deck:     toArray(p.deck),
-    missions: toArray(p.missions),
     heroRoster: toArray(p.heroRoster),
     heroZones:  fixZones(p.heroZones),
     heroesActivatedThisTurn: toArray(p.heroesActivatedThisTurn),
@@ -1230,7 +1214,7 @@ function normalizeFirebaseState(raw) {
     log:   toArray(raw.log),
     p1:    fixPlayer(raw.p1),
     p2:    fixPlayer(raw.p2),
-    board: fixBoard(raw.board),
+    board: normalizeRemoteBoard(raw.board),
   };
 }
 
@@ -1391,7 +1375,7 @@ function applyHeroPower(s, role, col, hero, targetKey) {
       for (const k of keys) {
         const u = newBoard[k];
         if (!u || u.state === 'destroyed') continue;
-        newBoard[k] = { ...u, grantedSideBonus: (u.grantedSideBonus || 0) + 2, sideBonusTurns: 99 };
+        newBoard[k] = { ...u, permanentSideBonus: (u.permanentSideBonus || 0) + 2 };
         count++;
       }
       s = { ...s, board: newBoard };
@@ -1404,7 +1388,7 @@ function applyHeroPower(s, role, col, hero, targetKey) {
       let count = 0;
       for (const [k, u] of Object.entries(newBoard)) {
         if (!u || u.owner !== role || u.state === 'destroyed') continue;
-        newBoard[k] = { ...u, grantedSideBonus: (u.grantedSideBonus || 0) + 1, sideBonusTurns: 99 };
+        newBoard[k] = { ...u, permanentSideBonus: (u.permanentSideBonus || 0) + 1 };
         count++;
       }
       s = { ...s, board: newBoard };
@@ -1435,7 +1419,7 @@ function applyHeroPower(s, role, col, hero, targetKey) {
     case 'H03': { // Tactical Commander — +1 all sides permanently
       const u = s.board[targetKey];
       log.push(`${hero.name}: ${nameOf(targetKey)} +1 all sides (permanent)`);
-      s = { ...s, board: { ...s.board, [targetKey]: { ...u, grantedSideBonus: (u.grantedSideBonus || 0) + 1, sideBonusTurns: 99 } } };
+      s = { ...s, board: { ...s.board, [targetKey]: { ...u, permanentSideBonus: (u.permanentSideBonus || 0) + 1 } } };
       break;
     }
 
@@ -2009,24 +1993,11 @@ document.getElementById('board').addEventListener('click', e => {
     const idx = handAfter.indexOf(selectedHandCardId);
     if (idx !== -1) handAfter.splice(idx, 1);
 
-    const placedUnit = {
-      cardId: selectedHandCardId,
-      owner: active,
-      state: 'normal',
-      armorHits: 0,
-      tempKeywords: [],
-      grantedKeywords: [],
-      permanentKeywords: [],
-      tempSideBonus: 0,
-      persistentSpent: 0,
-      tempExtraAttacks: 0,
-      tempExtraAttacksSpent: 0,
-      justPlaced: true,
-      rotation: 0,
-    };
+    const created = createBoardUnit(state, selectedHandCardId, active);
+    const placedUnit = created.unit;
 
     let newState = {
-      ...state,
+      ...created.state,
       board: { ...state.board, [clickedKey]: placedUnit },
       [active]: consumeDiscounts(
         { ...state[active], fuel: state[active].fuel - effectiveCost, hand: handAfter },
@@ -2596,7 +2567,7 @@ function applyObjectiveEffects(s, player, resumeAfterKey = null) {
           let board = s.board;
           for (const ak of picks) {
             const u = board[ak];
-            board = { ...board, [ak]: { ...u, grantedSideBonus: (u.grantedSideBonus || 0) + 1, sideBonusTurns: 99 } };
+            board = { ...board, [ak]: { ...u, permanentSideBonus: (u.permanentSideBonus || 0) + 1 } };
           }
           s = { ...s, board };
           if (picks.length) log.push(`${nm} L3: ${picks.length} adjacent Infantry +1 all sides (permanent)`);
@@ -2836,7 +2807,7 @@ function playInstantCommand(cardId) {
       let count = 0;
       for (const [k, u] of Object.entries(newBoard)) {
         if (!u || u.state === 'destroyed') continue;
-        newBoard[k] = { ...u, grantedSideBonus: (u.grantedSideBonus || 0) + 1, sideBonusTurns: 99 };
+        newBoard[k] = { ...u, permanentSideBonus: (u.permanentSideBonus || 0) + 1 };
         count++;
       }
       s = { ...s, board: newBoard };
@@ -2872,7 +2843,7 @@ function playInstantCommand(cardId) {
       for (const [k, u] of Object.entries(newBoard)) {
         if (!u || u.owner !== active || u.state === 'destroyed') continue;
         if (CARD_BY_ID[u.cardId]?.cls !== 'Infantry') continue;
-        newBoard[k] = { ...u, grantedSideBonus: (u.grantedSideBonus || 0) + amount, sideBonusTurns: 99 };
+        newBoard[k] = { ...u, permanentSideBonus: (u.permanentSideBonus || 0) + amount };
         count++;
       }
       s = { ...s, board: newBoard, [active]: markEscalateUse(s[active], card.name) };
@@ -3281,7 +3252,7 @@ function applyCommandEffect(commandId, targetKey) {
     const newBoard = { ...s.board };
     for (const k of targets) {
       const u = newBoard[k];
-      newBoard[k] = { ...u, grantedSideBonus: (u.grantedSideBonus || 0) + 1, sideBonusTurns: 99 };
+      newBoard[k] = { ...u, permanentSideBonus: (u.permanentSideBonus || 0) + 1 };
     }
     s = { ...s, board: newBoard };
     log.push(`${card.name}: ${targets.length} friendly Unit(s) adjacent to the Objective +1 all sides (permanent)`);
@@ -3385,7 +3356,7 @@ function applyCommandEffect(commandId, targetKey) {
     }
     case 'C24': { // Suppressing Fire (Infantry) — +1 all sides permanently (simple stat buff —
       // NOT the old multi-hit "1 hit per friendly Infantry" mechanic despite the shared name)
-      s = { ...s, board: { ...s.board, [targetKey]: { ...unit, grantedSideBonus: (unit.grantedSideBonus || 0) + 1, sideBonusTurns: 99 } } };
+      s = { ...s, board: { ...s.board, [targetKey]: { ...unit, permanentSideBonus: (unit.permanentSideBonus || 0) + 1 } } };
       log.push(`${card.name}: ${unitName} +1 all sides (permanent)`);
       break;
     }
@@ -3729,7 +3700,7 @@ function showBoardUnitPreview(unitKey) {
   // Everything else that currently feeds getSideValue's total but isn't individually
   // attributed yet — kept as one honest catch-all so the listed amounts never silently
   // undercount the real total shown in cp-dirs above.
-  const otherTotal = (unit.tempSideBonus || 0) + (unit.grantedSideBonus || 0) + (unit.objSideBonus || 0);
+  const otherTotal = (unit.tempSideBonus || 0) + (unit.grantedSideBonus || 0) + (unit.permanentSideBonus || 0) + (unit.objSideBonus || 0);
   if (otherTotal !== 0) {
     const sign = otherTotal > 0 ? '+' : '';
     rows.push([otherTotal > 0 ? 'positive' : 'negative', otherTotal > 0 ? '▲' : '▼', `${sign}${otherTotal} all sides — other effects (Command/Hero Power/Objective)`]);
@@ -3814,9 +3785,8 @@ function showObjectivePreview(tileKey) {
   document.getElementById('preview-hint').style.display = 'none';
 }
 
-// Missions retired for v0.4 (2026-07-30, see cards.js header) — the dead
-// playMissionCard/checkActiveMissions/evalMissionCondition/applyMissionReward functions and
-// their call sites were removed from this file in the 2026-08 code-optimization pass.
+// Missions retired for v0.4 (2026-07-30, see cards.js header). Their definitions and old
+// implementation remain recoverable in the archive/Git history; no live card can reach them.
 
 // Hand hover → card preview
 document.getElementById('p1-hand').addEventListener('mouseover', e => {
@@ -3961,7 +3931,7 @@ if (isOnline && myRole === 'p2') {
 }
 
 // ── Shared deck-look card preview (Forward Observer, Field Reserves) ──────────
-// Read-only card face — same markup renderHand uses for a unit/command/mission hand card,
+// Read-only card face — same markup renderHand uses for a Unit or Command hand card,
 // but built directly (these modals show cards that are NOT in hand yet, mid-choice).
 function buildPreviewCardDiv(card) {
   const cardDiv = document.createElement('div');
@@ -3971,9 +3941,6 @@ function buildPreviewCardDiv(card) {
   } else if (card.type === 'command') {
     cardDiv.classList.add('hc-command');
     cardDiv.innerHTML = `<div class="hc-header">${card.name}</div><div class="hc-cost">${card.cost} ⛽</div><div class="hc-type hc-command-label">COMMAND</div><div class="hc-effect">${card.effect || ''}</div>`;
-  } else if (card.type === 'mission') {
-    cardDiv.classList.add('hc-mission');
-    cardDiv.innerHTML = `<div class="hc-header">${card.name}</div><div class="hc-cost">${card.cost} ⛽</div><div class="hc-type hc-mission-label">MISSION</div><div class="hc-req">${card.req || ''}</div><div class="hc-reward-strip"><div class="hc-reward-label">REWARD</div><div class="hc-reward-text">${card.reward || card.effect || ''}</div></div>`;
   } else {
     cardDiv.innerHTML = `<div class="hc-header">${card?.name ?? '?'}</div>`;
   }
