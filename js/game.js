@@ -31,12 +31,13 @@ import {
 import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, applyGameEvents, unitSuppressedEvent, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff, getObjectivePickEffectType, computeObjectivePickTargets, describeDynamicSideBonus } from './combat.js?v=20260902';
 import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones, showFxPopup, drawFxConnector } from './ui.js?v=20260902';
 import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=20260902';
-import { pushState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby, updatePlayerState } from './firebase.js?v=20260902';
+import { pushState, pushVersionedState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby, updatePlayerState } from './firebase.js?v=20260902';
 import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=20260902';
 import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=20260902';
 import { runBotTurn } from './bot_player.js?v=20260902';
 import { bestHeroDeployment } from './bot_ai.js?v=20260902';
 import { canCancelInteraction, getInteractionDecision } from './interaction.js?v=20260902';
+import { prepareVersionedState, shouldAcceptRemoteState } from './sync.js?v=20260902';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
@@ -292,6 +293,9 @@ const myRole   = params.get('role') ?? null; // 'p1' | 'p2' | null for local pla
 const isAiMode = params.get('ai') === '1';
 const urlMapId = params.get('mapId') ?? null; // set when this game came from the open-lobby browser — the map was already chosen there, so skip the map-picker
 let myLastPushId = null;
+let onlineWriteQueue = Promise.resolve();
+let onlineSyncGeneration = 0;
+let onlineSyncPaused = false;
 
 // Doc 04 §1 (locked setup order): Map is selected/revealed BEFORE deck+Hero roster
 // confirmation, and only ONE player ever picks it — a second picker for the other player
@@ -353,6 +357,7 @@ function currentInteractionContext() {
     hasBlockingModal: anyBlockingModalOpen(),
     pendingCommandId,
     selectedHeroZone,
+    syncPaused: onlineSyncPaused,
   };
 }
 
@@ -1119,6 +1124,10 @@ function syncObjectivePickUiState() {
 }
 
 function commitState(newState, logLines, transitionFlags, objectiveTransitionFlags, heroActivationKey) {
+  if (isOnline && onlineSyncPaused) {
+    setOnlineSyncStatus('Connection interrupted — actions are paused until the shared game reconnects.', 'error');
+    return false;
+  }
   lastChangedKeys = new Set(); // player acted — clear opponent highlights
   lastTransitionFlags = transitionFlags ?? new Map();
   lastObjectiveTransitionFlags = objectiveTransitionFlags ?? new Map();
@@ -1129,13 +1138,47 @@ function commitState(newState, logLines, transitionFlags, objectiveTransitionFla
   syncObjectivePickUiState();
   redraw();
   pushStateIfOnline(state);
+  return true;
 }
 
 function pushStateIfOnline(s) {
   if (!isOnline) return;
+  if (onlineSyncPaused) return;
   const pushId = `${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
+  const prepared = prepareVersionedState(s, pushId);
   myLastPushId = pushId;
-  pushState(gameId, { ...s, _pushId: pushId });
+  state = prepared.state;
+  const generation = onlineSyncGeneration;
+
+  onlineWriteQueue = onlineWriteQueue
+    .then(() => {
+      if (generation !== onlineSyncGeneration) return null;
+      return pushVersionedState(gameId, prepared.state, prepared.expectedRevision);
+    })
+    .catch(error => {
+      if (generation !== onlineSyncGeneration) return;
+      console.error('Online state write failed', error);
+      onlineSyncGeneration += 1; // invalidate any later writes queued from the stale snapshot
+      onlineSyncPaused = true;
+      myLastPushId = null;
+
+      if (error?.code === 'state-conflict' && error.latestState) {
+        receiveRemoteState(error.latestState, { force: true, preserveSyncStatus: true });
+        onlineSyncPaused = false;
+        setOnlineSyncStatus('Another update arrived first. The shared game was refreshed; please retry your action.');
+      } else {
+        setOnlineSyncStatus('Connection interrupted — actions are paused until the shared game reconnects.', 'error');
+        redraw();
+      }
+    });
+}
+
+function setOnlineSyncStatus(message = '', tone = '') {
+  const el = document.getElementById('sync-status');
+  if (!el) return;
+  el.textContent = message;
+  el.classList.toggle('error', tone === 'error');
+  el.style.display = message ? 'block' : 'none';
 }
 
 // Firebase converts JS arrays to objects with integer keys on retrieval.
@@ -1191,8 +1234,9 @@ function normalizeFirebaseState(raw) {
   };
 }
 
-function receiveRemoteState(remoteState) {
+function receiveRemoteState(remoteState, { force = false, preserveSyncStatus = false } = {}) {
   const normalized = normalizeFirebaseState(remoteState);
+  if (!shouldAcceptRemoteState(state, normalized, { force: force || onlineSyncPaused })) return;
   const prevLogLen = state?.log?.length ?? 0;
   const prevInitiative = state?.initiative;
   // Track tiles changed by the opponent so we can highlight them
@@ -1206,6 +1250,8 @@ function receiveRemoteState(remoteState) {
     }
   }
   state = normalized;
+  onlineSyncPaused = false;
+  if (!preserveSyncStatus) setOnlineSyncStatus();
   const newEntries = (normalized.log ?? []).slice(prevLogLen);
   if (newEntries.length) appendLog(newEntries);
   uiState = 'idle';
@@ -1699,6 +1745,7 @@ let selectedHeroZone = null; // column index of the picked-up hero, or null
 // plain click is never a dead end.
 function handleHeroZoneClick(role, col, shiftKey = false) {
   if (gameOver || !state) return;
+  if (onlineSyncPaused) return;
   // Radio Interference (123) — the one case that targets an ENEMY Hero Zone, so it must be
   // checked before the "only on your own turn/heroes" guard below turns away that click.
   if (uiState === 'command-hero-targeting') {
@@ -1871,6 +1918,8 @@ document.getElementById('board').addEventListener('click', e => {
     document.getElementById('debug-unit-hint').textContent = `Selected: ${name} at ${clickedKey}`;
     return;
   }
+
+  if (onlineSyncPaused) return;
 
   if (isOnline && state.initiative !== myRole) return;
 

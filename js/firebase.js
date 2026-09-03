@@ -1,5 +1,5 @@
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
-import { getDatabase, ref, set, get, onValue, update, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js';
+import { getDatabase, ref, set, get, onValue, update, serverTimestamp, runTransaction } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
 
 // Paste your Firebase project config here (from Firebase Console → Project Settings)
@@ -24,6 +24,27 @@ export function generateGameCode() {
 
 export async function pushState(gameId, state) {
   await set(ref(db, `games/${gameId}`), state);
+}
+
+// Active gameplay uses an optimistic compare-and-set rather than a blind full-object set().
+// The caller prepares `state._revision = expectedRevision + 1`; if the server has moved on
+// since that caller's snapshot, abort instead of overwriting the newer move with stale data.
+export async function pushVersionedState(gameId, state, expectedRevision) {
+  const result = await runTransaction(ref(db, `games/${gameId}`), current => {
+    const currentRevision = Number.isSafeInteger(current?._revision) && current._revision >= 0
+      ? current._revision
+      : 0;
+    if (currentRevision !== expectedRevision) return;
+    return state;
+  }, { applyLocally: false });
+
+  if (!result.committed) {
+    throw Object.assign(new Error('The shared game changed before this update could be saved.'), {
+      code: 'state-conflict',
+      latestState: result.snapshot.val(),
+    });
+  }
+  return result.snapshot.val();
 }
 
 export async function fetchState(gameId) {

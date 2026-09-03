@@ -84,6 +84,7 @@ import { CARD_BY_ID } from './cards.js?v=20260902';
 
 export function createInitialState(p1DeckIds, p2DeckIds, mapId = 'kursk', p1HeroIds = [], p2HeroIds = []) {
   return {
+    _revision: 0,
     turn: 1,
     // Doc 02 Q005 (locked): first player is chosen randomly — "remove alternate-initiative or
     // predetermined first-player rules." Previously hardcoded to always be p1, missed by both

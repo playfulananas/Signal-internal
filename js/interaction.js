@@ -33,7 +33,11 @@ export function getInteractionDecision({
   hasBlockingModal = false,
   pendingCommandId = null,
   selectedHeroZone = null,
+  syncPaused = false,
 } = {}) {
+  if (syncPaused) {
+    return { pending: true, mandatory: true, reason: 'Waiting for the shared game to reconnect' };
+  }
   if (pendingObjectivePick || uiState === 'objective-picking') {
     return { pending: true, mandatory: true, reason: LABELS['objective-picking'] };
   }

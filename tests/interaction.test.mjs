@@ -41,6 +41,16 @@ test('open modals block hidden buttons and keyboard-triggered actions', () => {
   assert.equal(canCancelInteraction(context), false);
 });
 
+test('a paused online sync blocks new actions until server state is restored', () => {
+  const context = { uiState: 'idle', syncPaused: true };
+  assert.deepEqual(getInteractionDecision(context), {
+    pending: true,
+    mandatory: true,
+    reason: 'Waiting for the shared game to reconnect',
+  });
+  assert.equal(canCancelInteraction(context), false);
+});
+
 test('Hero reposition and Command Shuffle stay explicit', () => {
   const contexts = [
     { selectedHeroZone: 0 },
