@@ -45,6 +45,25 @@ was deliberately retained for online and local testing.
 
 ---
 
+## 2026-09-02 — Fixed cache-version drift splitting browser module instances again
+
+Live Craft verification exposed a recurrence of the module-identity bug: edited files had acquired
+different `?v=` import values, so the generated card registered in one copy of `cards.js` was not
+visible through another. All runtime imports were re-unified on `1788363405`. The internal
+stability pass above subsequently replaced that value with one shared version and added a
+structural test so future drift fails automatically.
+
+---
+
+## 2026-09-02 — Fixed Craft candidate previews being unclickable
+
+Clicking the candidate card itself did nothing even though clicking the separate “CRAFT THIS”
+button worked. Because the activation cost had already been spent, this looked like the card had
+been selected and then lost. The preview now calls the same `confirmCraftPick(card.id)` handler as
+the button, so either click resolves the choice.
+
+---
+
 ## 2026-09-02 — Fixed Escape/E shortcuts breaking Chief Aircraft Engineer and 5 other modals
 
 Per direct report: "chief aircraft engineer didnt give me the card in the hand and it dint cost 1

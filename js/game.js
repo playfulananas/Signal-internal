@@ -4078,7 +4078,13 @@ function showCraftPickerModal(role) {
   candidates.forEach(card => {
     const slot = document.createElement('div');
     slot.className = 'fo-slot';
-    slot.appendChild(buildPreviewCardDiv(card));
+    const preview = buildPreviewCardDiv(card);
+    // The separate button and the card preview are both valid choices. This matches every other
+    // card-selection surface and prevents a natural click on the preview from looking accepted
+    // while leaving the already-paid modal unresolved.
+    preview.style.cursor = 'pointer';
+    preview.addEventListener('click', () => confirmCraftPick(card.id));
+    slot.appendChild(preview);
     const btn = document.createElement('button');
     btn.className = 'fo-pos-btn fo-top';
     btn.textContent = 'CRAFT THIS';
