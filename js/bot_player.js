@@ -144,13 +144,11 @@ async function playBotTurnSteps() {
 
     let debug = await flushPendingUiState(readDebug());
     if (!debug?.state) break;
-    const { state, attackedThisTurn } = debug;
+    const { state } = debug;
     const active = state.initiative;
     if (active !== "p2") return; // safety: bot only ever plays its own turn
     const ps = state[active];
-    const attackedMap = new Map(attackedThisTurn);
-
-    const lethal = findLethal(state, active, attackedMap);
+    const lethal = findLethal(state, active);
     if (lethal) {
       clickTile(lethal.attackerKey);
       await sleep(CLICK_DELAY_MS);
@@ -166,7 +164,7 @@ async function playBotTurnSteps() {
     // No single attack finishes the HQ — check whether several of this turn's attackers
     // together do (a human closing out a game would take the whole line, not just the best
     // single swing and then a lesser action next).
-    const combinedLethal = findCombinedLethal(state, active, attackedMap);
+    const combinedLethal = findCombinedLethal(state, active);
     if (combinedLethal) {
       for (const step of combinedLethal) {
         clickTile(step.unitKey);
@@ -187,14 +185,14 @@ async function playBotTurnSteps() {
     });
     const emptyTiles = Object.keys(state.board).filter(k => !state.board[k] && !state.objectives[k]);
     const placement = handUnitIds.length && emptyTiles.length ? bestPlacement(state, active, handUnitIds, emptyTiles) : null;
-    const attack = bestExistingAttack(state, active, attackedMap);
+    const attack = bestExistingAttack(state, active);
 
     const affordableCommandIds = ps.hand.filter(id => { const c = CARD_BY_ID[id]; return c && c.type === "command" && ps.fuel >= c.cost && !deadThisTurn.has(id); });
     const affordableMissionId = ps.hand.find(id => { const c = CARD_BY_ID[id]; return c && c.type === "mission" && ps.fuel >= c.cost && !deadThisTurn.has(id); });
 
     let bestCommand = null;
     for (const id of affordableCommandIds) {
-      const score = scoreCommand(state, active, id, attackedMap);
+      const score = scoreCommand(state, active, id);
       if (!bestCommand || score > bestCommand.score) bestCommand = { cardId: id, score };
     }
 
@@ -211,7 +209,7 @@ async function playBotTurnSteps() {
         if (!hero || hero.powerType !== "active" || !hero.implemented) continue;
         if (activatedThisTurn.includes(heroId)) continue;
         if (ps.fuel < (hero.activeCost ?? 0) || deadThisTurn.has(`hero:${heroId}`)) continue;
-        const score = scoreHeroPower(state, active, heroId, col, attackedMap);
+        const score = scoreHeroPower(state, active, heroId, col);
         if (!bestHeroPower || score > bestHeroPower.score) bestHeroPower = { heroId, col, score };
       }
     }

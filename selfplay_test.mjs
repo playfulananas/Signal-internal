@@ -195,13 +195,11 @@ async function playTurnSmart(page) {
     let debug = await readDebug(page);
     debug = await flushPendingUiState(page, debug);
     if (!debug?.state) break;
-    const { state, attackedThisTurn } = debug;
+    const { state } = debug;
     const active = state.initiative;
     const ps = state[active];
-    const attackedMap = new Map(attackedThisTurn);
-
     // 1. Take a lethal attack immediately if one exists.
-    const lethal = findLethal(state, active, attackedMap);
+    const lethal = findLethal(state, active);
     if (lethal) {
       await clickTile(page, lethal.attackerKey);
       await page.waitForTimeout(30);
@@ -214,7 +212,7 @@ async function playTurnSmart(page) {
     }
 
     // 1b. No single attack is lethal — check whether several attackers together are.
-    const combinedLethal = findCombinedLethal(state, active, attackedMap);
+    const combinedLethal = findCombinedLethal(state, active);
     if (combinedLethal) {
       for (const step of combinedLethal) {
         await clickTile(page, step.unitKey);
@@ -236,14 +234,14 @@ async function playTurnSmart(page) {
     });
     const emptyTiles = Object.keys(state.board).filter(k => !state.board[k] && !state.objectives[k]);
     const placement = handUnitIds.length && emptyTiles.length ? bestPlacement(state, active, handUnitIds, emptyTiles) : null;
-    const attack = bestExistingAttack(state, active, attackedMap);
+    const attack = bestExistingAttack(state, active);
 
     const affordableCommandIds = ps.hand.filter(id => { const c = CARD_BY_ID[id]; return c && c.type === "command" && ps.fuel >= c.cost && !deadThisTurn.has(id); });
     const affordableMissionId = ps.hand.find(id => { const c = CARD_BY_ID[id]; return c && c.type === "mission" && ps.fuel >= c.cost && !deadThisTurn.has(id); });
 
     let bestCommand = null;
     for (const id of affordableCommandIds) {
-      const score = scoreCommand(state, active, id, attackedMap);
+      const score = scoreCommand(state, active, id);
       if (!bestCommand || score > bestCommand.score) bestCommand = { cardId: id, score };
     }
 
@@ -260,7 +258,7 @@ async function playTurnSmart(page) {
         if (!hero || hero.powerType !== "active" || !hero.implemented) continue;
         if (activatedThisTurn.includes(heroId)) continue;
         if (ps.fuel < (hero.activeCost ?? 0) || deadThisTurn.has(`hero:${heroId}`)) continue;
-        const score = scoreHeroPower(state, active, heroId, col, attackedMap);
+        const score = scoreHeroPower(state, active, heroId, col);
         if (!bestHeroPower || score > bestHeroPower.score) bestHeroPower = { heroId, col, score };
       }
     }

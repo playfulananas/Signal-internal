@@ -326,7 +326,6 @@ let p1LobbyData = null; // P2 stores P1's lobby push until P2 has also picked th
 let uiState = "idle";
 let selectedHandCardId = null;
 let pendingAttackerKey = null;
-let attackedThisTurn = new Map(); // tileKey → attack count used this turn
 let pendingCommandId = null;       // card ID of command awaiting a board target
 let preCommandState = null;        // state snapshot before command-targeting started (for cancel)
 let pendingRallyCryCount = 0;      // remaining Rally Cry target picks (0 = not active)
@@ -907,7 +906,7 @@ function redraw() {
   if (!state) return;
   // Debug/testing hook only — read-only snapshot for external tooling (e.g. selfplay bot).
   // No gameplay effect: nothing reads this back into game state.
-  window.__SIGNAL_DEBUG__ = { state, uiState, selectedHandCardId, pendingAttackerKey, attackedThisTurn: [...attackedThisTurn.entries()] };
+  window.__SIGNAL_DEBUG__ = { state, uiState, selectedHandCardId, pendingAttackerKey };
   renderHQ(state);
 
   // One-shot transition flags (destroy reticle, objective-captured flash, hero-activation glow)
@@ -1192,7 +1191,6 @@ function receiveRemoteState(remoteState) {
   pendingAttackerKey = null;
   pendingCommandId = null;
   preCommandState = null;
-  attackedThisTurn = new Map();
   lastDATargetKey = null;
   selectedHeroZone = null;
   pendingHeroId = null;
@@ -1962,6 +1960,9 @@ document.getElementById('board').addEventListener('click', e => {
       grantedKeywords: [],
       permanentKeywords: [],
       tempSideBonus: 0,
+      persistentSpent: 0,
+      tempExtraAttacks: 0,
+      tempExtraAttacksSpent: 0,
       justPlaced: true,
       rotation: 0,
     };
@@ -2101,6 +2102,14 @@ document.getElementById('board').addEventListener('click', e => {
   // TARGETING
   if (uiState === "targeting") {
     if (!pendingAttackerKey) return;
+    const pendingAttacker = state.board[pendingAttackerKey];
+    if (!pendingAttacker || pendingAttacker.owner !== state.initiative || pendingAttacker.state !== 'normal' || remainingAttacks(pendingAttacker) <= 0) {
+      uiState = 'idle';
+      pendingAttackerKey = null;
+      lastDATargetKey = null;
+      redraw();
+      return;
+    }
     let targets = getAttackableTargets(state, pendingAttackerKey);
     // Double Attack: first hit target is always valid for the second hit (even if Guard forces other targets)
     if (lastDATargetKey && !targets.some(t => t.key === lastDATargetKey)) {
@@ -2154,16 +2163,16 @@ document.getElementById('board').addEventListener('click', e => {
 
     const attackerKey = pendingAttackerKey;
     const attackerUnit = rallyState.board[attackerKey];
-    attackedThisTurn.set(attackerKey, (attackedThisTurn.get(attackerKey) ?? 0) + 1);
-    const attackCount = attackedThisTurn.get(attackerKey);
     const isDoubleAttack = getKeywords(attackerUnit).includes('Double Attack');
+    const isFirstDoubleAttack = isDoubleAttack && (attackerUnit.persistentSpent ?? 0) === 0;
     if (newState.board[attackerKey]) {
       newState = { ...newState, board: { ...newState.board, [attackerKey]: spendAttack(newState.board[attackerKey]) } };
     }
+    const attacksLeft = newState.board[attackerKey] ? remainingAttacks(newState.board[attackerKey]) : 0;
 
     // Track first DA hit so second hit can always re-target it
-    if (isDoubleAttack && attackCount === 1) lastDATargetKey = clickedKey;
-    else if (!isDoubleAttack || attackCount >= 2) lastDATargetKey = null;
+    if (isFirstDoubleAttack) lastDATargetKey = clickedKey;
+    else lastDATargetKey = null;
 
     const postAttackTargets = getAttackableTargets({ ...rallyState, board: newBoard }, attackerKey);
 
@@ -2208,7 +2217,7 @@ document.getElementById('board').addEventListener('click', e => {
     // right now — it stays available and converts via Direct HQ at end of turn if it's still
     // unused and still has no legal target then (doc 01 §19). No mid-turn conversion here
     // (removed 2026-08-31, Run 1) — see the End Turn handler for the actual Direct HQ sweep.
-    if (isDoubleAttack && attackCount < 2 && postAttackTargets.length > 0) {
+    if (attacksLeft > 0 && postAttackTargets.length > 0) {
       uiState = "targeting";
       pendingAttackerKey = attackerKey;
     } else {
@@ -2326,8 +2335,7 @@ document.getElementById('board').addEventListener('click', e => {
     const active = state.initiative;
     if (unit.owner !== active) return;
     if (unit.state !== "normal") return;
-    const maxAttacks = getKeywords(unit).includes('Double Attack') ? 2 : 1;
-    if ((attackedThisTurn.get(clickedKey) ?? 0) >= maxAttacks) return;
+    if (remainingAttacks(unit) <= 0) return;
 
     const targets = getAttackableTargets(state, clickedKey);
     if (targets.length === 0) {
@@ -3554,7 +3562,6 @@ document.getElementById('btn-end-turn').addEventListener('click', () => {
   // whoever clicked End Turn — knows to enter arty-targeting mode. See syncArtyTargetingUiState().
   newState = { ...afterEffects, pendingArtyHits, pendingObjectivePick: pendingPick };
 
-  attackedThisTurn = new Map();
   lastDATargetKey = null;
   uiState = 'idle';
   selectedHandCardId = null;

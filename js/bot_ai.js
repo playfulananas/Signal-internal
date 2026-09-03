@@ -6,7 +6,7 @@
 // bot_player.js) execute the chosen action via clicks.
 import { CARD_BY_ID } from "./cards.js?v=20260902";
 import { getAttackableTargets, resolveSingleAttack } from "./combat.js?v=20260902";
-import { getKeywords, applyHit, hasEscalated } from "./state.js?v=20260902";
+import { getKeywords, applyHit, hasEscalated, persistentAllowance, remainingAttacks, spendAttack } from "./state.js?v=20260902";
 import { canPlaceOnTerrain, getTerrain } from "./maps.js?v=20260902";
 
 const W_HQ = 10;      // weight per point of HQ damage dealt/avoided
@@ -29,16 +29,18 @@ function scoreAttack(state, attackerKey, targetKey) {
 }
 
 export function maxAttacksFor(unit) {
-  return getKeywords(unit).includes("Double Attack") ? 2 : 1;
+  return persistentAllowance(unit);
 }
 
-// Best attack available for a specific friendly unit already on the board. attackCount is
-// how many of its attacks it's already used this turn (0 for a fresh/hypothetical unit).
+// Best attack available for a specific friendly unit already on the board. Attack availability
+// comes exclusively from the counters stored on that unit, shared with game.js and Direct HQ.
 // A unit with no legal target simply has no attack to take right now — Direct HQ conversion
 // (doc 01 §19) is automatic at end of turn regardless of what the bot does this turn, so it
 // is not a bot decision/action and is not scored here (removed 2026-08-31, Run 1, along with
 // the old reactive mid-turn Empty-Board HQ Strike this used to model).
-export function bestAttackForUnit(state, unitKey, attackCount = 0) {
+export function bestAttackForUnit(state, unitKey) {
+  const unit = state.board[unitKey];
+  if (!unit || unit.state !== "normal" || remainingAttacks(unit) <= 0) return null;
   const targets = getAttackableTargets(state, unitKey);
   if (targets.length === 0) return null;
   let best = null;
@@ -49,14 +51,13 @@ export function bestAttackForUnit(state, unitKey, attackCount = 0) {
   return best;
 }
 
-// Best not-yet-exhausted friendly unit + target this turn (attackedMap: tileKey -> attacks used so far).
-export function bestExistingAttack(state, active, attackedMap = new Map()) {
+// Best not-yet-exhausted friendly unit + target this turn.
+export function bestExistingAttack(state, active) {
   let best = null;
   for (const [key, unit] of Object.entries(state.board)) {
     if (!unit || unit.owner !== active || unit.state !== "normal") continue;
-    const attackCount = attackedMap.get(key) ?? 0;
-    if (attackCount >= maxAttacksFor(unit)) continue;
-    const atk = bestAttackForUnit(state, key, attackCount);
+    if (remainingAttacks(unit) <= 0) continue;
+    const atk = bestAttackForUnit(state, key);
     if (atk && (!best || atk.score > best.score)) best = { unitKey: key, ...atk };
   }
   return best;
@@ -65,12 +66,11 @@ export function bestExistingAttack(state, active, attackedMap = new Map()) {
 // Does any legal, not-yet-exhausted attack right now drop the opponent's HQ to <= 0?
 // Direct HQ conversion is automatic at end of turn (doc 01 §19), not a bot action, so a
 // unit with no legal target is not a "lethal attack" option here — see bestAttackForUnit.
-export function findLethal(state, active, attackedMap = new Map()) {
+export function findLethal(state, active) {
   const opp = active === "p1" ? "p2" : "p1";
   for (const [key, unit] of Object.entries(state.board)) {
     if (!unit || unit.owner !== active || unit.state !== "normal") continue;
-    const attackCount = attackedMap.get(key) ?? 0;
-    if (attackCount >= maxAttacksFor(unit)) continue;
+    if (remainingAttacks(unit) <= 0) continue;
     const targets = getAttackableTargets(state, key);
     if (targets.length === 0) continue;
     for (const t of targets) {
@@ -89,25 +89,23 @@ export function findLethal(state, active, attackedMap = new Map()) {
 // state, and repeats — so a second hit against an already-suppressed target is scored correctly
 // as a destroy, not re-scored as a fresh suppress. Returns an ordered list of attacks that
 // together are lethal, or null if no such combination exists within a turn's worth of attackers.
-export function findCombinedLethal(state, active, attackedMap = new Map()) {
+export function findCombinedLethal(state, active) {
   const opp = active === "p1" ? "p2" : "p1";
   let hqLeft = state[opp].hq;
   let workingState = state;
-  const attackedRemaining = new Map(attackedMap);
   const plan = [];
 
   for (let i = 0; i < 8 && hqLeft > 0; i++) {
-    const best = bestExistingAttack(workingState, active, attackedRemaining);
+    const best = bestExistingAttack(workingState, active);
     if (!best || !best.succeeded) break;
 
     plan.push({ unitKey: best.unitKey, targetKey: best.targetKey, isHQStrike: best.isHQStrike });
     hqLeft -= best.hqDamage;
-    attackedRemaining.set(best.unitKey, (attackedRemaining.get(best.unitKey) ?? 0) + 1);
-
     if (best.isHQStrike) continue; // no board mutation — nothing on the board to update
     const result = resolveSingleAttack(workingState, best.unitKey, best.targetKey);
     const newBoard = { ...workingState.board };
     for (const m of result.boardMutations) newBoard[m.key] = m.newUnit;
+    if (newBoard[best.unitKey]) newBoard[best.unitKey] = spendAttack(newBoard[best.unitKey]);
     workingState = { ...workingState, board: newBoard };
   }
 
@@ -320,20 +318,19 @@ function boardWideClassBuffValue(state, active, cls, cardName, perUnitWeight = 1
 // arbitrary predicate (e.g. "doesn't already have Armor") — whose best available attack improves
 // most from a +bonus all-sides buff. Returns { key, delta } (delta may be 0 if no eligible unit's
 // attack actually improves) or null if no eligible unit exists at all.
-function bestBuffTarget(state, active, bonus, attackedMap, { clsFilter = null, colFilter = null, filterFn = null } = {}) {
+function bestBuffTarget(state, active, bonus, { clsFilter = null, colFilter = null, filterFn = null } = {}) {
   let best = null;
   for (const [key, unit] of Object.entries(state.board)) {
     if (!unit || unit.owner !== active || unit.state !== "normal") continue;
     if (clsFilter && CARD_BY_ID[unit.cardId]?.cls !== clsFilter) continue;
     if (colFilter != null && Number(key.split(",")[1]) !== colFilter) continue;
     if (filterFn && !filterFn(unit)) continue;
-    const attackCount = attackedMap.get(key) ?? 0;
-    if (attackCount >= maxAttacksFor(unit)) continue;
+    if (remainingAttacks(unit) <= 0) continue;
 
-    const before = bestAttackForUnit(state, key, attackCount);
+    const before = bestAttackForUnit(state, key);
     const buffedUnit = { ...unit, tempSideBonus: (unit.tempSideBonus ?? 0) + bonus };
     const hypoState = { ...state, board: { ...state.board, [key]: buffedUnit } };
-    const after = bestAttackForUnit(hypoState, key, attackCount);
+    const after = bestAttackForUnit(hypoState, key);
 
     const delta = (after?.score ?? 0) - (before?.score ?? 0);
     if (!best || delta > best.delta) best = { key, delta };
@@ -348,20 +345,19 @@ function bestBuffTarget(state, active, bonus, attackedMap, { clsFilter = null, c
 // much it improves that Unit's best available attack right now (Bombard/Blast/Barrage/Precision
 // can unlock or improve an attack that wasn't legal, or wasn't as good, before). Returns
 // { key, delta } or null if no eligible Unit exists.
-function bestKeywordGrantTarget(state, active, keyword, attackedMap, { clsFilter = null, colFilter = null } = {}) {
+function bestKeywordGrantTarget(state, active, keyword, { clsFilter = null, colFilter = null } = {}) {
   let best = null;
   for (const [key, unit] of Object.entries(state.board)) {
     if (!unit || unit.owner !== active || unit.state !== "normal") continue;
     if (clsFilter && CARD_BY_ID[unit.cardId]?.cls !== clsFilter) continue;
     if (colFilter != null && Number(key.split(",")[1]) !== colFilter) continue;
     if (getKeywords(unit).includes(keyword)) continue; // already has it — no delta
-    const attackCount = attackedMap.get(key) ?? 0;
-    if (attackCount >= maxAttacksFor(unit)) continue;
+    if (remainingAttacks(unit) <= 0) continue;
 
-    const before = bestAttackForUnit(state, key, attackCount);
+    const before = bestAttackForUnit(state, key);
     const grantedUnit = { ...unit, tempKeywords: [...(unit.tempKeywords || []), keyword] };
     const hypoState = { ...state, board: { ...state.board, [key]: grantedUnit } };
-    const after = bestAttackForUnit(hypoState, key, attackCount);
+    const after = bestAttackForUnit(hypoState, key);
 
     const delta = (after?.score ?? 0) - (before?.score ?? 0);
     if (!best || delta > best.delta) best = { key, delta };
@@ -375,10 +371,10 @@ function bestKeywordGrantTarget(state, active, keyword, attackedMap, { clsFilter
 // the best available attack among units the buff could apply to. Approximates each "up to 2
 // Units" command by its single best target only — a real lower bound, not the true 2-target
 // value, but simulating every pair isn't worth it here.
-function buffBeforeAttackValue(state, active, cardId, attackedMap) {
+function buffBeforeAttackValue(state, active, cardId) {
   const bonus = cardId === "C10" || cardId === "C02" ? 2 : 1; // C03 Rally Cry uses 1
   const filterFn = cardId === "C02" ? (u => !getKeywords(u).includes("Armor") && !getKeywords(u).includes("Heavy Armor")) : null;
-  return bestBuffTarget(state, active, bonus, attackedMap, { filterFn })?.delta ?? 0;
+  return bestBuffTarget(state, active, bonus, { filterFn })?.delta ?? 0;
 }
 
 // Second Wind (C08): remove Suppression from 1 friendly Unit AND give it +2 all sides until end
@@ -391,7 +387,7 @@ function bestUnsuppressAndBuffTarget(state, active, bonus) {
     if (!unit || unit.owner !== active || unit.state !== "suppressed") continue;
     const restored = { ...unit, state: "normal", tempSideBonus: (unit.tempSideBonus ?? 0) + bonus };
     const hypoState = { ...state, board: { ...state.board, [key]: restored } };
-    const atk = bestAttackForUnit(hypoState, key, 0);
+    const atk = bestAttackForUnit(hypoState, key);
     const score = atk?.succeeded ? atk.score : 0;
     if (!best || score > best.score) best = { key, score };
   }
@@ -401,13 +397,12 @@ function bestUnsuppressAndBuffTarget(state, active, bonus) {
 // Overrun (C09): Suppress/Destroy landed after this resolves deal extra HQ damage — valuable in
 // proportion to how many successful attacks are already lined up this turn, so it should be
 // played before attacking.
-function overrunValue(state, active, attackedMap) {
+function overrunValue(state, active) {
   let count = 0;
   for (const [key, unit] of Object.entries(state.board)) {
     if (!unit || unit.owner !== active || unit.state !== "normal") continue;
-    const attackCount = attackedMap.get(key) ?? 0;
-    if (attackCount >= maxAttacksFor(unit)) continue;
-    const atk = bestAttackForUnit(state, key, attackCount);
+    if (remainingAttacks(unit) <= 0) continue;
+    const atk = bestAttackForUnit(state, key);
     if (atk?.succeeded && !atk.isHQStrike) count++; // an HQ strike doesn't Suppress/Destroy anything
   }
   return count * W_HQ;
@@ -434,15 +429,15 @@ function bestUnsuppressTarget(state, active, { colFilter = null } = {}) {
     if (colFilter != null && Number(key.split(",")[1]) !== colFilter) continue;
     const restored = { ...unit, state: "normal" };
     const hypoState = { ...state, board: { ...state.board, [key]: restored } };
-    const atk = bestAttackForUnit(hypoState, key, 0);
+    const atk = bestAttackForUnit(hypoState, key);
     const score = atk?.succeeded ? atk.score : 0;
     if (!best || score > best.score) best = { key, score };
   }
   return best;
 }
 
-// Field Medic (C01): removing Suppression restores a unit to "normal" and gives it an attack
-// again this turn — value it by that unit's best available attack once restored.
+// Field Medic (C01): removing Suppression restores a unit to "normal". Value any attack it
+// still has available; removing Suppression does not reset attacks already spent this turn.
 function unsuppressValue(state, active) {
   return bestUnsuppressTarget(state, active)?.score ?? 0;
 }
@@ -456,7 +451,7 @@ function combinedArmsValue(state, active) {
     if (!unit || unit.owner !== active || unit.state !== "suppressed") continue;
     const restored = { ...unit, state: "normal" };
     const hypoState = { ...state, board: { ...state.board, [key]: restored } };
-    const atk = bestAttackForUnit(hypoState, key, 0);
+    const atk = bestAttackForUnit(hypoState, key);
     if (atk?.succeeded) total += atk.score;
   }
   return total;
@@ -491,23 +486,23 @@ function friendlyUnitsAdjacentToObjective(state, active) {
 // a 0.1 floor (matching the old universal placeholder) when their situational value is zero —
 // e.g. Field Medic with nothing suppressed — so they're still played opportunistically rather
 // than never, same as before.
-export function scoreCommand(state, active, cardId, attackedMap = new Map()) {
+export function scoreCommand(state, active, cardId) {
   const card = CARD_BY_ID[cardId];
   if (cardId === "C01") return Math.max(unsuppressValue(state, active), 0.1);
-  if (cardId === "C02" || cardId === "C03" || cardId === "C10") return Math.max(buffBeforeAttackValue(state, active, cardId, attackedMap), 0.1);
+  if (cardId === "C02" || cardId === "C03" || cardId === "C10") return Math.max(buffBeforeAttackValue(state, active, cardId), 0.1);
   if (cardId === "C07") return combinedArmsValue(state, active);
   if (cardId === "C08") return Math.max(bestUnsuppressAndBuffTarget(state, active, 2)?.score ?? 0, 0.1);
-  if (cardId === "C09") return Math.max(overrunValue(state, active, attackedMap), 0.1);
-  if (cardId === "C12") return Math.max(bestKeywordGrantTarget(state, active, "Guard", attackedMap)?.delta ?? 0, 0.1);
+  if (cardId === "C09") return Math.max(overrunValue(state, active), 0.1);
+  if (cardId === "C12") return Math.max(bestKeywordGrantTarget(state, active, "Guard")?.delta ?? 0, 0.1);
   if (cardId === "C19") return Math.max(scorchedEarthRaidValue(state, active), 0.1);
   if (cardId === "C22") return Math.max(friendlyUnitsAdjacentToObjective(state, active).length * 0.5, 0.1);
   if (cardId === "C24") return Math.max(boardWideClassBuffValue(state, active, "Infantry", card?.name, 0.3), 0.1); // single-target permanent +1, approximated as a small per-Infantry-on-board nudge
   if (cardId === "C25") return Math.max(boardWideClassBuffValue(state, active, "Infantry", card?.name, 0.5), 0.1);
   if (cardId === "C26") return Math.max(boardWideClassBuffValue(state, active, "Infantry", card?.name, 0.6), 0.1);
   if (cardId === "C29") return handHasClass(state, active, "Tank") ? 1.5 : 0.5;
-  if (cardId === "C30") return Math.max(bestKeywordGrantTarget(state, active, "Barrage", attackedMap, { clsFilter: "Artillery" })?.delta ?? 0, 0.1);
-  if (cardId === "C31") return Math.max(bestKeywordGrantTarget(state, active, "Precision", attackedMap, { clsFilter: "Artillery" })?.delta ?? 0, 0.1);
-  if (cardId === "C32") return Math.max(bestKeywordGrantTarget(state, active, "Blast", attackedMap, { clsFilter: "Artillery" })?.delta ?? 0, 0.1) + 0.5; // + flat nudge for the accompanying Barrage grant
+  if (cardId === "C30") return Math.max(bestKeywordGrantTarget(state, active, "Barrage", { clsFilter: "Artillery" })?.delta ?? 0, 0.1);
+  if (cardId === "C31") return Math.max(bestKeywordGrantTarget(state, active, "Precision", { clsFilter: "Artillery" })?.delta ?? 0, 0.1);
+  if (cardId === "C32") return Math.max(bestKeywordGrantTarget(state, active, "Blast", { clsFilter: "Artillery" })?.delta ?? 0, 0.1) + 0.5; // + flat nudge for the accompanying Barrage grant
   if (cardId === "C33") return Math.max(boardWideClassBuffValue(state, active, "Aircraft", card?.name, W_MATERIAL * 0.5), 0.1);
   if (cardId === "C34") return Math.max(boardWideClassBuffValue(state, active, "Aircraft", card?.name, 0.6), 0.1);
   return COMMAND_UTILITY_VALUE[cardId] ?? 0.1;
@@ -561,13 +556,13 @@ function columnNetPresence(state, active, col) {
 // if no legal target exists. Instant/board-wide-effect Powers have no target to pick, so they
 // return null here (handled by flat/dynamic scoring in scoreHeroPower instead) — callers should
 // only invoke this for the targeted Powers listed above.
-export function bestHeroPowerTarget(state, active, heroId, col, attackedMap = new Map()) {
-  if (heroId === "H03") return bestBuffTarget(state, active, 1, attackedMap, { colFilter: col });
+export function bestHeroPowerTarget(state, active, heroId, col) {
+  if (heroId === "H03") return bestBuffTarget(state, active, 1, { colFilter: col });
   if (heroId === "H05") return bestUnsuppressTarget(state, active, { colFilter: col });
-  if (heroId === "H10") return bestBuffTarget(state, active, 3, attackedMap, { filterFn: u => !CARD_BY_ID[u.cardId]?.keyword });
-  if (heroId === "H12") return bestKeywordGrantTarget(state, active, "Bombard", attackedMap, { colFilter: col });
+  if (heroId === "H10") return bestBuffTarget(state, active, 3, { filterFn: u => !CARD_BY_ID[u.cardId]?.keyword });
+  if (heroId === "H12") return bestKeywordGrantTarget(state, active, "Bombard", { colFilter: col });
   if (heroId === "H15") return bestHeroHitTarget(state, active, col);
-  if (heroId === "H18") return bestKeywordGrantTarget(state, active, "Blast", attackedMap, { clsFilter: "Artillery", colFilter: col });
+  if (heroId === "H18") return bestKeywordGrantTarget(state, active, "Blast", { clsFilter: "Artillery", colFilter: col });
   return null;
 }
 
@@ -575,15 +570,15 @@ export function bestHeroPowerTarget(state, active, heroId, col, attackedMap = ne
 // Dynamically-scored Powers fall back to a 0.1 floor when their situational value is zero (e.g.
 // Recovery Officer with nothing suppressed in its column) — still played opportunistically, same
 // spirit as scoreCommand's floor.
-export function scoreHeroPower(state, active, heroId, col, attackedMap = new Map()) {
-  if (heroId === "H03") return Math.max(bestBuffTarget(state, active, 1, attackedMap, { colFilter: col })?.delta ?? 0, 0.1);
+export function scoreHeroPower(state, active, heroId, col) {
+  if (heroId === "H03") return Math.max(bestBuffTarget(state, active, 1, { colFilter: col })?.delta ?? 0, 0.1);
   if (heroId === "H05") return Math.max(bestUnsuppressTarget(state, active, { colFilter: col })?.score ?? 0, 0.1);
   if (heroId === "H07") return handHasClass(state, active, "Tank") ? 1.5 : 0.5;
   if (heroId === "H09") return handHasType(state, active, "command") ? 1.5 : 0.5;
-  if (heroId === "H10") return Math.max(bestBuffTarget(state, active, 3, attackedMap, { filterFn: u => !CARD_BY_ID[u.cardId]?.keyword })?.delta ?? 0, 0.1);
-  if (heroId === "H12") return Math.max(bestKeywordGrantTarget(state, active, "Bombard", attackedMap, { colFilter: col })?.delta ?? 0, 0.1);
+  if (heroId === "H10") return Math.max(bestBuffTarget(state, active, 3, { filterFn: u => !CARD_BY_ID[u.cardId]?.keyword })?.delta ?? 0, 0.1);
+  if (heroId === "H12") return Math.max(bestKeywordGrantTarget(state, active, "Bombard", { colFilter: col })?.delta ?? 0, 0.1);
   if (heroId === "H15") return Math.max(bestHeroHitTarget(state, active, col)?.score ?? 0, 0.1);
-  if (heroId === "H18") return Math.max(bestKeywordGrantTarget(state, active, "Blast", attackedMap, { clsFilter: "Artillery", colFilter: col })?.delta ?? 0, 0.1);
+  if (heroId === "H18") return Math.max(bestKeywordGrantTarget(state, active, "Blast", { clsFilter: "Artillery", colFilter: col })?.delta ?? 0, 0.1);
   if (heroId === "H19") return Math.max(state[active].hand.filter(id => { const c = CARD_BY_ID[id]; return c?.type === "unit" && (c.cost === 1 || c.cost === 2); }).length, 0.1);
   if (heroId === "H22") return Math.max(columnNetPresence(state, active, col) * 1.5, 0.1);
   if (heroId === "H23") return Math.max(Object.values(state.board).filter(u => u && u.owner === active && u.state !== "destroyed").length * 0.4, 0.1);
