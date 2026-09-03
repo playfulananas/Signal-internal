@@ -6,7 +6,7 @@ DEVPLAN tells you *what* to build; this doc tells you *how* things are built so 
 
 **Rule:** If you write code that contradicts something in this doc, update this doc. If something here is wrong, fix it here. Never silently drift.
 
-**Doc set (updated 2026-09-02):** `STATUS.md` is the current-state implementation summary
+**Doc set (updated 2026-09-03):** `STATUS.md` is the current-state implementation summary
 (edited in place, no history); `CHANGELOG.md` is the append-only detailed history; this file is
 the code-structure reference, with its own terse Session Log below for quick module-level
 orientation. Put current facts in STATUS.md, structure here, and narrative history in
@@ -43,6 +43,7 @@ CHANGELOG.md.
 | 23 | 2026-08-31 | **Run 1 — Set 1 truth-lock migration.** Full card pool replaced (65 Units/25 Heroes/35 Commands/5 Objectives, string ids), Naval class and Deathrattle cut (archived), Guard rewritten, Direct HQ built to replace the old reactive Empty-Board HQ Strike, shared destruction chain, Blast/Barrage/Rally/Inspire/Muster/Last Stand/Breakthrough/Maneuver/Escalate/Craft all newly built. See STATUS.md for full detail — this table row exists mainly to keep the log continuous; Run 1's narrative lives in STATUS.md/CLAUDE.md, not here. |
 | 24 | 2026-08-31 | **Run 2 — Maps/Objectives migration**, same day, separate pass, against doc 04 (Objectives & Maps Truth). Normandy + Midway cut (archived in `maps.js`'s new `ARCHIVED_MAPS`); Stalingrad/Kursk/El Alamein/Ardennes kept with corrected objective-slot geometry; all water/Naval terrain code removed. `applyObjectiveEffects` (game.js) rewired from dead pre-Run-1 numeric-id code to the live O1-O5 scheme — this was the actual bug: every Objective had done nothing at all since Run 1 shipped. Universal 1/1/2/2 HQ backbone, fixed column-major multi-objective resolution order with lethal-stop, and all 5 objectives' L1-L4 secondary effects now execute for real. `discountFor` gained an `appliesTo: 'unit'` dimension. Objective identities now randomize after mulligan, not before. `tests/maps.test.mjs` rewritten for the 4-map reality. |
 | 25 | 2026-09-02 | **Internal stability/architecture pass.** Standardized browser module identity and string IDs; made BoardUnit attack counters the sole attack authority; locked conflicting actions during pending choices; routed suppression reactions through ordered events; added CI and browser smoke jobs; removed retired runtime paths; added revision-checked Firebase gameplay writes; separated permanent/timed bonuses; and gave each deployed Unit a stable instance ID. |
+| 26 | 2026-09-03 | **UI intuitiveness pass.** Added a persistent action guide for every multi-step interaction, consistent target colours and selected-source highlights, visible unaffordable-hand states, enemy-Hero target feedback, and an `applyHit`-backed attack outcome preview. |
 
 *(Session Log entries above are milestone summaries, not one-per-commit — see `git log` for full commit-level history.)*
 
@@ -56,7 +57,7 @@ CHANGELOG.md.
 | `js/maps.js` | `MAPS` (4 live maps), `ARCHIVED_MAPS` (Normandy/Midway, cut Run 2), `getTerrain`, `canPlaceOnTerrain` | nothing |
 | `js/state.js` | see State API below | `cards.js` |
 | `js/combat.js` | see Combat API below (incl. Hero passives — see below) | `cards.js`, `state.js` |
-| `js/interaction.js` | `getInteractionDecision`, `canCancelInteraction` — pure pending-action/choice locks | nothing |
+| `js/interaction.js` | `getInteractionDecision`, `canCancelInteraction` — pure pending-action/choice locks; `getInteractionGuide` — pure player-facing instructions for each interaction state | nothing |
 | `js/sync.js` | `stateRevision`, `prepareVersionedState`, `shouldAcceptRemoteState`, `normalizeRemoteUnit`, `normalizeRemoteBoard` — pure online revision and compatibility helpers | nothing |
 | `js/ui.js` | see UI API below | `cards.js`, `state.js`, `maps.js` |
 | `js/firebase.js` | see Firebase API below, including revision-checked gameplay transactions | Firebase SDK (CDN) |
@@ -336,7 +337,14 @@ renderBoard(state: GameState, selectedTileKey: string|null, validDropKeys: Set<s
 
 renderHand(handCardIds: string[], containerId: string, selectedCardId: string|null,
            extras?: object) → void
-// Writes into the requested hand element and shows live discounts/buffs from extras.
+// Writes into the requested hand element, shows live discounts/buffs from extras, and marks
+// cards that current Fuel cannot afford with their exact shortfall.
+
+describeAttackOutcome(defender: BoardUnit, hits: boolean,
+                      options?: { overrun?: boolean })
+  → { badge: string, outcome: string, hqDamage: number }
+// Pure inspector wording derived from applyHit(), including Armor, Suppression, destruction,
+// Guard, and Overrun. The pre-click preview therefore shares the rules engine's hit result.
 
 renderHQ(state: GameState) → void
 // Updates #p1-hq, #p2-hq, #p1-fuel, #p2-fuel, #turn-display text content.
@@ -345,7 +353,8 @@ appendLog(entries: string[]) → void
 // Appends strings to #game-log and scrolls to bottom.
 ```
 
-**DOM contract:** `game.html` must contain these element IDs: `board`, `p1-hand`, `p1-hq`, `p2-hq`, `p1-fuel`, `p2-fuel`, `turn-display`, `game-log`. Do not rename them.
+**DOM contract:** `game.html` must contain these element IDs: `board`, `p1-hand`, `p1-hq`,
+`p2-hq`, `p1-fuel`, `p2-fuel`, `turn-display`, `mode-banner`, `game-log`. Do not rename them.
 
 ---
 

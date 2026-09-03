@@ -4,7 +4,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
-const EXPECTED_ASSET_VERSION = '20260902';
+const EXPECTED_ASSET_VERSION = '20260903';
 const runtimeFiles = [
   'index.html',
   'game.html',

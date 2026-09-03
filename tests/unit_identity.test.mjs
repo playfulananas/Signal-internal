@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createBoardUnit, createInitialState } from '../js/state.js?v=20260902';
-import { resolveManeuver } from '../js/combat.js?v=20260902';
+import { createBoardUnit, createInitialState } from '../js/state.js?v=20260903';
+import { resolveManeuver } from '../js/combat.js?v=20260903';
 
 function emptyState() {
   return createInitialState([], [], 'kursk');

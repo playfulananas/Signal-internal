@@ -2,8 +2,8 @@
 // UI). No DOM access here — every function takes a GameState and returns { state, log }, same
 // pattern as state.js, so this file can be tested with plain Node and no browser.
 
-import { CARD_BY_ID } from './cards.js?v=20260902';
-import { drawCards, updateObjectiveLevels, checkObjectiveControl } from './state.js?v=20260902';
+import { CARD_BY_ID } from './cards.js?v=20260903';
+import { drawCards, updateObjectiveLevels, checkObjectiveControl } from './state.js?v=20260903';
 
 export function debugAddCard(state, player, cardId) {
   const card = CARD_BY_ID[cardId];

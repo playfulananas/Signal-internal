@@ -1,7 +1,7 @@
-import { CARD_BY_ID } from './cards.js?v=20260902';
-import { getKeywords, maxArmorHits, discountFor, fuelCapOf, rotatedDir } from './state.js?v=20260902';
-import { getTerrain } from './maps.js?v=20260902';
-import { nextCraftCost } from './combat.js?v=20260902';
+import { CARD_BY_ID } from './cards.js?v=20260903';
+import { getKeywords, maxArmorHits, discountFor, fuelCapOf, rotatedDir, applyHit } from './state.js?v=20260903';
+import { getTerrain } from './maps.js?v=20260903';
+import { nextCraftCost } from './combat.js?v=20260903';
 
 const TERRAIN_SHORT = { plains: 'P', forest: 'F', water: 'W', desert: 'D', city: 'C' };
 
@@ -30,6 +30,47 @@ const KEYWORD_TEXT = {
   'Escalate': "This card's effect is upgraded after its first use each match.",
   'Craft': 'Generates aircraft candidates to choose from — activation cost drops with each use.',
 };
+
+// Pure attack-preview wording built from the same applyHit result combat uses. Keeping this out
+// of game.js prevents the inspector from drifting when damage rules change (as happened when
+// Suppression moved from 1 HQ damage to 0 and Guard began preventing destruction damage).
+export function describeAttackOutcome(defender, hits, { overrun = false } = {}) {
+  if (!hits) {
+    return { badge: 'BLOCKED', outcome: 'Attack blocked — no effect', hqDamage: 0 };
+  }
+
+  const beforeState = defender.state;
+  const beforeArmorHits = defender.armorHits ?? 0;
+  const { newUnit, hqDamage: baseHqDamage } = applyHit(defender);
+  const armorAbsorbed = newUnit != null &&
+    newUnit.state === beforeState &&
+    (newUnit.armorHits ?? 0) > beforeArmorHits;
+  const destroyed = newUnit == null || newUnit.state === 'destroyed';
+
+  if (armorAbsorbed) {
+    return { badge: 'HIT', outcome: 'Armor absorbs the hit — no HQ damage', hqDamage: 0 };
+  }
+
+  // Overrun adds 1 to each newly-Suppressed or newly-Destroyed defender in the real attack
+  // handler. Include it here so the pre-click preview and the eventual HQ number always agree.
+  const overrunDamage = overrun && (destroyed || newUnit.state === 'suppressed') ? 1 : 0;
+  const totalHqDamage = baseHqDamage + overrunDamage;
+  const hqText = totalHqDamage === 0
+    ? 'no HQ damage'
+    : `${totalHqDamage} HQ damage to defender`;
+
+  if (newUnit?.state === 'suppressed') {
+    return { badge: 'HIT', outcome: `Suppressed — ${hqText}`, hqDamage: totalHqDamage };
+  }
+
+  if (destroyed) {
+    const guardProtected = getKeywords(defender).includes('Guard') && baseHqDamage === 0;
+    const guardText = guardProtected && overrunDamage === 0 ? 'Guard prevents HQ damage' : hqText;
+    return { badge: 'HIT', outcome: `Destroyed — ${guardText}`, hqDamage: totalHqDamage };
+  }
+
+  return { badge: 'HIT', outcome: `Hit — ${hqText}`, hqDamage: totalHqDamage };
+}
 
 // ── Board rendering ───────────────────────────────────────────────────────────
 
@@ -314,6 +355,7 @@ export function renderHand(handCardIds, containerId, selectedCardId, extras = {}
     if (!card) return;
 
     const div = document.createElement('div');
+    let effectiveCostForAffordability = null;
     div.className = 'hand-card';
     if (cardId === selectedCardId) div.classList.add('selected');
     div.dataset.cardId = cardId;
@@ -322,6 +364,7 @@ export function renderHand(handCardIds, containerId, selectedCardId, extras = {}
       // col=null — no tile chosen yet, so a column-restricted discount shows optimistically.
       const discount = extras.playerState ? discountFor(extras.playerState, card, null) : 0;
       const displayCost = card.cost - discount;
+      effectiveCostForAffordability = displayCost;
       const costHtml = discount > 0
         ? `<span class="hc-cost-discounted">${displayCost} ⛽</span>`
         : `${displayCost} ⛽`;
@@ -361,6 +404,7 @@ export function renderHand(handCardIds, containerId, selectedCardId, extras = {}
       // discountFor's 'command' appliesTo — previously shown at full price regardless).
       const cmdDiscount = extras.playerState ? discountFor(extras.playerState, card, null) : 0;
       const cmdDisplayCost = card.cost - cmdDiscount;
+      effectiveCostForAffordability = cmdDisplayCost;
       const cmdCostHtml = cmdDiscount > 0
         ? `<span class="hc-cost-discounted">${cmdDisplayCost} ⛽</span>`
         : `${cmdDisplayCost} ⛽`;
@@ -376,6 +420,17 @@ export function renderHand(handCardIds, containerId, selectedCardId, extras = {}
         <div class="hc-header">${card.name}</div>
         <div class="hc-type">Objective</div>
       `;
+    }
+
+    if (
+      extras.playerState &&
+      effectiveCostForAffordability != null &&
+      extras.playerState.fuel < effectiveCostForAffordability
+    ) {
+      const shortfall = effectiveCostForAffordability - extras.playerState.fuel;
+      div.classList.add('cant-afford');
+      div.setAttribute('aria-disabled', 'true');
+      div.dataset.tip = `Need ${shortfall} more Fuel`;
     }
 
     el.appendChild(div);

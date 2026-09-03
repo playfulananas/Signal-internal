@@ -9,6 +9,32 @@ Newest first.
 
 ---
 
+## 2026-09-03 — First UI intuitiveness pass
+
+Prepared on the isolated `codex/ui-intuitiveness` branch of
+`playfulananas/Signal-internal`, leaving both repositories' `main` branches unchanged during
+manual testing.
+
+- Added a persistent, colour-coded action guide for every board/Hero multi-step interaction,
+  including placement, attacks, Command/Hero targets, Maneuver, Coordinated Strike, required
+  Objective choices, Artillery hits, Hero repositioning, and synchronization pauses. It shows
+  the current action, the next click, whether the choice is mandatory, and the cancel rule.
+- Kept selected source Units highlighted through the destination/second-target step so players
+  no longer need to remember which Unit they picked.
+- Corrected target colour semantics: destructive Unit targets are red, movement/friendly utility
+  targets are blue, placement is green, and Radio Interference now visibly marks eligible enemy
+  Heroes. Replaced a dead numeric-ID Command check with the current `C18`/`C19` string IDs.
+- Made unaffordable Unit and Command cards visibly dim with a red cost and a tooltip stating the
+  exact Fuel shortfall. Live discounts still feed the same effective-cost calculation.
+- Rebuilt attack-preview outcome text on top of the authoritative `applyHit()` rule helper. A
+  normal Suppression now correctly previews 0 HQ damage, destruction previews 2, Guard previews
+  its prevention, Armor previews absorption, and Overrun previews its extra damage.
+- Added focused pure/UI tests and advanced the shared browser asset version to `20260903` so
+  clients cannot combine the new controller with stale UI modules. Pure verification: 233/233
+  passing.
+
+---
+
 ## 2026-09-02 — Internal stability and architecture pass
 
 Completed on the isolated `codex/stability-and-architecture` branch of

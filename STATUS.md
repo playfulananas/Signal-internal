@@ -116,6 +116,20 @@ match the v1.1 map art exactly.
 | Deck builder | ✅ | 8 Recommended Decks plus custom deck/4-Hero-roster build, validation, local save, and Firebase backup |
 | Debug panel | ✅ | Deliberately retained for both local and online testing; online edits use the same revision-checked commit path as normal actions |
 
+## Player guidance and UI feedback
+
+Every multi-step board/Hero action has a persistent action guide that states what is being
+resolved, what to click next, and whether it can be cancelled. Target colours use one semantic
+language: green for placement, red for destructive/enemy targets, blue for movement/friendly
+utility, and gold for required choices. Selected Maneuver and Coordinated Strike source Units
+remain highlighted through the next step; Radio Interference highlights its eligible enemy Hero
+targets.
+
+Hand cards that cannot be paid for with current Fuel are visibly dimmed, their cost is red, and a
+tooltip reports the exact shortfall. Attack hover previews use the same `applyHit()` result as
+combat resolution, including Armor absorption, 0-damage Suppression, 2-damage destruction, Guard
+prevention, and Overrun's extra damage.
+
 ## Open items
 
 - **Online privacy/security:** gameplay state is revision-safe against accidental stale
@@ -136,7 +150,8 @@ hits across clients until the controlling player resolves them.
 
 ## Verification tools
 
-`npm test` runs `tests/*.test.mjs` (pure-function unit tests, no browser, 226/226 passing).
+`npm test` runs `tests/*.test.mjs` (pure-function and lightweight DOM-contract tests, no browser,
+233/233 passing).
 `node selfplay_test.mjs [games]` runs full Playwright-driven self-play games against a local
 `npm run dev` server (bot vs bot, catches stalls/timeouts/console errors). `node
 selfplay_vs_ai_smoke.mjs` smoke-tests the in-page "vs AI" bot specifically. Pure move scoring in
