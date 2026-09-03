@@ -63,7 +63,7 @@ async function readDebug(page) { return page.evaluate(() => window.__SIGNAL_DEBU
     console.log(`After round ${round}: initiative=${debug?.state?.initiative}, turn-display="${turnText}"`);
 
     if (!backToP1) {
-      console.log(`FAIL: expected control back at P1 (or a game-over screen) within 40s of the bot's turn, got initiative="${debug?.state?.initiative}"`);
+      console.log(`FAIL: expected control back at P1 (or a game-over screen) within 40s of the bot's turn, got initiative="${debug?.state?.initiative}", uiState="${debug?.uiState}"`);
       process.exitCode = 1;
       break;
     }

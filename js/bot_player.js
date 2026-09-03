@@ -21,6 +21,11 @@ function isGameOver() {
   return !!el && el.style.display !== "none";
 }
 
+function hasOpenBotChoiceModal() {
+  return ["fo-modal", "rotate-direction-modal", "craft-picker-modal"]
+    .some(id => document.getElementById(id)?.style.display === "flex");
+}
+
 async function handleForwardObserver() {
   const modal = document.getElementById("fo-modal");
   if (!modal || modal.style.display === "none") return;
@@ -57,11 +62,27 @@ async function handleArtyTargeting() {
 // direction choice is covered separately by handleRotateDirection, which runs every iteration
 // regardless of kind.
 async function handleObjectivePicking() {
-  const debug = readDebug();
-  if (debug?.uiState !== "objective-picking") return;
-  const targets = document.querySelectorAll(".tile.cmd-target");
-  if (targets.length > 0) targets[0].click();
-  await sleep(CLICK_DELAY_MS);
+  for (let i = 0; i < 2; i++) {
+    const debug = readDebug();
+    if (debug?.uiState !== "objective-picking") return;
+    const target = document.querySelector(".tile.cmd-target");
+    if (!target) return;
+    target.click();
+    await sleep(CLICK_DELAY_MS);
+  }
+}
+
+// A Unit with an on-play Maneuver can require two mandatory board choices (source, then
+// destination). These states cannot be cancelled, so resolve one highlighted step per pass.
+async function handleUnitManeuver() {
+  for (let i = 0; i < 2; i++) {
+    const debug = readDebug();
+    if (debug?.uiState !== "unit-maneuver-source" && debug?.uiState !== "unit-maneuver-destination") return;
+    const target = document.querySelector(".tile.cmd-target");
+    if (!target) return;
+    target.click();
+    await sleep(CLICK_DELAY_MS);
+  }
 }
 
 // Change Formation (C16) / Field Coordinator's Hero Power (H11): rotation direction doesn't
@@ -132,6 +153,7 @@ async function playBotTurnSteps() {
     // ever left for flushPendingUiState's generic "click Cancel on anything stale" fallback to
     // find, the bot's turn would hang forever instead of progressing.
     await handleObjectivePicking();
+    await handleUnitManeuver();
     if (isGameOver()) return;
 
     let debug = await flushPendingUiState(readDebug());
@@ -258,8 +280,23 @@ export async function runBotTurn() {
   await handleForwardObserver();
   await handleArtyTargeting();
   await playBotTurnSteps();
-  await handleForwardObserver();
-  await handleRotateDirection();
+
+  // The twelfth and final action can itself open a mandatory choice. Drain every modal/board
+  // choice the bot knows how to resolve before checking End Turn, otherwise the interaction
+  // lock correctly leaves the button disabled and P2 appears to hang forever.
+  for (let i = 0; i < 8; i++) {
+    await handleForwardObserver();
+    await handleRotateDirection();
+    await handleCraftPicker();
+    await handleObjectivePicking();
+    await handleUnitManeuver();
+    await handleArtyTargeting();
+
+    let debug = readDebug();
+    if ((!debug || debug.uiState === "idle") && !hasOpenBotChoiceModal()) break;
+    if (debug?.uiState !== "idle") debug = await flushPendingUiState(debug);
+    if ((!debug || debug.uiState === "idle") && !hasOpenBotChoiceModal()) break;
+  }
   if (isGameOver()) return;
 
   const endTurnBtn = document.getElementById("btn-end-turn");
