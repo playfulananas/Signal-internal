@@ -44,11 +44,13 @@ async function readDebug(page) { return page.evaluate(() => window.__SIGNAL_DEBU
     // P1 does nothing but pass — this test only cares whether P2's turn resolves unattended.
     await page.locator("#btn-end-turn").click();
 
-    // Poll for control to return to P1 — the bot paces itself at 350ms/click and may try
-    // several dead-end commands before finding a good move, so a single fixed wait isn't reliable.
+    // Poll for control to return to P1. The bot can take up to 12 actions, and each action may
+    // require several deliberately paced 350ms clicks, so a busy legal turn can exceed 10s.
+    // Keep a generous 40s ceiling: long enough for the designed worst case, still finite so a
+    // genuinely stuck interaction fails the smoke test instead of hanging CI indefinitely.
     let backToP1 = false;
     let debug = null;
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 80; i++) {
       await page.waitForTimeout(500);
       debug = await readDebug(page);
       if (debug?.state?.initiative === "p1" || (await page.locator("#end-screen").isVisible().catch(() => false))) {
@@ -61,7 +63,7 @@ async function readDebug(page) { return page.evaluate(() => window.__SIGNAL_DEBU
     console.log(`After round ${round}: initiative=${debug?.state?.initiative}, turn-display="${turnText}"`);
 
     if (!backToP1) {
-      console.log(`FAIL: expected control back at P1 (or a game-over screen) within 10s of the bot's turn, got initiative="${debug?.state?.initiative}"`);
+      console.log(`FAIL: expected control back at P1 (or a game-over screen) within 40s of the bot's turn, got initiative="${debug?.state?.initiative}"`);
       process.exitCode = 1;
       break;
     }
