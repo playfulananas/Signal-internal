@@ -9,6 +9,20 @@ Newest first.
 
 ---
 
+## 2026-09-04 — UI intuitiveness updates promoted to internal main
+
+Integrated both `codex/ui-intuitiveness` passes on top of the manual-test hotfixes and promoted
+the combined, verified tree to `playfulananas/Signal-internal` `main`. The client-testing
+`Shonetronic/Signal` repository remains untouched.
+
+The combined build includes the persistent action guide, clearer target colours, selected-source
+highlighting, unaffordable-card treatment, authoritative attack-result previews, per-Unit attack
+and Direct-HQ readiness badges, and the End Turn outcome forecast. Its cache version was advanced
+again so browsers cannot combine the newly integrated controller/UI with modules cached from
+either earlier branch build.
+
+---
+
 ## 2026-09-04 — Fixed self-destroyed Units lingering and host mulligan freeze
 
 Manual testing on `playfulananas/Signal-internal` found two blockers:
@@ -28,6 +42,53 @@ Manual testing on `playfulananas/Signal-internal` found two blockers:
 Regression coverage asserts both self-destroy Commands vacate their tiles (including a Guard +
 Last Stand case) and that host mulligan synchronization only accepts a complete pre-play game
 snapshot.
+
+---
+
+## 2026-09-04 — Turn readiness and End Turn forecast
+
+Prepared on the isolated `codex/ui-intuitiveness` branch of
+`playfulananas/Signal-internal`; neither repository's `main` branch was modified.
+
+- Added compact badges to every active Unit that still has a legal attack. The badge reports
+  the number of attacks remaining, and its tooltip reports how many legal targets are available.
+- Added a distinct `HQ×N` badge to Units whose unused attacks will automatically convert into
+  Direct HQ damage when the turn ends.
+- Added an `ENDING NOW` forecast beside End Turn. It reports exact automatic HQ damage, marks a
+  lethal result, and warns how many currently usable attacks will be forfeited.
+- Derived all guidance from `getAttackableTargets()`, `remainingAttacks()`, and a pure
+  `evaluateDirectHQ()` projection, so Guard, Bombard, Precision, Double Attack, temporary/spent
+  attacks, the first-turn restriction, multi-Unit ordering, and lethal stopping remain aligned
+  with resolution.
+- Hid readiness guidance during pending choices, an online opponent's turn, and the AI player's
+  turn. Added focused regression coverage and advanced the shared browser asset version to
+  `20260904`. Pure verification: 237/237 passing.
+
+---
+
+## 2026-09-03 — First UI intuitiveness pass
+
+Prepared on the isolated `codex/ui-intuitiveness` branch of
+`playfulananas/Signal-internal`, leaving both repositories' `main` branches unchanged during
+manual testing.
+
+- Added a persistent, colour-coded action guide for every board/Hero multi-step interaction,
+  including placement, attacks, Command/Hero targets, Maneuver, Coordinated Strike, required
+  Objective choices, Artillery hits, Hero repositioning, and synchronization pauses. It shows
+  the current action, the next click, whether the choice is mandatory, and the cancel rule.
+- Kept selected source Units highlighted through the destination/second-target step so players
+  no longer need to remember which Unit they picked.
+- Corrected target colour semantics: destructive Unit targets are red, movement/friendly utility
+  targets are blue, placement is green, and Radio Interference now visibly marks eligible enemy
+  Heroes. Replaced a dead numeric-ID Command check with the current `C18`/`C19` string IDs.
+- Made unaffordable Unit and Command cards visibly dim with a red cost and a tooltip stating the
+  exact Fuel shortfall. Live discounts still feed the same effective-cost calculation.
+- Rebuilt attack-preview outcome text on top of the authoritative `applyHit()` rule helper. A
+  normal Suppression now correctly previews 0 HQ damage, destruction previews 2, Guard previews
+  its prevention, Armor previews absorption, and Overrun previews its extra damage.
+- Added focused pure/UI tests and advanced the shared browser asset version to `20260903` so
+  clients cannot combine the new controller with stale UI modules. Pure verification: 233/233
+  passing.
 
 ---
 

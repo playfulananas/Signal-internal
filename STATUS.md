@@ -41,6 +41,9 @@ if the destroyed Unit has Guard — enforced consistently by both destruction pa
 state.js, for normal combat/Blast/Barrage kills; `resolveDestructionChain` in combat.js, for
 command/self-destruct kills like Sacrifice Play).
 
+Both destruction paths remove the destroyed Unit from its tile immediately; Last Stand and
+Breakthrough resolve from the captured pre-destruction snapshot rather than a dead board object.
+
 `bot_ai.js`'s Command/Hero-Power/Objective scoring is fully mapped to the current id scheme,
 matched by each card's actual effect text.
 
@@ -112,9 +115,30 @@ match the v1.1 map art exactly.
 | Firebase multiplayer | ✅ | Gameplay snapshots use revision-checked transactions; stale writes refresh the latest shared state instead of overwriting it, and connection/conflict status is visible |
 | Local-mode lobby setup order | ✅ | Map picked before deck(s), local hotseat + AI mode |
 | Online-mode lobby setup order | ✅ | Map picked before deck for both online flows (P1 direct-join now fixed to match); P2 never picks a map (by design — one player picks, not two) but sees its name |
-| Online mulligan | ✅ | Simultaneous — each player mulligans independently the moment the host's initial state arrives, no dependency on the other. Objectives/first-draw still computed once, by the host, but strictly after BOTH mulligans (doc 04 §1) |
+| Online mulligan | ✅ | Simultaneous — each player mulligans independently after the host's initial state arrives, no dependency on the other. The host awaits that initial transaction and rejects lobby/partial snapshots before showing mulligan. Objectives/first-draw still compute once, by the host, strictly after BOTH mulligans (doc 04 §1) |
 | Deck builder | ✅ | 8 Recommended Decks plus custom deck/4-Hero-roster build, validation, local save, and Firebase backup |
 | Debug panel | ✅ | Deliberately retained for both local and online testing; online edits use the same revision-checked commit path as normal actions |
+
+## Player guidance and UI feedback
+
+Every multi-step board/Hero action has a persistent action guide that states what is being
+resolved, what to click next, and whether it can be cancelled. Target colours use one semantic
+language: green for placement, red for destructive/enemy targets, blue for movement/friendly
+utility, and gold for required choices. Selected Maneuver and Coordinated Strike source Units
+remain highlighted through the next step; Radio Interference highlights its eligible enemy Hero
+targets.
+
+Hand cards that cannot be paid for with current Fuel are visibly dimmed, their cost is red, and a
+tooltip reports the exact shortfall. Attack hover previews use the same `applyHit()` result as
+combat resolution, including Armor absorption, 0-damage Suppression, 2-damage destruction, Guard
+prevention, and Overrun's extra damage.
+
+During an idle player-controlled turn, Units with a legal target show a compact `⚔×N` remaining-
+attacks badge; Units with no legal target that will convert at End Turn show `HQ×N`. The End Turn
+control displays an `ENDING NOW` forecast with exact automatic Direct HQ damage, a lethal marker
+when applicable, and the number of usable attacks that would be forfeited. These values come from
+the same target-legality, attack-allowance, and Direct HQ helpers used by resolution. They are
+hidden while another choice is pending, while waiting for an online opponent, and during AI turns.
 
 ## Open items
 
@@ -136,7 +160,8 @@ hits across clients until the controlling player resolves them.
 
 ## Verification tools
 
-`npm test` runs `tests/*.test.mjs` (pure-function unit tests, no browser, 226/226 passing).
+`npm test` runs `tests/*.test.mjs` (pure-function and lightweight DOM-contract tests, no browser,
+239/239 passing).
 `node selfplay_test.mjs [games]` runs full Playwright-driven self-play games against a local
 `npm run dev` server (bot vs bot, catches stalls/timeouts/console errors). `node
 selfplay_vs_ai_smoke.mjs` smoke-tests the in-page "vs AI" bot specifically. Pure move scoring in

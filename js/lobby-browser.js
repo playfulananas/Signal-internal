@@ -2,9 +2,9 @@
 // behavior, moved out of an inline <script> tag) plus the open-lobby browser
 // (host a lobby with a fixed map, browse and join others without typing a code).
 import { generateGameCode, initAuth, getDisplayName, setDisplayName,
-         createOpenLobby, removeOpenLobby, subscribeOpenLobbies } from './firebase.js?v=2026090401';
-import { filterStale, sortByNewest, formatWaiting } from './lobbies.js?v=2026090401';
-import { MAPS } from './maps.js?v=2026090401';
+         createOpenLobby, removeOpenLobby, subscribeOpenLobbies } from './firebase.js?v=2026090402';
+import { filterStale, sortByNewest, formatWaiting } from './lobbies.js?v=2026090402';
+import { MAPS } from './maps.js?v=2026090402';
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));

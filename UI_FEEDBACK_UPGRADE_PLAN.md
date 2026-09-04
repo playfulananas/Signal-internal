@@ -1,9 +1,8 @@
 # SIGNAL — Gameplay UI & Visual Feedback Upgrade Plan
 
-**Status:** Planning only — nothing in this doc has been implemented. No game code has been
-changed as part of producing this plan. The live-verification steps described below (Playwright
-against a local `npm run dev` server, using the built-in debug panel to construct test units)
-only read and screenshotted the running prototype — no source file was edited.
+**Status:** Historical design plan, now partially implemented. Use `STATUS.md` for current facts
+and `CHANGELOG.md` for completed slices; the proposal details below remain useful context but are
+not a current implementation checklist.
 
 **This revision (2026-09-01)** responds directly to Filip's review of the first draft. Where a
 decision below changes or replaces something the first draft proposed (e.g. the "max 2 badges"

@@ -7,9 +7,9 @@ import {
   remainingAttacks,
   resetPersistentAttacks,
   spendAttack,
-} from '../js/state.js?v=2026090401';
-import { resolveManeuver } from '../js/combat.js?v=2026090401';
-import { bestExistingAttack, findCombinedLethal } from '../js/bot_ai.js?v=2026090401';
+} from '../js/state.js?v=2026090402';
+import { resolveManeuver } from '../js/combat.js?v=2026090402';
+import { bestExistingAttack, findCombinedLethal } from '../js/bot_ai.js?v=2026090402';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 

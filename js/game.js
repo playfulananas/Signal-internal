@@ -1,4 +1,4 @@
-import { CARD_BY_ID, CARDS, ensureGeneratedCard } from './cards.js?v=2026090401';
+import { CARD_BY_ID, CARDS, ensureGeneratedCard } from './cards.js?v=2026090402';
 import {
   createInitialState,
   startOfTurn,
@@ -28,17 +28,17 @@ import {
   markEscalateUse,
   expireTempFuelGrant,
   createBoardUnit,
-} from './state.js?v=2026090401';
-import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, applyGameEvents, unitSuppressedEvent, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff, getObjectivePickEffectType, computeObjectivePickTargets, describeDynamicSideBonus } from './combat.js?v=2026090401';
-import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones, showFxPopup, drawFxConnector } from './ui.js?v=2026090401';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=2026090401';
-import { pushState, pushVersionedState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby, updatePlayerState } from './firebase.js?v=2026090401';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=2026090401';
-import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=2026090401';
-import { runBotTurn } from './bot_player.js?v=2026090401';
-import { bestHeroDeployment } from './bot_ai.js?v=2026090401';
-import { canCancelInteraction, getInteractionDecision } from './interaction.js?v=2026090401';
-import { isPrePlayMulliganSnapshot, normalizeRemoteBoard, prepareVersionedState, shouldAcceptRemoteState } from './sync.js?v=2026090401';
+} from './state.js?v=2026090402';
+import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, applyGameEvents, unitSuppressedEvent, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff, getObjectivePickEffectType, computeObjectivePickTargets, describeDynamicSideBonus } from './combat.js?v=2026090402';
+import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones, showFxPopup, drawFxConnector, describeAttackOutcome, summarizeTurnReadiness, renderEndTurnSummary } from './ui.js?v=2026090402';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=2026090402';
+import { pushState, pushVersionedState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby, updatePlayerState } from './firebase.js?v=2026090402';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=2026090402';
+import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=2026090402';
+import { runBotTurn } from './bot_player.js?v=2026090402';
+import { bestHeroDeployment } from './bot_ai.js?v=2026090402';
+import { canCancelInteraction, getInteractionDecision, getInteractionGuide } from './interaction.js?v=2026090402';
+import { isPrePlayMulliganSnapshot, normalizeRemoteBoard, prepareVersionedState, shouldAcceptRemoteState } from './sync.js?v=2026090402';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
@@ -360,6 +360,53 @@ function currentInteractionContext() {
     selectedHeroZone,
     syncPaused: onlineSyncPaused,
   };
+}
+
+function unitNameAt(key) {
+  return CARD_BY_ID[state?.board?.[key]?.cardId]?.name ?? '';
+}
+
+function currentGuideSubjectName() {
+  if (!state) return '';
+  if (uiState === 'placing') return CARD_BY_ID[selectedHandCardId]?.name ?? '';
+  if (uiState === 'targeting') return unitNameAt(pendingAttackerKey);
+  if (uiState.startsWith('command-')) return CARD_BY_ID[pendingCommandId]?.name ?? '';
+  if (uiState === 'hero-targeting') return CARD_BY_ID[pendingHeroId]?.name ?? '';
+  if (uiState === 'hero-maneuver-destination') {
+    return pendingHeroManeuverSource?.hero?.name ?? CARD_BY_ID[pendingHeroId]?.name ?? '';
+  }
+  if (uiState.startsWith('unit-maneuver-')) {
+    return unitNameAt(pendingUnitManeuverPlacedKey) || 'ON-PLAY MANEUVER';
+  }
+  if (selectedHeroZone !== null) {
+    const heroId = state[state.initiative]?.heroZones?.[selectedHeroZone];
+    return CARD_BY_ID[heroId]?.name ?? 'HERO';
+  }
+  return '';
+}
+
+function renderInteractionGuide(el, guide) {
+  if (!el) return;
+  el.replaceChildren();
+  el.className = 'mode-banner';
+  if (!guide) {
+    el.style.display = 'none';
+    return;
+  }
+
+  el.classList.add(`tone-${guide.tone ?? 'choice'}`);
+  if (guide.mandatory) el.classList.add('mandatory');
+  const label = document.createElement('div');
+  label.className = 'mode-guide-label';
+  label.textContent = guide.label;
+  const instruction = document.createElement('div');
+  instruction.className = 'mode-guide-instruction';
+  instruction.textContent = guide.instruction;
+  const hint = document.createElement('div');
+  hint.className = 'mode-guide-hint';
+  hint.textContent = guide.hint;
+  el.append(label, instruction, hint);
+  el.style.display = 'block';
 }
 
 // ── Forward Observer state ─────────────────────────────────────────────────────
@@ -941,6 +988,18 @@ function redraw() {
   window.__SIGNAL_DEBUG__ = { state, uiState, selectedHandCardId, pendingAttackerKey };
   renderHQ(state);
 
+  // Idle-turn guidance is intentionally hidden while a choice/modal is active, while an online
+  // opponent is playing, or during the bot's P2 turn. In every visible case the same summary
+  // drives both per-Unit badges and the End Turn forecast, so the two explanations cannot drift.
+  const interactionDecision = getInteractionDecision(currentInteractionContext());
+  const controlsThisTurn = isOnline
+    ? state.initiative === myRole
+    : !isAiMode || state.initiative === 'p1';
+  const showTurnReadiness = !gameOver && controlsThisTurn && uiState === 'idle' && !interactionDecision.pending;
+  const turnReadiness = showTurnReadiness
+    ? summarizeTurnReadiness(state, state.initiative)
+    : null;
+
   // One-shot transition flags (destroy reticle, objective-captured flash, hero-activation glow)
   // are meant to play exactly once, on the render right after the commitState that set them —
   // but several code paths (placing a card chief among them) call redraw() directly instead of
@@ -958,9 +1017,9 @@ function redraw() {
   lastHeroActivationKey = null;
 
   if (uiState === "placing") {
-    renderBoard(state, null, getValidTiles(), lastChangedKeys, transitionFlagsForThisRender, getTerrainBlockedTiles(), objectiveTransitionFlagsForThisRender);
+    renderBoard(state, null, getValidTiles(), lastChangedKeys, transitionFlagsForThisRender, getTerrainBlockedTiles(), objectiveTransitionFlagsForThisRender, null);
   } else {
-    renderBoard(state, null, null, lastChangedKeys, transitionFlagsForThisRender, null, objectiveTransitionFlagsForThisRender);
+    renderBoard(state, null, null, lastChangedKeys, transitionFlagsForThisRender, null, objectiveTransitionFlagsForThisRender, turnReadiness?.indicators ?? null);
   }
 
   if (uiState === "targeting" && pendingAttackerKey) {
@@ -978,8 +1037,11 @@ function redraw() {
 
   if (uiState === "command-targeting" && pendingCommandId !== null) {
     const validKeys = getCommandTargets(pendingCommandId);
-    const ENEMY_CMDS = new Set([16, 20, 79]);
-    const cls = ENEMY_CMDS.has(pendingCommandId) ? 'targetable' : 'cmd-target';
+    // Current Set 1 IDs are strings. The old numeric enemy-command list could never match and
+    // made every target blue. C18/C19 deliberately destroy the chosen friendly Unit, so they
+    // use the same red danger treatment as an enemy attack; utility/friendly picks stay blue.
+    const DANGEROUS_TARGET_COMMANDS = new Set(['C18', 'C19']);
+    const cls = DANGEROUS_TARGET_COMMANDS.has(pendingCommandId) ? 'targetable' : 'cmd-target';
     for (const key of validKeys) {
       const el = document.querySelector(`[data-key="${key}"]`);
       if (el) el.classList.add(cls);
@@ -993,6 +1055,8 @@ function redraw() {
     }
   }
   if (uiState === 'hero-maneuver-destination' && pendingHeroManeuverSource) {
+    const sourceEl = document.querySelector(`[data-key="${pendingHeroManeuverSource.key}"]`);
+    if (sourceEl) sourceEl.classList.add('selected-unit');
     for (const key of getManeuverTargets(state, pendingHeroManeuverSource.key)) {
       const el = document.querySelector(`[data-key="${key}"]`);
       if (el) el.classList.add('cmd-target');
@@ -1006,6 +1070,8 @@ function redraw() {
     }
   }
   if (uiState === 'command-maneuver-destination' && pendingCommandManeuverSource?.key) {
+    const sourceEl = document.querySelector(`[data-key="${pendingCommandManeuverSource.key}"]`);
+    if (sourceEl) sourceEl.classList.add('selected-unit');
     for (const key of getManeuverTargets(state, pendingCommandManeuverSource.key)) {
       const el = document.querySelector(`[data-key="${key}"]`);
       if (el) el.classList.add('cmd-target');
@@ -1018,6 +1084,8 @@ function redraw() {
     }
   }
   if (uiState === 'unit-maneuver-destination' && pendingUnitManeuverSource?.key) {
+    const sourceEl = document.querySelector(`[data-key="${pendingUnitManeuverSource.key}"]`);
+    if (sourceEl) sourceEl.classList.add('selected-unit');
     for (const key of getManeuverTargets(state, pendingUnitManeuverSource.key)) {
       const el = document.querySelector(`[data-key="${key}"]`);
       if (el) el.classList.add('cmd-target');
@@ -1030,6 +1098,8 @@ function redraw() {
     }
   }
   if (uiState === 'command-coordstrike-second' && pendingCoordStrikeFirst) {
+    const firstEl = document.querySelector(`[data-key="${pendingCoordStrikeFirst}"]`);
+    if (firstEl) firstEl.classList.add('selected-unit');
     for (const key of getCoordStrikeSecondCandidates(pendingCoordStrikeFirst)) {
       const el = document.querySelector(`[data-key="${key}"]`);
       if (el) el.classList.add('cmd-target');
@@ -1052,7 +1122,6 @@ function redraw() {
   // "locked in" via the existing selectedTileKey-style highlight class, so it's visually obvious
   // the player is now picking a destination, not another Unit.
   const modeBanner = document.getElementById('mode-banner');
-  if (modeBanner) modeBanner.style.display = 'none';
   if (uiState === 'objective-picking' && state.pendingObjectivePick) {
     const pick = state.pendingObjectivePick;
     const obj = state.objectives[pick.objectiveKey];
@@ -1066,10 +1135,6 @@ function redraw() {
         const srcEl = document.querySelector(`[data-key="${pick.sourceKey}"]`);
         if (srcEl) srcEl.classList.add('highlight');
       }
-      if (modeBanner) {
-        modeBanner.textContent = objectivePickBannerText(state, pick);
-        modeBanner.style.display = 'block';
-      }
     }
   }
 
@@ -1077,16 +1142,43 @@ function redraw() {
   renderHand(state[handRole].hand, 'p1-hand', selectedHandCardId, { playerState: state[handRole] });
   renderHeroZones(state, selectedHeroZone, heroActivationKeyForThisRender);
 
+  // Radio Interference targets the opponent's Hero strip rather than a board tile. Previously
+  // the log asked for an enemy Hero but no Hero was visually marked as clickable.
+  if (uiState === 'command-hero-targeting') {
+    const opponent = state.initiative === 'p1' ? 'p2' : 'p1';
+    document.querySelectorAll(`#hero-zone-${opponent} .hero-zone-slot.filled`)
+      .forEach(el => el.classList.add('danger-target'));
+  }
+
+  const objectiveInstruction = uiState === 'objective-picking' && state.pendingObjectivePick
+    ? objectivePickBannerText(state, state.pendingObjectivePick)
+    : '';
+  const remainingChoices = uiState === 'arty-targeting'
+    ? (pendingArtyHitCount || state.pendingArtyHits || 0)
+    : uiState === 'command-targeting'
+      ? pendingRallyCryCount
+      : uiState === 'command-maneuver-source'
+        ? pendingCommandManeuverRemaining
+        : 0;
+  const commandCanFinishEarly = ((pendingCommandId === 'C03' || pendingCommandId === 'C10') && pendingRallyCryCount < 2)
+    || (pendingCommandId === 'C32' && pendingRallyCryCount === 1);
+  renderInteractionGuide(modeBanner, getInteractionGuide({
+    uiState,
+    subjectName: currentGuideSubjectName(),
+    customInstruction: objectiveInstruction,
+    remainingChoices,
+    canFinishEarly: commandCanFinishEarly,
+    selectedHeroZone,
+    syncPaused: onlineSyncPaused,
+  }));
+
   const cancelBtn = document.getElementById('btn-cancel');
   if (cancelBtn) {
-    const rallyCryAlreadyPicked = ((pendingCommandId === 'C03' || pendingCommandId === 'C10') && pendingRallyCryCount < 2)
-    || (pendingCommandId === 'C32' && pendingRallyCryCount === 1);
-    cancelBtn.textContent = rallyCryAlreadyPicked ? 'Done' : 'Cancel';
+    cancelBtn.textContent = commandCanFinishEarly ? 'Done' : 'Cancel';
     cancelBtn.disabled = !canCancelInteraction(currentInteractionContext());
   }
 
   const endTurnBtn = document.getElementById('btn-end-turn');
-  const interactionDecision = getInteractionDecision(currentInteractionContext());
   if (isOnline) {
     const isMyTurn = state.initiative === myRole;
     const round = Math.ceil(state.turn / 2);
@@ -1099,7 +1191,18 @@ function redraw() {
     endTurnBtn.disabled = interactionDecision.pending;
     endTurnBtn.textContent = interactionDecision.pending ? 'Finish Choice' : `End ${state.initiative.toUpperCase()} Turn`;
   }
-  endTurnBtn.title = interactionDecision.reason ?? '';
+  const forecastTitle = turnReadiness
+    ? [
+        turnReadiness.totalDirectHqDamage > 0
+          ? `Ending now deals ${turnReadiness.totalDirectHqDamage} automatic damage to ${turnReadiness.targetPlayer.toUpperCase()} HQ${turnReadiness.lethal ? ' and wins the game' : ''}.`
+          : '',
+        turnReadiness.availableAttackCount > 0
+          ? `${turnReadiness.availableAttackCount} usable attack${turnReadiness.availableAttackCount === 1 ? '' : 's'} will be forfeited.`
+          : '',
+      ].filter(Boolean).join(' ')
+    : '';
+  endTurnBtn.title = interactionDecision.reason ?? forecastTitle;
+  renderEndTurnSummary(document.getElementById('end-turn-summary'), turnReadiness);
 
   populateDebugObjectiveDropdown();
   fitBoardArea();
@@ -2409,10 +2512,9 @@ function objectivePickPrompt(objName, instruction) {
 }
 
 // Single source of truth for each pick effect's step-1 instruction wording, shared between the
-// log line pushed when the pick opens (applyObjectiveEffects, below) and the persistent
-// #mode-banner shown while uiState === 'objective-picking' (redraw()) — the log alone wasn't
-// prominent enough (buried in a scrolling panel) for a player to notice what they're supposed
-// to click.
+// log line pushed when the pick opens (applyObjectiveEffects, below) and Objective-picking's
+// entry in the persistent action guide (redraw()). Objective instructions are dynamic while
+// the other interaction modes use getInteractionGuide's fixed wording.
 const OBJECTIVE_PICK_INSTRUCTIONS = {
   maneuver: 'choose a friendly Unit to Maneuver',
   removeSuppression: 'choose a Suppressed friendly Unit to un-suppress',
@@ -3749,25 +3851,19 @@ function showAttackPreview(attackerKey, targetKey) {
   const hits = attackBeats(attUnit, dir, defUnit);
   const attCard = CARD_BY_ID[attUnit.cardId];
   const defCard = CARD_BY_ID[defUnit.cardId];
-  let outcome;
-  if (!hits) {
-    outcome = 'Attack blocked — no effect';
-  } else {
-    const armor = maxArmorHits(defUnit);
-    if (defUnit.armorHits < armor) outcome = 'Armor absorbs — no HQ damage';
-    else if (defUnit.state === 'normal') outcome = 'Suppressed — 1 HQ damage to defender';
-    else outcome = 'Destroyed — 2 HQ damage to defender';
-  }
+  const preview = describeAttackOutcome(defUnit, hits, {
+    overrun: Boolean(state[state.initiative]?.overrun),
+  });
   const badge = document.getElementById('cp-badge');
   document.getElementById('cp-name').textContent = `${attCard?.name ?? '?'} → ${defCard?.name ?? '?'}`;
-  badge.textContent = hits ? 'HIT' : 'BLOCKED';
+  badge.textContent = preview.badge;
   badge.className = `cp-badge ${hits ? 'hit' : 'block'}`;
   document.getElementById('cp-dirs').innerHTML =
     `<div class="cp-dir-row"><span class="cp-dl">${dir.toUpperCase()}</span><span class="cp-dv">${attVal}</span></div>` +
     `<div class="cp-dir-row"><span class="cp-dl">${oppDir.toUpperCase()}</span><span class="cp-dv">${defVal}</span></div>`;
   document.getElementById('cp-keyword').textContent = '';
   document.getElementById('cp-effects').innerHTML = '';
-  document.getElementById('cp-effect').textContent = outcome;
+  document.getElementById('cp-effect').textContent = preview.outcome;
   document.getElementById('card-preview').style.display = 'flex';
   document.getElementById('preview-hint').style.display = 'none';
 }
@@ -3837,8 +3933,8 @@ for (const role of ['p1', 'p2']) {
 }
 
 // ── Floating tooltip — [data-tip]/[data-tip-html] elements (ability icons on hand/board
-// cards, Hero powers, Objective tiles) — delegated at the document level so it works for
-// every card/tile everywhere without each one's own overflow:hidden (or, for the board,
+// cards, affordability hints, Hero powers, Objective tiles) — delegated at the document level
+// so it works for every card/tile everywhere without each one's own overflow:hidden (or, for the board,
 // fitBoardArea's transform: scale()) clipping or shrinking it (see .floating-tip comment
 // in game.css). data-tip is plain text; data-tip-html allows richer markup (Objective
 // tiles' name/controller/level breakdown).

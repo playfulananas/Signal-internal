@@ -268,22 +268,47 @@ body[data-theme="light"] .theme-toggle {
   margin-bottom: 4px;
   font-family: 'Arial Narrow', Arial, sans-serif;
 }
-/* Persistent instruction banner for modes that need a player click but aren't obvious about
-   what to click (currently: Objective player-choice picks — Airfield L2 etc.) — a log line
-   alone wasn't prominent enough (scrolling side panel, easy to miss). Distinct from
-   .turn-info's plain status text: gold border/text reads as "action needed," matching the
-   buff/actionable color language used everywhere else in the UI. Shown/hidden per uiState in
-   redraw() (game.js), not a timed toast — it needs to stay up while the player decides. */
+/* Persistent action guide for every multi-step click mode. The battle log explains history;
+   this panel answers "what should I click now?" and stays visible until the action resolves. */
 .mode-banner {
-  font-size: 10px;
-  color: var(--gold);
-  text-align: center;
-  letter-spacing: 0.3px;
+  --guide-color: var(--gold);
+  --guide-bg: rgba(240,192,48,0.08);
+  color: var(--text-b);
+  text-align: left;
   font-family: 'Arial Narrow', Arial, sans-serif;
-  border: 1px solid var(--gold-dim);
+  border: 1px solid var(--guide-color);
   border-radius: 3px;
-  padding: 5px 8px;
+  padding: 7px 8px;
   margin-bottom: 2px;
+  background: var(--guide-bg);
+}
+.mode-banner.tone-placement { --guide-color: #6aaa40; --guide-bg: rgba(70,130,45,0.12); }
+.mode-banner.tone-danger    { --guide-color: var(--red); --guide-bg: rgba(190,45,55,0.10); }
+.mode-banner.tone-choice    { --guide-color: #5599cc; --guide-bg: rgba(50,100,150,0.10); }
+.mode-banner.tone-movement  { --guide-color: #88ccff; --guide-bg: rgba(70,140,190,0.10); }
+.mode-banner.tone-required  { --guide-color: var(--gold); --guide-bg: rgba(240,192,48,0.10); }
+.mode-banner.tone-warning   { --guide-color: #b88a28; --guide-bg: rgba(184,138,40,0.12); }
+.mode-banner.mandatory { box-shadow: 0 0 7px color-mix(in srgb, var(--guide-color) 25%, transparent); }
+.mode-guide-label {
+  color: var(--guide-color);
+  font-size: 8px;
+  font-weight: bold;
+  letter-spacing: 1px;
+  line-height: 1.25;
+  text-transform: uppercase;
+}
+.mode-guide-instruction {
+  color: var(--text);
+  font-size: 10.5px;
+  font-weight: bold;
+  line-height: 1.25;
+  margin-top: 3px;
+}
+.mode-guide-hint {
+  color: var(--text-c);
+  font-size: 8.5px;
+  line-height: 1.3;
+  margin-top: 4px;
 }
 .sync-status {
   max-width: 150px;
@@ -300,6 +325,32 @@ body[data-theme="light"] .theme-toggle {
   background: rgba(190, 50, 50, 0.12);
   color: var(--red);
 }
+.end-turn-summary {
+  max-width: 150px;
+  padding: 6px 7px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-alt);
+  color: var(--text-b);
+  font-family: 'Arial Narrow', Arial, sans-serif;
+  text-align: left;
+}
+.end-turn-summary-label {
+  color: var(--text-c);
+  font-size: 7px;
+  font-weight: bold;
+  letter-spacing: 1px;
+  line-height: 1.2;
+}
+.end-turn-summary-row {
+  margin-top: 3px;
+  font-size: 8.5px;
+  font-weight: bold;
+  line-height: 1.25;
+}
+.end-turn-summary-row.direct { color: var(--gold); }
+.end-turn-summary-row.lethal { color: var(--red); }
+.end-turn-summary-row.warning { color: var(--log-absorb); }
 .side-controls .btn {
   width: 100%;
   padding: 10px 12px;
@@ -457,6 +508,12 @@ body.viewer-p2 .stats-panel {
 .hero-placed.picked { border-color: var(--gold) !important; box-shadow: 0 0 8px var(--gold-glow); }
 /* A legal destination while a Hero is picked up */
 .hero-zone-slot.drop-target { border-color: var(--gold); border-style: solid; }
+.hero-zone-slot.danger-target {
+  border: 1px solid var(--red) !important;
+  background: rgba(170, 30, 35, 0.16);
+  box-shadow: inset 0 0 8px rgba(220, 45, 55, 0.22);
+  cursor: crosshair;
+}
 
 .hp-name {
   padding: 2px 4px;
@@ -639,6 +696,8 @@ body.viewer-p2 .stats-panel {
 .tile.highlight { border-color: var(--gold); }
 .tile.has-unit { cursor: default; }
 .tile.has-unit:hover { border-color: var(--border); }
+.tile.has-unit.unit-action-ready { cursor: pointer; }
+.tile.has-unit.unit-action-ready:hover { border-color: var(--log-absorb); }
 .tile.targetable { border-color: #aa2820 !important; background: #2a0808 !important; cursor: crosshair; }
 .tile.targetable:hover { border-color: #cc3830 !important; }
 .tile.cmd-target { border-color: #2a5080 !important; background: #080e18 !important; cursor: crosshair; }
@@ -991,6 +1050,15 @@ body.viewer-p2 .stats-panel {
 .bc-status-icon { line-height: 1; }
 .bc-status-suppressed, .bc-status-destroyed { color: var(--red); }
 .bc-status-rotation { color: #88ccff; }
+.bc-status-action {
+  border: 1px solid currentColor;
+  border-radius: 2px;
+  padding: 1px 3px;
+  letter-spacing: 0.25px;
+  cursor: help;
+}
+.bc-status-action.attack { color: var(--log-absorb); background: rgba(68,136,170,0.10); }
+.bc-status-action.direct { color: var(--gold); background: var(--gold-glow); }
 .bc-armor { position: absolute; top: 2px; right: 3px; display: flex; flex-direction: column; gap: 1px; font-size: 9px; line-height: 1; z-index: 2; }
 .armor-pip.full  { color: var(--gold); }
 .armor-pip.spent { color: var(--text-d); }
@@ -1217,8 +1285,9 @@ body.viewer-p2 .stats-panel {
 }
 .hand-card:hover { border-color: var(--gold); }
 .hand-card.selected { border-color: var(--p1); box-shadow: 0 0 8px var(--p1-glow); }
-.hand-card.cant-afford { opacity: 0.4; cursor: not-allowed; }
-.hand-card.cant-afford:hover { border-color: var(--border); }
+.hand-card.cant-afford { opacity: 0.58; cursor: not-allowed; }
+.hand-card.cant-afford .hc-cost { color: var(--red); }
+.hand-card.cant-afford:hover { border-color: var(--red); box-shadow: none; }
 
 .hc-header {
   padding: 3px 4px;
@@ -1461,6 +1530,8 @@ body.viewer-p2 .stats-panel {
 /* Hand cards */
 body[data-theme="light"] .hand-card { background: #ffffff; color: #111122; }
 body[data-theme="light"] .hand-card:hover { border-color: #2266cc; box-shadow: 0 0 6px rgba(34,102,204,0.25); }
+body[data-theme="light"] .hand-card.cant-afford:hover { border-color: #cc2233; box-shadow: none; }
+body[data-theme="light"] .hand-card.cant-afford .hc-cost { color: #cc2233; }
 body[data-theme="light"] .hc-header { background: #f2f4f8; color: #111122; border-bottom-color: #d0d4e0; }
 body[data-theme="light"] .hc-cost { color: #444455; }
 body[data-theme="light"] .hc-type { color: #9999aa; }

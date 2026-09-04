@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <title>SIGNAL — Digital Prototype</title>
-  <link rel="stylesheet" href="css/game.css?v=2026090401">
+  <link rel="stylesheet" href="css/game.css?v=2026090402">
 </head>
 <body>
   <!-- Sets the theme before anything paints — see the matching script/comment in index.html.
@@ -292,9 +292,10 @@
 
         <div class="side-controls">
           <span class="turn-info" id="turn-display">Turn 1 — P1 to play</span>
-          <div class="mode-banner" id="mode-banner" style="display:none;"></div>
+          <div class="mode-banner" id="mode-banner" role="status" aria-live="polite" style="display:none;"></div>
           <div class="sync-status" id="sync-status" role="status" aria-live="polite" style="display:none;"></div>
           <button class="btn btn-primary" id="btn-end-turn">End Turn</button>
+          <div class="end-turn-summary" id="end-turn-summary" role="status" aria-live="polite" style="display:none;"></div>
           <button class="btn btn-secondary" id="btn-cancel">Cancel</button>
           <button class="btn btn-exit" id="btn-exit">Exit</button>
         </div>
@@ -348,7 +349,7 @@
 
   </div>
 
-  <script type="module" src="./js/game.js?v=2026090401"></script>
+  <script type="module" src="./js/game.js?v=2026090402"></script>
 
 </body>
 </html>

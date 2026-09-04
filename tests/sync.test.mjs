@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isPrePlayMulliganSnapshot, normalizeRemoteBoard, normalizeRemoteUnit, prepareVersionedState, shouldAcceptRemoteState, stateRevision } from '../js/sync.js?v=2026090401';
+import { isPrePlayMulliganSnapshot, normalizeRemoteBoard, normalizeRemoteUnit, prepareVersionedState, shouldAcceptRemoteState, stateRevision } from '../js/sync.js?v=2026090402';
 
 test('stateRevision treats missing or invalid revisions as the initial revision', () => {
   assert.equal(stateRevision(null), 0);

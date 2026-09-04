@@ -78,6 +78,14 @@ with pending Objective/Artillery choices, blocking modals, Hero repositioning, a
 status. Mandatory choices cannot be dismissed through the generic Cancel button; voluntary
 targeting can be cancelled.
 
+`getInteractionGuide()` is the pure presentation sibling of that lock decision. `redraw()`
+renders its action/next-click/cancel guidance into the persistent `#mode-banner` for every
+multi-step interaction. Keep target colours semantic: green = legal placement, red = destructive
+or enemy target, blue = movement/friendly utility, gold = required choice. Multi-step flows keep
+the chosen source highlighted until resolution. Attack inspector text comes from
+`describeAttackOutcome()` in `ui.js`, which delegates hit rules to `applyHit()`; do not duplicate
+Suppression/Armor/Guard damage rules in `game.js`.
+
 ## Online state safety
 
 Lobby setup still uses narrow or pre-game writes. Once a shared game snapshot exists, every
@@ -106,6 +114,6 @@ current string-ID Set 1 game.
 3. Use attack/modifier helpers instead of adding a parallel counter.
 4. Route a new suppression source through the ordered `UNIT_SUPPRESSED` event.
 5. Add new remote array fields to normalization.
-6. Keep every local runtime import on the shared `?v=20260902` cache version.
+6. Keep every local runtime import on the shared `?v=2026090402` cache version.
 7. Run `npm test`; add a browser scenario when DOM or multiplayer behavior changes.
 8. Do not deploy or merge into the protected client-testing repository without explicit approval.

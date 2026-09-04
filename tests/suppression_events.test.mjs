@@ -4,7 +4,7 @@ import {
   applyGameEvents,
   resolveCraftDrawback,
   resolveSingleAttack,
-} from '../js/combat.js?v=2026090401';
+} from '../js/combat.js?v=2026090402';
 
 function unit(owner, cardId, extra = {}) {
   return {
