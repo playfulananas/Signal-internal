@@ -9,6 +9,28 @@ Newest first.
 
 ---
 
+## 2026-09-04 — Fixed self-destroyed Units lingering and host mulligan freeze
+
+Manual testing on `playfulananas/Signal-internal` found two blockers:
+
+- `Sacrifice Play` and `Scorched Earth Raid` correctly resolved their HQ result and discard
+  bookkeeping, but the shared destruction chain left the Unit object on its tile with
+  `state: "destroyed"`. Command destruction now removes the Unit from the board immediately,
+  matching normal combat destruction while still resolving Last Stand and Breakthrough from
+  the pre-destruction snapshot.
+- The host could remain frozen on the waiting screen while Player 2 reached mulligan. The
+  revisioned initial-state write was fire-and-forget, so the newly installed Firebase listener
+  could first replay the preceding `_phase: "ready"` lobby record. That record has no `p1`/`p2`
+  game-state slices; merging it erased the host's local players and crashed before the mulligan
+  rendered. The host now waits for the initial game-state transaction to finish before accepting
+  mulligan input, and the listener rejects lobby, partial, and already-started snapshots.
+
+Regression coverage asserts both self-destroy Commands vacate their tiles (including a Guard +
+Last Stand case) and that host mulligan synchronization only accepts a complete pre-play game
+snapshot.
+
+---
+
 ## 2026-09-02 — Internal stability and architecture pass
 
 Completed on the isolated `codex/stability-and-architecture` branch of

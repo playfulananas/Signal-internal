@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeRemoteBoard, normalizeRemoteUnit, prepareVersionedState, shouldAcceptRemoteState, stateRevision } from '../js/sync.js?v=20260902';
+import { isPrePlayMulliganSnapshot, normalizeRemoteBoard, normalizeRemoteUnit, prepareVersionedState, shouldAcceptRemoteState, stateRevision } from '../js/sync.js?v=2026090401';
 
 test('stateRevision treats missing or invalid revisions as the initial revision', () => {
   assert.equal(stateRevision(null), 0);
@@ -24,6 +24,27 @@ test('remote state cannot roll an optimistic local snapshot backward', () => {
   assert.equal(shouldAcceptRemoteState({ _revision: 5 }, { _revision: 5 }), true);
   assert.equal(shouldAcceptRemoteState({ _revision: 5 }, { _revision: 6 }), true);
   assert.equal(shouldAcceptRemoteState({ _revision: 5 }, { _revision: 4 }, { force: true }), true);
+});
+
+test('host mulligan sync rejects the preceding ready-lobby snapshot', () => {
+  assert.equal(isPrePlayMulliganSnapshot({
+    _phase: 'ready',
+    p1Deck: ['I1'],
+    p2Deck: ['I2'],
+    mapId: 'stalingrad',
+  }), false);
+});
+
+test('host mulligan sync accepts only a complete pre-play game snapshot', () => {
+  const openingState = {
+    turn: 1,
+    readyForPlay: false,
+    p1: { hand: ['I1'], mulliganDone: false },
+    p2: { hand: ['I2'], mulliganDone: false },
+  };
+  assert.equal(isPrePlayMulliganSnapshot(openingState), true);
+  assert.equal(isPrePlayMulliganSnapshot({ ...openingState, p2: undefined }), false, 'partial player data is unsafe to merge');
+  assert.equal(isPrePlayMulliganSnapshot({ ...openingState, readyForPlay: true }), false, 'a started match is not a mulligan snapshot');
 });
 
 test('legacy permanent bonuses migrate away from the 99-turn sentinel', () => {

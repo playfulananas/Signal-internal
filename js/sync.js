@@ -22,6 +22,21 @@ export function shouldAcceptRemoteState(localState, remoteState, { force = false
   return force || stateRevision(remoteState) >= stateRevision(localState);
 }
 
+// The host's Firebase listener is installed while the database path is transitioning from
+// the deck-selection `_phase: "ready"` record to the initial game state. onValue() immediately
+// replays whichever snapshot is currently stored, so callers must reject that lobby record (and
+// any other partial object) before attempting to merge its nonexistent p1/p2 player slices.
+export function isPrePlayMulliganSnapshot(snapshot) {
+  return Boolean(
+    snapshot
+    && !snapshot._phase
+    && snapshot.turn !== undefined
+    && snapshot.readyForPlay !== true
+    && snapshot.p1
+    && snapshot.p2
+  );
+}
+
 export function normalizeRemoteUnit(unit) {
   if (!unit) return unit;
   const toArray = value => Array.isArray(value) ? value : Object.values(value ?? {});

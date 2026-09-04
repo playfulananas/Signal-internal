@@ -1,6 +1,6 @@
-import { CARD_BY_ID, registerGeneratedCard } from './cards.js?v=20260902';
-import { getSideValue, getKeywords, attackBeats, applyHit, oppositeDir, unsuppressOnBoard, drawCards, addDiscount, remainingAttacks, spendAttack, grantTempAttacks, resetPersistentAttacks, fuelCapOf, gainFuel } from './state.js?v=20260902';
-import { canPlaceOnTerrain, getTerrain } from './maps.js?v=20260902';
+import { CARD_BY_ID, registerGeneratedCard } from './cards.js?v=2026090401';
+import { getSideValue, getKeywords, attackBeats, applyHit, oppositeDir, unsuppressOnBoard, drawCards, addDiscount, remainingAttacks, spendAttack, grantTempAttacks, resetPersistentAttacks, fuelCapOf, gainFuel } from './state.js?v=2026090401';
+import { canPlaceOnTerrain, getTerrain } from './maps.js?v=2026090401';
 
 // Orthogonal directions and their row/col offsets.
 const DIRS = ["n", "e", "s", "w"];
@@ -40,8 +40,8 @@ export function columnKeys(col) {
   return [0, 1, 2, 3].map(row => tileKey(row, col));
 }
 
-// Live units in a column. Destroyed units are excluded — they linger on the board
-// greyed out for readability but are not valid targets or trigger sources.
+// Live units in a column. Destroyed sentinels from legacy/debug snapshots are excluded;
+// ordinary destruction resolution removes the Unit from its tile immediately.
 // `owner` optionally filters to 'p1' | 'p2'.
 export function unitsInColumn(state, col, owner = null) {
   return columnKeys(col).flatMap(key => {
@@ -391,7 +391,7 @@ export function checkRally(s, attackerKey) {
 // ── Shared destruction chain (doc 01 §9) ────────────────────────────────────
 // Single funnel for EVERY destruction source (normal combat kills, self-destroy Commands,
 // Overrun-modified events) so Last Stand / Breakthrough / HQ-damage-replacement can never
-// diverge between call sites. Chain: mark destroyed -> remove from board -> recalc dynamic
+// diverge between call sites. Chain: snapshot dying Unit -> remove from board -> recalc dynamic
 // state -> apply normal-or-replacement HQ damage -> recalc -> resolve destroyed Unit's Last
 // Stand -> recalc -> resolve Breakthrough (if sourceUnitKey is still alive) -> recalc.
 //
@@ -412,9 +412,9 @@ export function resolveDestructionChain(s, { unitKey, sourceUnitKey = null, caus
   const log = [];
   let hqDamageToP1 = 0, hqDamageToP2 = 0;
 
-  // 1-2. Mark destroyed, remove from board. Destroyed Units go to their owner's Discard Pile
+  // 1-2. Snapshot taken above, now remove from board. Destroyed Units go to their owner's Discard Pile
   // (doc 02 Q026) — bookkeeping only, no current card reads this zone (doc 02 Q028).
-  s = { ...s, board: { ...s.board, [unitKey]: { ...dyingUnit, state: 'destroyed' } } };
+  s = { ...s, board: { ...s.board, [unitKey]: null } };
   s = { ...s, [owner]: { ...s[owner], discardPile: [...(s[owner].discardPile ?? []), dyingUnit.cardId] } };
   s = recalculateDynamicStats(s);
 

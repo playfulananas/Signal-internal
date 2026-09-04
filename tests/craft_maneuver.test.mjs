@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff } from '../js/combat.js';
-import { CARD_BY_ID, ensureGeneratedCard } from '../js/cards.js?v=20260902';
+import { CARD_BY_ID, ensureGeneratedCard } from '../js/cards.js?v=2026090401';
 
 function boardWith(entries) {
   const board = {};

@@ -1,4 +1,4 @@
-import { CARD_BY_ID, CARDS, ensureGeneratedCard } from './cards.js?v=20260902';
+import { CARD_BY_ID, CARDS, ensureGeneratedCard } from './cards.js?v=2026090401';
 import {
   createInitialState,
   startOfTurn,
@@ -28,17 +28,17 @@ import {
   markEscalateUse,
   expireTempFuelGrant,
   createBoardUnit,
-} from './state.js?v=20260902';
-import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, applyGameEvents, unitSuppressedEvent, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff, getObjectivePickEffectType, computeObjectivePickTargets, describeDynamicSideBonus } from './combat.js?v=20260902';
-import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones, showFxPopup, drawFxConnector } from './ui.js?v=20260902';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=20260902';
-import { pushState, pushVersionedState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby, updatePlayerState } from './firebase.js?v=20260902';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=20260902';
-import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=20260902';
-import { runBotTurn } from './bot_player.js?v=20260902';
-import { bestHeroDeployment } from './bot_ai.js?v=20260902';
-import { canCancelInteraction, getInteractionDecision } from './interaction.js?v=20260902';
-import { normalizeRemoteBoard, prepareVersionedState, shouldAcceptRemoteState } from './sync.js?v=20260902';
+} from './state.js?v=2026090401';
+import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, applyGameEvents, unitSuppressedEvent, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff, getObjectivePickEffectType, computeObjectivePickTargets, describeDynamicSideBonus } from './combat.js?v=2026090401';
+import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones, showFxPopup, drawFxConnector } from './ui.js?v=2026090401';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=2026090401';
+import { pushState, pushVersionedState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby, updatePlayerState } from './firebase.js?v=2026090401';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=2026090401';
+import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=2026090401';
+import { runBotTurn } from './bot_player.js?v=2026090401';
+import { bestHeroDeployment } from './bot_ai.js?v=2026090401';
+import { canCancelInteraction, getInteractionDecision } from './interaction.js?v=2026090401';
+import { isPrePlayMulliganSnapshot, normalizeRemoteBoard, prepareVersionedState, shouldAcceptRemoteState } from './sync.js?v=2026090401';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
@@ -679,19 +679,34 @@ function finishStartGame(s, mapId) {
 // silently clobber the other's hand, which a full-object replace could.
 let hostMulliganPhaseDone = false; // p1/host only — guards finishStartGame from firing twice
 
-function beginOnlineMulligan(s, mapId) {
+async function beginOnlineMulligan(s, mapId) {
   disarmWaitingTimeout();
   document.getElementById('lobby').style.display = 'none';
-  document.getElementById('waiting-screen').style.display = 'none';
+  document.getElementById('waiting-screen').style.display = 'flex';
+  document.getElementById('waiting-msg').textContent = 'Preparing opening hands...';
   s = { ...s, p1: { ...s.p1, mulliganDone: false }, p2: { ...s.p2, mulliganDone: false } };
   state = s;
-  pushStateIfOnline(state); // safe full push — P2 hasn't written anything at this node yet
+  // Wait until the initial game object has replaced the preceding `_phase: "ready"` lobby
+  // object before subscribing or accepting mulligan input. Revisioned writes are asynchronous;
+  // the previous fire-and-forget flow let onValue() immediately replay the lobby object, whose
+  // missing p1/p2 fields then erased the host's local player slices and crashed showMulligan().
+  // It also left a narrow window where an extremely fast host confirmation could be overwritten
+  // by the still-pending initial full-state write.
+  await pushStateIfOnline(state);
+  if (onlineSyncPaused || !isPrePlayMulliganSnapshot(state)) {
+    document.getElementById('waiting-msg').textContent = 'Connection error while preparing the match — check your connection and reload.';
+    return;
+  }
   subscribeState(gameId, remoteState => {
     if (hostMulliganPhaseDone) return; // finishStartGame's own listener has taken over by now
     if (remoteState._playerLeft && remoteState._playerLeft !== myRole) {
       showDisconnectScreen(remoteState._playerLeft);
       return;
     }
+    // onValue() replays the current value on subscription. Normally the awaited write above
+    // means that is already a complete game state, but keep this schema guard as a hard safety
+    // boundary against a delayed/retried lobby snapshot ever corrupting local state again.
+    if (!isPrePlayMulliganSnapshot(remoteState)) return;
     // No _pushId echo-guard here (unlike every other online listener): updatePlayerState
     // (P2's mulligan confirmation) writes only games/{gameId}/p2, never touching the top-level
     // _pushId field at all — it's left stale at whatever P1's own initial full push set it to,
@@ -707,6 +722,7 @@ function beginOnlineMulligan(s, mapId) {
       finishStartGame(state, mapId);
     }
   });
+  document.getElementById('waiting-screen').style.display = 'none';
   showOnlineMulligan(mapId);
 }
 
@@ -1132,8 +1148,8 @@ function commitState(newState, logLines, transitionFlags, objectiveTransitionFla
 }
 
 function pushStateIfOnline(s) {
-  if (!isOnline) return;
-  if (onlineSyncPaused) return;
+  if (!isOnline) return Promise.resolve(null);
+  if (onlineSyncPaused) return Promise.resolve(null);
   const pushId = `${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
   const prepared = prepareVersionedState(s, pushId);
   myLastPushId = pushId;
@@ -1161,6 +1177,7 @@ function pushStateIfOnline(s) {
         redraw();
       }
     });
+  return onlineWriteQueue;
 }
 
 function setOnlineSyncStatus(message = '', tone = '') {

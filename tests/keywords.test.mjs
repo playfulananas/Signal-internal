@@ -340,10 +340,12 @@ test('Breakthrough does not trigger if the source Unit did not survive the excha
 
 test('resolveDestructionChain with no replacement: destroying a Guard Unit deals 0 HQ damage to its owner (Sacrifice Play C18)', () => {
   const state = baseState(boardWith({ '0,0': unit('p1', 'I6') })); // I6 Shield Bearers, Guard
-  const { hqDamageToP1, hqDamageToP2, log } = resolveDestructionChain(state, { unitKey: '0,0', sourceUnitKey: null, cause: 'command' });
+  const { state: after, hqDamageToP1, hqDamageToP2, log } = resolveDestructionChain(state, { unitKey: '0,0', sourceUnitKey: null, cause: 'command' });
   assert.equal(hqDamageToP1, 0, 'Guard reduces normal self-destruction HQ damage to 0');
   assert.equal(hqDamageToP2, 0);
   assert.ok(log.some(l => /0 HQ damage/.test(l)));
+  assert.equal(after.board['0,0'], null, 'the sacrificed Unit must leave its tile, not remain as a dead card');
+  assert.deepEqual(after.p1.discardPile, ['I6']);
 });
 
 test('resolveDestructionChain with no replacement: destroying a non-Guard Unit deals the normal 2 HQ damage to its owner', () => {
@@ -354,9 +356,10 @@ test('resolveDestructionChain with no replacement: destroying a non-Guard Unit d
 
 test('resolveDestructionChain with hqResultReplacement bypasses Guard entirely (Scorched Earth Raid C19)', () => {
   const state = baseState(boardWith({ '0,0': unit('p1', 'I6') })); // Guard
-  const { hqDamageToP1, hqDamageToP2 } = resolveDestructionChain(state, { unitKey: '0,0', sourceUnitKey: null, cause: 'command', hqResultReplacement: { targetHq: 'p2', amount: 2 } });
+  const { state: after, hqDamageToP1, hqDamageToP2 } = resolveDestructionChain(state, { unitKey: '0,0', sourceUnitKey: null, cause: 'command', hqResultReplacement: { targetHq: 'p2', amount: 2 } });
   assert.equal(hqDamageToP1, 0, 'the owner takes no self-damage when a replacement is in effect');
   assert.equal(hqDamageToP2, 2, 'the replacement amount lands on the opponent regardless of Guard');
+  assert.equal(after.board['0,0'], null, 'the destroyed Unit must leave its tile, not remain as a dead card');
 });
 
 // Section 12 high-risk combo: "Scorched Earth Raid + Guard Last Stand Unit" — I22 Field
@@ -367,6 +370,7 @@ test('Scorched Earth Raid on a Guard + Last Stand Unit: HQ replacement bypasses 
   const { hqDamageToP1, hqDamageToP2, state: after } = resolveDestructionChain(state, { unitKey: '0,0', sourceUnitKey: null, cause: 'command', hqResultReplacement: { targetHq: 'p2', amount: 2 } });
   assert.equal(hqDamageToP1, 0);
   assert.equal(hqDamageToP2, 2, 'Guard does not block the replacement');
+  assert.equal(after.board['0,0'], null, 'Last Stand resolves from the snapshot after its Unit leaves the board');
   assert.equal(after.board['0,1'].tempSideBonus, 1, "Field Commander's Last Stand (adjacent Infantry +1) still fires despite Guard/replacement");
 });
 
