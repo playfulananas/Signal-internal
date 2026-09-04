@@ -1,4 +1,4 @@
-import { CARD_BY_ID, CARDS, ensureGeneratedCard } from './cards.js?v=20260903';
+import { CARD_BY_ID, CARDS, ensureGeneratedCard } from './cards.js?v=20260904';
 import {
   createInitialState,
   startOfTurn,
@@ -28,17 +28,17 @@ import {
   markEscalateUse,
   expireTempFuelGrant,
   createBoardUnit,
-} from './state.js?v=20260903';
-import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, applyGameEvents, unitSuppressedEvent, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff, getObjectivePickEffectType, computeObjectivePickTargets, describeDynamicSideBonus } from './combat.js?v=20260903';
-import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones, showFxPopup, drawFxConnector, describeAttackOutcome } from './ui.js?v=20260903';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=20260903';
-import { pushState, pushVersionedState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby, updatePlayerState } from './firebase.js?v=20260903';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=20260903';
-import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=20260903';
-import { runBotTurn } from './bot_player.js?v=20260903';
-import { bestHeroDeployment } from './bot_ai.js?v=20260903';
-import { canCancelInteraction, getInteractionDecision, getInteractionGuide } from './interaction.js?v=20260903';
-import { normalizeRemoteBoard, prepareVersionedState, shouldAcceptRemoteState } from './sync.js?v=20260903';
+} from './state.js?v=20260904';
+import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, applyGameEvents, unitSuppressedEvent, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff, getObjectivePickEffectType, computeObjectivePickTargets, describeDynamicSideBonus } from './combat.js?v=20260904';
+import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones, showFxPopup, drawFxConnector, describeAttackOutcome, summarizeTurnReadiness, renderEndTurnSummary } from './ui.js?v=20260904';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=20260904';
+import { pushState, pushVersionedState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby, updatePlayerState } from './firebase.js?v=20260904';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=20260904';
+import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=20260904';
+import { runBotTurn } from './bot_player.js?v=20260904';
+import { bestHeroDeployment } from './bot_ai.js?v=20260904';
+import { canCancelInteraction, getInteractionDecision, getInteractionGuide } from './interaction.js?v=20260904';
+import { normalizeRemoteBoard, prepareVersionedState, shouldAcceptRemoteState } from './sync.js?v=20260904';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
@@ -972,6 +972,18 @@ function redraw() {
   window.__SIGNAL_DEBUG__ = { state, uiState, selectedHandCardId, pendingAttackerKey };
   renderHQ(state);
 
+  // Idle-turn guidance is intentionally hidden while a choice/modal is active, while an online
+  // opponent is playing, or during the bot's P2 turn. In every visible case the same summary
+  // drives both per-Unit badges and the End Turn forecast, so the two explanations cannot drift.
+  const interactionDecision = getInteractionDecision(currentInteractionContext());
+  const controlsThisTurn = isOnline
+    ? state.initiative === myRole
+    : !isAiMode || state.initiative === 'p1';
+  const showTurnReadiness = !gameOver && controlsThisTurn && uiState === 'idle' && !interactionDecision.pending;
+  const turnReadiness = showTurnReadiness
+    ? summarizeTurnReadiness(state, state.initiative)
+    : null;
+
   // One-shot transition flags (destroy reticle, objective-captured flash, hero-activation glow)
   // are meant to play exactly once, on the render right after the commitState that set them —
   // but several code paths (placing a card chief among them) call redraw() directly instead of
@@ -989,9 +1001,9 @@ function redraw() {
   lastHeroActivationKey = null;
 
   if (uiState === "placing") {
-    renderBoard(state, null, getValidTiles(), lastChangedKeys, transitionFlagsForThisRender, getTerrainBlockedTiles(), objectiveTransitionFlagsForThisRender);
+    renderBoard(state, null, getValidTiles(), lastChangedKeys, transitionFlagsForThisRender, getTerrainBlockedTiles(), objectiveTransitionFlagsForThisRender, null);
   } else {
-    renderBoard(state, null, null, lastChangedKeys, transitionFlagsForThisRender, null, objectiveTransitionFlagsForThisRender);
+    renderBoard(state, null, null, lastChangedKeys, transitionFlagsForThisRender, null, objectiveTransitionFlagsForThisRender, turnReadiness?.indicators ?? null);
   }
 
   if (uiState === "targeting" && pendingAttackerKey) {
@@ -1151,7 +1163,6 @@ function redraw() {
   }
 
   const endTurnBtn = document.getElementById('btn-end-turn');
-  const interactionDecision = getInteractionDecision(currentInteractionContext());
   if (isOnline) {
     const isMyTurn = state.initiative === myRole;
     const round = Math.ceil(state.turn / 2);
@@ -1164,7 +1175,18 @@ function redraw() {
     endTurnBtn.disabled = interactionDecision.pending;
     endTurnBtn.textContent = interactionDecision.pending ? 'Finish Choice' : `End ${state.initiative.toUpperCase()} Turn`;
   }
-  endTurnBtn.title = interactionDecision.reason ?? '';
+  const forecastTitle = turnReadiness
+    ? [
+        turnReadiness.totalDirectHqDamage > 0
+          ? `Ending now deals ${turnReadiness.totalDirectHqDamage} automatic damage to ${turnReadiness.targetPlayer.toUpperCase()} HQ${turnReadiness.lethal ? ' and wins the game' : ''}.`
+          : '',
+        turnReadiness.availableAttackCount > 0
+          ? `${turnReadiness.availableAttackCount} usable attack${turnReadiness.availableAttackCount === 1 ? '' : 's'} will be forfeited.`
+          : '',
+      ].filter(Boolean).join(' ')
+    : '';
+  endTurnBtn.title = interactionDecision.reason ?? forecastTitle;
+  renderEndTurnSummary(document.getElementById('end-turn-summary'), turnReadiness);
 
   populateDebugObjectiveDropdown();
   fitBoardArea();

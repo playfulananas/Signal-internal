@@ -9,6 +9,27 @@ Newest first.
 
 ---
 
+## 2026-09-04 — Turn readiness and End Turn forecast
+
+Prepared on the isolated `codex/ui-intuitiveness` branch of
+`playfulananas/Signal-internal`; neither repository's `main` branch was modified.
+
+- Added compact badges to every active Unit that still has a legal attack. The badge reports
+  the number of attacks remaining, and its tooltip reports how many legal targets are available.
+- Added a distinct `HQ×N` badge to Units whose unused attacks will automatically convert into
+  Direct HQ damage when the turn ends.
+- Added an `ENDING NOW` forecast beside End Turn. It reports exact automatic HQ damage, marks a
+  lethal result, and warns how many currently usable attacks will be forfeited.
+- Derived all guidance from `getAttackableTargets()`, `remainingAttacks()`, and a pure
+  `evaluateDirectHQ()` projection, so Guard, Bombard, Precision, Double Attack, temporary/spent
+  attacks, the first-turn restriction, multi-Unit ordering, and lethal stopping remain aligned
+  with resolution.
+- Hid readiness guidance during pending choices, an online opponent's turn, and the AI player's
+  turn. Added focused regression coverage and advanced the shared browser asset version to
+  `20260904`. Pure verification: 237/237 passing.
+
+---
+
 ## 2026-09-03 — First UI intuitiveness pass
 
 Prepared on the isolated `codex/ui-intuitiveness` branch of

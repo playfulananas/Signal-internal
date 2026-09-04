@@ -114,6 +114,6 @@ current string-ID Set 1 game.
 3. Use attack/modifier helpers instead of adding a parallel counter.
 4. Route a new suppression source through the ordered `UNIT_SUPPRESSED` event.
 5. Add new remote array fields to normalization.
-6. Keep every local runtime import on the shared `?v=20260903` cache version.
+6. Keep every local runtime import on the shared `?v=20260904` cache version.
 7. Run `npm test`; add a browser scenario when DOM or multiplayer behavior changes.
 8. Do not deploy or merge into the protected client-testing repository without explicit approval.

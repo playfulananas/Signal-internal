@@ -331,9 +331,19 @@ resolves.
 ```js
 renderBoard(state: GameState, selectedTileKey: string|null, validDropKeys: Set<string>|null,
             changedKeys?: Set<string>|null, transitionFlags?: Map|null,
-            terrainBlockedKeys?: Set<string>|null, objectiveTransitionFlags?: Map|null) → void
+            terrainBlockedKeys?: Set<string>|null, objectiveTransitionFlags?: Map|null,
+            actionIndicators?: Map|null) → void
 // Writes into #board, highlights selections/legal or blocked destinations, and renders transition
-// feedback. Board orientation is fixed for both players; printed directions never viewer-flip.
+// feedback plus optional remaining-attack/Direct-HQ badges. Board orientation is fixed for both
+// players; printed directions never viewer-flip.
+
+summarizeTurnReadiness(state: GameState, activePlayer: 'p1'|'p2')
+  → { canAttack, directHq, availableAttackCount, totalDirectHqDamage, lethal, indicators, ... }
+// Pure UI projection composed from remainingAttacks(), getAttackableTargets(), and
+// evaluateDirectHQ(). Its indicator map feeds renderBoard and its totals feed End Turn guidance.
+
+renderEndTurnSummary(element: HTMLElement, summary: TurnReadiness|null) → void
+// Renders or hides the compact ENDING NOW forecast without booting the game controller.
 
 renderHand(handCardIds: string[], containerId: string, selectedCardId: string|null,
            extras?: object) → void

@@ -130,6 +130,13 @@ tooltip reports the exact shortfall. Attack hover previews use the same `applyHi
 combat resolution, including Armor absorption, 0-damage Suppression, 2-damage destruction, Guard
 prevention, and Overrun's extra damage.
 
+During an idle player-controlled turn, Units with a legal target show a compact `⚔×N` remaining-
+attacks badge; Units with no legal target that will convert at End Turn show `HQ×N`. The End Turn
+control displays an `ENDING NOW` forecast with exact automatic Direct HQ damage, a lethal marker
+when applicable, and the number of usable attacks that would be forfeited. These values come from
+the same target-legality, attack-allowance, and Direct HQ helpers used by resolution. They are
+hidden while another choice is pending, while waiting for an online opponent, and during AI turns.
+
 ## Open items
 
 - **Online privacy/security:** gameplay state is revision-safe against accidental stale

@@ -3,9 +3,9 @@
 // instead of driving a separate Playwright browser, it clicks the real DOM elements on this
 // page directly — the same elements a human would click. This goes through game.js's existing,
 // unmodified click handlers, so no game logic needed to change to add this feature.
-import { CARD_BY_ID } from "./cards.js?v=20260903";
-import { discountFor } from "./state.js?v=20260903";
-import { bestPlacement, bestExistingAttack, findLethal, findCombinedLethal, bestAttackForUnit, scoreCommand, scoreHeroPower, bestHeroPowerTarget } from "./bot_ai.js?v=20260903";
+import { CARD_BY_ID } from "./cards.js?v=20260904";
+import { discountFor } from "./state.js?v=20260904";
+import { bestPlacement, bestExistingAttack, findLethal, findCombinedLethal, bestAttackForUnit, scoreCommand, scoreHeroPower, bestHeroPowerTarget } from "./bot_ai.js?v=20260904";
 
 const CLICK_DELAY_MS = 350; // pacing so a human watching can follow what the bot is doing
 

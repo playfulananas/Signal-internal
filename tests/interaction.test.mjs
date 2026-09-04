@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { canCancelInteraction, getInteractionDecision, getInteractionGuide } from '../js/interaction.js?v=20260903';
+import { canCancelInteraction, getInteractionDecision, getInteractionGuide } from '../js/interaction.js?v=20260904';
 
 test('idle play has no interaction lock', () => {
   assert.deepEqual(getInteractionDecision(), { pending: false, mandatory: false, reason: null });

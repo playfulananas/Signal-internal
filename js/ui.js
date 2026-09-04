@@ -1,7 +1,7 @@
-import { CARD_BY_ID } from './cards.js?v=20260903';
-import { getKeywords, maxArmorHits, discountFor, fuelCapOf, rotatedDir, applyHit } from './state.js?v=20260903';
-import { getTerrain } from './maps.js?v=20260903';
-import { nextCraftCost } from './combat.js?v=20260903';
+import { CARD_BY_ID } from './cards.js?v=20260904';
+import { getKeywords, maxArmorHits, discountFor, fuelCapOf, rotatedDir, applyHit, remainingAttacks } from './state.js?v=20260904';
+import { getTerrain } from './maps.js?v=20260904';
+import { evaluateDirectHQ, getAttackableTargets, nextCraftCost } from './combat.js?v=20260904';
 
 const TERRAIN_SHORT = { plains: 'P', forest: 'F', water: 'W', desert: 'D', city: 'C' };
 
@@ -72,6 +72,98 @@ export function describeAttackOutcome(defender, hits, { overrun = false } = {}) 
   return { badge: 'HIT', outcome: `Hit — ${hqText}`, hqDamage: totalHqDamage };
 }
 
+// Pure turn-readiness projection for the active player. This deliberately asks the combat
+// engine which targets are legal and runs the same non-mutating Direct HQ evaluation used by
+// End Turn, rather than recreating Guard/Bombard/Precision/turn-1/lethal rules in presentation
+// code. The returned indicator map is consumed by renderBoard; the totals feed the End Turn
+// forecast. "availableAttackCount" means attacks the player can still choose to make against a
+// legal Unit right now — those attacks are forfeited, not converted, if the turn ends.
+export function summarizeTurnReadiness(state, activePlayer = state?.initiative) {
+  const targetPlayer = activePlayer === 'p1' ? 'p2' : 'p1';
+  const directResult = evaluateDirectHQ(state, activePlayer);
+  const totalDirectHqDamage = targetPlayer === 'p1'
+    ? directResult.hqDamageToP1
+    : directResult.hqDamageToP2;
+  const indicators = new Map();
+  const canAttack = [];
+
+  for (const [key, boardUnit] of Object.entries(state.board)) {
+    if (!boardUnit || boardUnit.owner !== activePlayer || boardUnit.state !== 'normal') continue;
+    const remaining = remainingAttacks(boardUnit);
+    if (remaining <= 0) continue;
+    const targetCount = getAttackableTargets(state, key).length;
+    if (targetCount <= 0) continue;
+    const item = { key, remaining, targetCount };
+    canAttack.push(item);
+    indicators.set(key, { kind: 'attack', count: remaining, targetCount });
+  }
+
+  // The simulated post-sweep board is the most exact source of per-Unit Direct HQ damage:
+  // subtracting remaining allowances before/after automatically reflects Double Attack,
+  // temporary attacks, and the engine's immediate lethal stop across multiple Units.
+  const directHq = directResult.sources.flatMap(({ key }) => {
+    const before = state.board[key];
+    const after = directResult.state.board[key];
+    const damage = before && after
+      ? Math.max(0, remainingAttacks(before) - remainingAttacks(after))
+      : 0;
+    if (damage <= 0) return [];
+    indicators.set(key, { kind: 'direct', count: damage, targetPlayer });
+    return [{ key, damage }];
+  });
+
+  const availableAttackCount = canAttack.reduce((sum, item) => sum + item.remaining, 0);
+  const targetHq = state[targetPlayer]?.hq ?? Infinity;
+  return {
+    activePlayer,
+    targetPlayer,
+    canAttack,
+    directHq,
+    availableAttackCount,
+    totalDirectHqDamage,
+    lethal: totalDirectHqDamage > 0 && totalDirectHqDamage >= targetHq,
+    indicators,
+  };
+}
+
+// Small DOM renderer kept beside summarizeTurnReadiness so the forecast's wording and visual
+// contract can be tested without loading game.js (which boots the full browser controller).
+export function renderEndTurnSummary(el, summary) {
+  if (!el) return;
+  el.replaceChildren();
+  el.className = 'end-turn-summary';
+
+  const directDamage = summary?.totalDirectHqDamage ?? 0;
+  const unusedAttacks = summary?.availableAttackCount ?? 0;
+  if (directDamage <= 0 && unusedAttacks <= 0) {
+    el.style.display = 'none';
+    return;
+  }
+
+  const label = document.createElement('div');
+  label.className = 'end-turn-summary-label';
+  label.textContent = 'ENDING NOW';
+  el.append(label);
+
+  if (directDamage > 0) {
+    const row = document.createElement('div');
+    row.className = `end-turn-summary-row direct${summary.lethal ? ' lethal' : ''}`;
+    row.textContent = summary.lethal
+      ? `LETHAL · ${directDamage} automatic damage to ${summary.targetPlayer.toUpperCase()} HQ`
+      : `HQ HIT · ${directDamage} automatic damage to ${summary.targetPlayer.toUpperCase()} HQ`;
+    el.append(row);
+  }
+
+  if (unusedAttacks > 0) {
+    const row = document.createElement('div');
+    row.className = 'end-turn-summary-row warning';
+    row.textContent = `⚔ ${unusedAttacks} usable attack${unusedAttacks === 1 ? '' : 's'} will be forfeited`;
+    el.append(row);
+  }
+
+  el.style.display = 'block';
+}
+
 // ── Board rendering ───────────────────────────────────────────────────────────
 
 // Render the 4x4 board from state into the #board element.
@@ -83,7 +175,7 @@ export function describeAttackOutcome(defender, hits, { overrun = false } = {}) 
 // recomputed per-viewer rotation. Stats shown on a placed card also never flip by owner
 // (see getSideValue in state.js) — a card's printed N/E/S/W always maps to physical
 // N/E/S/W, same as in hand.
-export function renderBoard(state, selectedTileKey, validDropKeys, changedKeys = null, transitionFlags = null, terrainBlockedKeys = null, objectiveTransitionFlags = null) {
+export function renderBoard(state, selectedTileKey, validDropKeys, changedKeys = null, transitionFlags = null, terrainBlockedKeys = null, objectiveTransitionFlags = null, actionIndicators = null) {
   const board = document.getElementById('board');
   board.innerHTML = '';
 
@@ -171,7 +263,10 @@ export function renderBoard(state, selectedTileKey, validDropKeys, changedKeys =
       // Unit on tile
       if (unit) {
         tile.classList.add('has-unit');
-        tile.appendChild(buildBoardCard(unit, 'p1', transitionFlags?.get(key)));
+        const actionIndicator = actionIndicators?.get(key) ?? null;
+        if (actionIndicator?.kind === 'attack') tile.classList.add('unit-action-ready');
+        else if (actionIndicator?.kind === 'direct') tile.classList.add('unit-direct-ready');
+        tile.appendChild(buildBoardCard(unit, 'p1', transitionFlags?.get(key), actionIndicator));
       } else {
         if (validDropKeys?.has(key)) tile.classList.add('valid-drop');
         // Empty and legal-to-target-terrain-wise but currently blocked for the selected
@@ -205,7 +300,7 @@ export function renderBoard(state, selectedTileKey, validDropKeys, changedKeys =
   }
 }
 
-function buildBoardCard(unit, viewer = 'p1', transitionFlag = null) {
+function buildBoardCard(unit, viewer = 'p1', transitionFlag = null, actionIndicator = null) {
   const card = CARD_BY_ID[unit.cardId];
   const el = document.createElement('div');
   // Sum of every side-bonus source (matches the `bonus` total computed below for the actual
@@ -231,6 +326,8 @@ function buildBoardCard(unit, viewer = 'p1', transitionFlag = null) {
   // DOM className toggle rather than a second transitionFlags cycle (see UI_FEEDBACK_UPGRADE_
   // PLAN.md §14, "source glow -> target flash").
   const causalitySource = transitionFlag === 'causality-source' ? ' fx-flash-positive' : '';
+  const actionReady = actionIndicator?.kind === 'attack' ? ' action-ready' : '';
+  const directReady = actionIndicator?.kind === 'direct' ? ' direct-hq-ready' : '';
   // Protection ring — keyed off REMAINING protection (maxArmorHits - armorHits), not the
   // card's static max, so a Heavy Armor unit's inner ring disappears after its first absorbed
   // hit and the outer ring after its second, matching "a layer of protection being consumed"
@@ -241,7 +338,7 @@ function buildBoardCard(unit, viewer = 'p1', transitionFlag = null) {
   const remaining = maxArmor - unit.armorHits;
   const armorRing = maxArmor > 0 && remaining >= 1 ? ' armor-ring' : '';
   const armorRingHeavy = maxArmor > 1 && remaining >= 2 ? ' armor-ring-heavy' : '';
-  el.className = `board-card ${unit.owner} ${unit.state}${buffed ? ' buffed' : ''}${debuffed ? ' debuffed' : ''}${opponent ? ' opponent-card' : ''}${justSuppressed}${directHqSource}${armorAbsorbed}${causalitySource}${armorRing}${armorRingHeavy}`;
+  el.className = `board-card ${unit.owner} ${unit.state}${buffed ? ' buffed' : ''}${debuffed ? ' debuffed' : ''}${opponent ? ' opponent-card' : ''}${justSuppressed}${directHqSource}${armorAbsorbed}${causalitySource}${actionReady}${directReady}${armorRing}${armorRingHeavy}`;
 
   // Armor / Heavy Armor are tiers, not stacking keywords (maxArmorHits treats them the same
   // way — Heavy Armor wins outright) — but a Unit that starts with printed/granted Armor and
@@ -305,11 +402,22 @@ function buildBoardCard(unit, viewer = 'p1', transitionFlag = null) {
   // suppressed+rotated card with any keyword tag would visibly overlap "SUP"/"⟳" on top of
   // the tag text. Putting both in their own flow row before the keyword row removes the
   // collision structurally instead of only for today's specific cards.
+  const actionCount = Math.max(0, Number(actionIndicator?.count) || 0);
+  const actionTip = actionIndicator?.kind === 'attack'
+    ? `${actionCount} attack${actionCount === 1 ? '' : 's'} remaining — click this Unit to choose from ${actionIndicator.targetCount} legal target${actionIndicator.targetCount === 1 ? '' : 's'}`
+    : actionIndicator?.kind === 'direct'
+      ? `No legal target — ${actionCount} automatic damage to ${actionIndicator.targetPlayer.toUpperCase()} HQ when you end the turn`
+      : '';
+  const actionStatus = actionIndicator?.kind === 'attack'
+    ? `<span class="bc-status-icon bc-status-action attack" data-tip="${esc(actionTip)}">⚔×${actionCount}</span>`
+    : actionIndicator?.kind === 'direct'
+      ? `<span class="bc-status-icon bc-status-action direct" data-tip="${esc(actionTip)}">HQ×${actionCount}</span>`
+      : '';
   const statusLeft = unit.state === 'suppressed'
     ? '<span class="bc-status-icon bc-status-suppressed" title="Suppressed — cannot attack">⊘ SUP</span>'
     : unit.state === 'destroyed'
       ? '<span class="bc-status-icon bc-status-destroyed" title="Destroyed">DEAD</span>'
-      : '';
+      : actionStatus;
   const statusRight = unit.rotation
     ? `<span class="bc-status-icon bc-status-rotation" title="Rotated ${unit.rotation}°">⟳${unit.rotation}°</span>`
     : '';
