@@ -1,4 +1,4 @@
-import { CARD_BY_ID, CARDS, ensureGeneratedCard } from './cards.js?v=1788976834';
+import { CARD_BY_ID, CARDS, ensureGeneratedCard } from './cards.js?v=1788977052';
 import {
   createInitialState,
   startOfTurn,
@@ -28,17 +28,17 @@ import {
   markEscalateUse,
   expireTempFuelGrant,
   createBoardUnit,
-} from './state.js?v=1788976834';
-import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, applyGameEvents, unitSuppressedEvent, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff, getObjectivePickEffectType, computeObjectivePickTargets, describeDynamicSideBonus } from './combat.js?v=1788976834';
-import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones, showFxPopup, drawFxConnector, describeAttackOutcome, summarizeTurnReadiness, renderEndTurnSummary } from './ui.js?v=1788976834';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1788976834';
-import { pushState, pushVersionedState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby, updatePlayerState } from './firebase.js?v=1788976834';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1788976834';
-import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1788976834';
-import { runBotTurn } from './bot_player.js?v=1788976834';
-import { bestHeroDeployment } from './bot_ai.js?v=1788976834';
-import { canCancelInteraction, getInteractionDecision, getInteractionGuide } from './interaction.js?v=1788976834';
-import { isPrePlayMulliganSnapshot, normalizeRemoteBoard, prepareVersionedState, shouldAcceptRemoteState } from './sync.js?v=1788976834';
+} from './state.js?v=1788977052';
+import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, applyGameEvents, unitSuppressedEvent, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff, getObjectivePickEffectType, computeObjectivePickTargets, describeDynamicSideBonus } from './combat.js?v=1788977052';
+import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones, showFxPopup, drawFxConnector, describeAttackOutcome, summarizeTurnReadiness, renderEndTurnSummary } from './ui.js?v=1788977052';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1788977052';
+import { pushState, pushVersionedState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby, updatePlayerState } from './firebase.js?v=1788977052';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1788977052';
+import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1788977052';
+import { runBotTurn } from './bot_player.js?v=1788977052';
+import { bestHeroDeployment } from './bot_ai.js?v=1788977052';
+import { canCancelInteraction, getInteractionDecision, getInteractionGuide } from './interaction.js?v=1788977052';
+import { isPrePlayMulliganSnapshot, normalizeRemoteBoard, prepareVersionedState, shouldAcceptRemoteState } from './sync.js?v=1788977052';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
