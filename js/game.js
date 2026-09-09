@@ -1,4 +1,4 @@
-import { CARD_BY_ID, CARDS, ensureGeneratedCard } from './cards.js?v=2026090402';
+import { CARD_BY_ID, CARDS, ensureGeneratedCard } from './cards.js?v=1788974898';
 import {
   createInitialState,
   startOfTurn,
@@ -28,17 +28,17 @@ import {
   markEscalateUse,
   expireTempFuelGrant,
   createBoardUnit,
-} from './state.js?v=2026090402';
-import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, applyGameEvents, unitSuppressedEvent, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff, getObjectivePickEffectType, computeObjectivePickTargets, describeDynamicSideBonus } from './combat.js?v=2026090402';
-import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones, showFxPopup, drawFxConnector, describeAttackOutcome, summarizeTurnReadiness, renderEndTurnSummary } from './ui.js?v=2026090402';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=2026090402';
-import { pushState, pushVersionedState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby, updatePlayerState } from './firebase.js?v=2026090402';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=2026090402';
-import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=2026090402';
-import { runBotTurn } from './bot_player.js?v=2026090402';
-import { bestHeroDeployment } from './bot_ai.js?v=2026090402';
-import { canCancelInteraction, getInteractionDecision, getInteractionGuide } from './interaction.js?v=2026090402';
-import { isPrePlayMulliganSnapshot, normalizeRemoteBoard, prepareVersionedState, shouldAcceptRemoteState } from './sync.js?v=2026090402';
+} from './state.js?v=1788974898';
+import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, applyGameEvents, unitSuppressedEvent, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff, getObjectivePickEffectType, computeObjectivePickTargets, describeDynamicSideBonus } from './combat.js?v=1788974898';
+import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones, showFxPopup, drawFxConnector, describeAttackOutcome, summarizeTurnReadiness, renderEndTurnSummary } from './ui.js?v=1788974898';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1788974898';
+import { pushState, pushVersionedState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby, updatePlayerState } from './firebase.js?v=1788974898';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1788974898';
+import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1788974898';
+import { runBotTurn } from './bot_player.js?v=1788974898';
+import { bestHeroDeployment } from './bot_ai.js?v=1788974898';
+import { canCancelInteraction, getInteractionDecision, getInteractionGuide } from './interaction.js?v=1788974898';
+import { isPrePlayMulliganSnapshot, normalizeRemoteBoard, prepareVersionedState, shouldAcceptRemoteState } from './sync.js?v=1788974898';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
@@ -794,6 +794,13 @@ function showOnlineMulligan(mapId) {
       finishStartGame(state, mapId);
       return;
     }
+    // Found 2026-09-09: updatePlayerState's write above can synchronously (reentrantly) fire
+    // the host's own beginOnlineMulligan listener via Firebase's local echo, BEFORE this
+    // function resumes — if the other player was already done, that reentrant call detects
+    // both mulligans complete and runs finishStartGame() right here, mid-call. Resuming past
+    // that point and unconditionally showing the waiting screen would stomp the just-revealed
+    // board with a stale "waiting for mulligan" banner. Bail if the match already started.
+    if (document.getElementById('game-area').style.display === 'flex') return;
     document.getElementById('waiting-screen').style.display = 'flex';
     document.getElementById('waiting-msg').textContent = myRole === 'p1'
       ? 'Waiting for the other player to finish their mulligan...'
@@ -1806,8 +1813,6 @@ function resolveUnitManeuverDestination(destKey) {
   const legalTargets = getManeuverTargets(state, sourceKey);
   if (!legalTargets.includes(destKey)) return;
   const placedKey = pendingUnitManeuverPlacedKey;
-  pendingUnitManeuverSource = null;
-  pendingUnitManeuverPlacedKey = null;
 
   let { state: s, log } = resolveManeuver(state, sourceKey, destKey);
   s = recalculateDynamicStats(s);
@@ -1827,6 +1832,14 @@ function resolveUnitManeuverDestination(destKey) {
   }
 
   const targets = getAttackableTargets(s, placedKey);
+  // Found 2026-09-09: this used to clear the pending-maneuver vars and advance uiState BEFORE
+  // checking whether commitState actually wrote anything — if sync was paused, the mandatory
+  // Maneuver would look resolved locally while the board mutation never reached shared state.
+  // Stay in the mandatory maneuver state (pendingUnitManeuverSource/PlacedKey left intact) so
+  // the player can simply retry once reconnected, instead of the choice silently vanishing.
+  if (!commitState(s, log)) return;
+  pendingUnitManeuverSource = null;
+  pendingUnitManeuverPlacedKey = null;
   if (targets.length > 0) {
     uiState = 'targeting';
     pendingAttackerKey = placedKey;
@@ -1834,7 +1847,6 @@ function resolveUnitManeuverDestination(destKey) {
     uiState = 'idle';
     pendingAttackerKey = null;
   }
-  commitState(s, log);
   checkWin();
 }
 
@@ -1905,7 +1917,11 @@ function handleHeroZoneClick(role, col, shiftKey = false) {
     afterMove = rs.state;
     msgs.push(...rs.log);
   }
-  commitState(afterMove, msgs);
+  // Found 2026-09-09: used to clear pendingCommandId/preCommandState unconditionally right
+  // after commitState — if sync was paused, the write silently no-op'd but Command Shuffle
+  // was marked done anyway, with no preCommandState left to refund it via Cancel. Only clear
+  // once the swap has actually reached shared state.
+  if (!commitState(afterMove, msgs)) return;
   if (shuffleActive) { pendingCommandId = null; preCommandState = null; checkWin(); }
 }
 
@@ -2448,6 +2464,12 @@ document.getElementById('board').addEventListener('click', e => {
 
   // IDLE: select a friendly unit to attack
   if (uiState === "idle") {
+    // Found 2026-09-09: this branch used to be the one action-start path that didn't check the
+    // shared interaction gate, so a pending-but-non-mandatory action (e.g. Command Shuffle
+    // between pick-up and drop, uiState stays 'idle' the whole time) let an attack start and
+    // finish underneath it — Cancel would then revert to preCommandState and silently wipe
+    // that attack's results. Every other action-start handler already gates on this.
+    if (getInteractionDecision(currentInteractionContext()).pending) return;
     const unit = state.board[clickedKey];
     if (!unit) return;
     const active = state.initiative;
@@ -3690,8 +3712,17 @@ document.getElementById('btn-cancel').addEventListener('click', () => {
   const rallyCryAlreadyPicked = ((pendingCommandId === 'C03' || pendingCommandId === 'C10') && pendingRallyCryCount < 2)
     || (pendingCommandId === 'C32' && pendingRallyCryCount === 1);
   if (preCommandState && !rallyCryAlreadyPicked) {
-    state = preCommandState;
+    // Found 2026-09-09: reverting to preCommandState's CONTENT is right, but it also carries
+    // preCommandState's stale (pre-Fuel-spend) _revision. Pushing that as-is would make this
+    // write target the wrong expectedRevision (the Fuel-spend commit already advanced the
+    // server past it) and get rejected as a conflict — which force-adopts the server's stale,
+    // Fuel-spent state right back, undoing the very cancel this is supposed to push. Carry the
+    // CURRENT revision forward onto the reverted content so this write correctly supersedes
+    // the commit it's cancelling, both locally and online.
+    const currentRevision = state?._revision;
+    state = Number.isSafeInteger(currentRevision) ? { ...preCommandState, _revision: currentRevision } : preCommandState;
     preCommandState = null;
+    pushStateIfOnline(state);
   }
   pendingCommandManeuverSource = null;
   pendingHeroManeuverSource = null;
@@ -4119,7 +4150,6 @@ function updateFOButtons() {
 }
 
 function confirmFO() {
-  document.getElementById('fo-modal').style.display = 'none';
   const keepId   = foCards.find(id => foAssignments[id] === 'keep');
   const topId    = foCards.find(id => foAssignments[id] === 'top');
   const bottomId = foCards.find(id => foAssignments[id] === 'bottom'); // undefined when only 2 were drawn (doc 01 §27 — no bottom instruction target)
@@ -4131,7 +4161,12 @@ function confirmFO() {
   const topName    = CARD_BY_ID[topId]?.name    ?? '?';
   const log = [`Forward Observer: kept ${keepName} · ${topName} → top` + (bottomId !== undefined ? ` · ${CARD_BY_ID[bottomId]?.name ?? '?'} → bottom` : '')];
   const rs = applyRuthlessStrategistIfPresent(s, foPlayer);
-  commitState(rs.state, [...log, ...rs.log]);
+  // Found 2026-09-09: used to hide the modal and clear foCards/foAssignments unconditionally,
+  // even when sync was paused and commitState silently no-op'd — the already-paid pick was
+  // just lost with no way back. Leave the modal open (and the tracking vars intact) on failure
+  // so the player can retry the same Confirm once reconnected.
+  if (!commitState(rs.state, [...log, ...rs.log])) return;
+  document.getElementById('fo-modal').style.display = 'none';
   checkWin();
   foCards = [];
   foAssignments = {};
@@ -4161,7 +4196,6 @@ function showFieldReservesModal(drawn, player) {
 }
 
 function confirmFieldReserves(takenId) {
-  document.getElementById('field-reserves-modal').style.display = 'none';
   const ps = state[fieldReservesPlayer];
   const rest = fieldReservesCards.filter(id => id !== takenId);
   const hand = takenId != null ? [...ps.hand, takenId] : ps.hand;
@@ -4169,7 +4203,10 @@ function confirmFieldReserves(takenId) {
   const msg = takenId != null
     ? `Field Reserves: took ${CARD_BY_ID[takenId]?.name} — ${rest.length} card(s) to bottom`
     : `Field Reserves: took nothing — 4 card(s) to bottom`;
-  commitState(s, [msg]);
+  // Same fix as confirmFO: don't hide the modal or drop the pending cards until the write
+  // actually lands, so a sync pause doesn't silently lose the pick.
+  if (!commitState(s, [msg])) return;
+  document.getElementById('field-reserves-modal').style.display = 'none';
   fieldReservesCards = [];
   fieldReservesPlayer = null;
 }
@@ -4209,9 +4246,7 @@ function showCraftPickerModal(role) {
 }
 
 function confirmCraftPick(chosenId) {
-  document.getElementById('craft-picker-modal').style.display = 'none';
   const role = craftPickerRole;
-  craftPickerRole = null;
   const ps = state[role];
   const chosen = CARD_BY_ID[chosenId];
   // doc 02 Q024: a full hand sends the generated card to Discard Pile instead.
@@ -4225,7 +4260,11 @@ function confirmCraftPick(chosenId) {
     generatedCards: { ...(state.generatedCards ?? {}), [chosenId]: chosen },
   };
   const log = [`Chief Aircraft Engineer: Crafted ${chosen.name} (${chosen.n}/${chosen.e}/${chosen.s}/${chosen.w}, ${chosen.keyword}) — next activation costs ${nextCraftCost(s[role])}`];
-  commitState(s, log);
+  // Same fix as confirmFO/confirmFieldReserves: keep the modal open and craftPickerRole set
+  // until the write actually lands, so a sync pause doesn't silently lose the crafted card.
+  if (!commitState(s, log)) return;
+  document.getElementById('craft-picker-modal').style.display = 'none';
+  craftPickerRole = null;
 }
 
 // ── Rotate direction modal (Change Formation 124 / Field Engineer 91) ──────────

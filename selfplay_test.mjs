@@ -106,7 +106,11 @@ async function handleArtyTargeting(page) {
     const targets = page.locator(".tile.targetable");
     const count = await targets.count();
     if (count === 0) return;
-    await targets.nth(Math.floor(Math.random() * count)).click();
+    // Found 2026-09-09: same fix as flushPendingUiState's unit-maneuver branch — a deferred
+    // Hero Deploy modal can pop up mid-click here too, and this click had neither .catch() nor
+    // a shortened timeout, so it hung the default 30s and crashed the whole game on an
+    // uncaught rejection instead of just missing one attempt.
+    await targets.nth(Math.floor(Math.random() * count)).click({ timeout: 5000 }).catch(() => {});
     await page.waitForTimeout(30);
   }
 }
@@ -121,7 +125,11 @@ async function handleObjectivePicking(page) {
   if (debug?.uiState !== "objective-picking") return;
   const targets = page.locator(".tile.cmd-target");
   const count = await targets.count();
-  if (count > 0) await targets.first().click();
+  // Found 2026-09-09: same fix as flushPendingUiState's unit-maneuver branch — this click had
+  // neither .catch() nor a shortened timeout, so a Hero Deploy modal popping up mid-click (its
+  // 1800ms deferred setTimeout) hung this for the default 30s and crashed the game instead of
+  // just missing this attempt for the outer loop to retry.
+  if (count > 0) await targets.first().click({ timeout: 5000 }).catch(() => {});
   await page.waitForTimeout(30);
 }
 
@@ -156,8 +164,29 @@ async function resolveTargetingSmart(page, { attackerKey = null, heroPower = nul
 // placement is always resolved before we loop back — see resolveTargetingSmart). Any new
 // decision made on top of a stale prompt gets silently swallowed instead of registering, so
 // treat this as an anomaly and bail out of it cleanly via Cancel rather than guess a target.
+//
+// Found 2026-09-09: unit-maneuver-source/destination (an On-Play Maneuver Aircraft, e.g.
+// A55/A56/A61/A62/A63/A65) are mandatory uiStates — Cancel is disabled for them (game.js,
+// interaction.js's MANDATORY_UI_STATES) — so blindly clicking #btn-cancel here silently no-ops
+// and this function returns the same stale uiState forever, stalling the run. Resolve those two
+// states the same way bot_player.js's handleUnitManeuver does (click the highlighted board
+// tile) before falling back to Cancel for every other, actually-cancellable pending state.
 async function flushPendingUiState(page, debug) {
   if (!debug || debug.uiState === "idle") return debug;
+  if (debug.uiState === "unit-maneuver-source" || debug.uiState === "unit-maneuver-destination") {
+    // Found 2026-09-09 (round 2): runHeroPhase's Hero Deploy modal is shown via a 1800ms
+    // setTimeout left over from the PREVIOUS turn transition, so it can pop up mid-Maneuver and
+    // cover the board the same way it covers everything else — the tile click below then hangs
+    // for the full default 30s waiting on an element a modal is intercepting. Resolve any
+    // already-visible Hero Deploy modal first, and cap the tile click at 5s so if the modal
+    // appears mid-attempt instead, this bails quickly and the outer per-turn loop's own
+    // handleHeroDeploy call (which runs before flushPendingUiState every iteration) catches it
+    // on the next pass rather than the whole run hanging on one click.
+    await handleHeroDeploy(page);
+    await page.locator(".tile.cmd-target").first().click({ timeout: 5000 }).catch(() => {});
+    await page.waitForTimeout(30);
+    return readDebug(page);
+  }
   await page.locator("#btn-cancel").click().catch(() => {});
   await page.waitForTimeout(30);
   return readDebug(page);
