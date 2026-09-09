@@ -30,7 +30,7 @@ import {
   createBoardUnit,
 } from './state.js?v=2026090402';
 import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, applyGameEvents, unitSuppressedEvent, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff, getObjectivePickEffectType, computeObjectivePickTargets, describeDynamicSideBonus } from './combat.js?v=2026090402';
-import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones, showFxPopup, drawFxConnector, describeAttackOutcome, summarizeTurnReadiness, renderEndTurnSummary } from './ui.js?v=2026090402';
+import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones, showFxPopup, drawFxConnector, describeAttackOutcome, summarizeTurnReadiness, renderEndTurnSummary, buildUnitCardInnerHtml } from './ui.js?v=2026090402';
 import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=2026090402';
 import { pushState, pushVersionedState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby, updatePlayerState } from './firebase.js?v=2026090402';
 import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=2026090402';
@@ -445,18 +445,10 @@ function renderMulliganCards(hand) {
     if (!card) return;
     const div = document.createElement('div');
     div.className = `hand-card mulligan-card${mulliganSelected.has(i) ? ' mulligan-discard' : ''}`;
-    const CLS_ABBR = { Infantry:'INF', Tank:'TNK', Artillery:'ART', Aircraft:'AIR' };
+    // Unit face (full rules text, stats, keyword explanations on hover/tap) shares
+    // buildUnitCardInnerHtml with the other card-choice modals — see its own comment for why.
     if (card.type === 'unit') {
-      div.innerHTML = `
-        <div class="hc-header">${card.name}</div>
-        <div class="hc-cost">${card.cost} ⛽</div>
-        <div class="hc-type">${CLS_ABBR[card.cls] ?? card.cls}</div>
-        <div class="hc-dirs">
-          <div></div><div>${card.n}</div><div></div>
-          <div>${card.w}</div><div style="color:#444">·</div><div>${card.e}</div>
-          <div></div><div>${card.s}</div><div></div>
-        </div>
-        ${card.keyword ? `<div class="bc-keyword-row"><span class="bc-kw-tag">${card.keyword}</span></div>` : ''}`;
+      div.innerHTML = buildUnitCardInnerHtml(card, { tappable: true });
     } else if (card.type === 'command') {
       div.classList.add('hc-command');
       div.innerHTML = `
@@ -1242,7 +1234,57 @@ function syncObjectivePickUiState() {
   }
 }
 
-function commitState(newState, logLines, transitionFlags, objectiveTransitionFlags, heroActivationKey) {
+// Found 2026-09-XX: every transition flag/timer-based effect below (suppression/destroy/armor
+// flashes, Hero activation glow, Objective capture popup, Direct HQ flash+connector) was 100%
+// local — computed by the acting client, applied to its own redraw(), then thrown away. Nothing
+// of it ever reached the pushed state, so the opponent's client only ever saw the final board
+// position with no animation at all. buildLastEvent captures exactly the same data commitState
+// already collects for its OWN local redraw into a small serializable object, stored on `state`
+// itself so it rides along on the normal Firebase push — no separate channel, no risk of it
+// arriving out of order relative to the state it describes. See receiveRemoteState for the
+// consuming side and the revision-sequential check that keeps this from replaying on echoes,
+// duplicate snapshots, or reconnects (an event only ever means "something new since my last
+// state", not "something in this snapshot's history").
+function buildLastEvent(transitionFlags, objectiveTransitionFlags, heroActivationKey, directHqDamage) {
+  const event = {};
+  if (transitionFlags?.size) event.transitionFlags = Object.fromEntries(transitionFlags);
+  if (objectiveTransitionFlags?.size) event.objectiveTransitionFlags = Object.fromEntries(objectiveTransitionFlags);
+  if (heroActivationKey) event.heroActivationKey = heroActivationKey;
+  if (directHqDamage && (directHqDamage.p1 > 0 || directHqDamage.p2 > 0)) event.directHqDamage = directHqDamage;
+  return Object.keys(event).length ? event : null;
+}
+
+// Timer-based effects that live outside the CSS-class transitionFlags system redraw() already
+// handles (see redraw()'s own transitionFlagsForThisRender/objectiveTransitionFlagsForThisRender/
+// heroActivationKeyForThisRender consumption) — currently just Direct HQ's delayed result flash/
+// popup and its source->HQ connector line. Called once locally right after the commit that
+// produced this event, and once on the receiving client for a genuinely new (sequential) remote
+// event — same function, same 200ms beat, so the SOURCE->RESULT sequencing feels identical on
+// both sides. The connector's source keys are read back out of transitionFlags itself (every
+// 'direct-hq'-flagged unit) rather than needing their own payload field — targetPlayer is always
+// that unit's owner's opponent, since Direct HQ only ever damages the enemy HQ.
+function triggerEventEffects(event) {
+  if (!event) return;
+  if (event.directHqDamage) {
+    if (event.directHqDamage.p1 > 0) setTimeout(() => flashDirectHit('p1', event.directHqDamage.p1), 200);
+    if (event.directHqDamage.p2 > 0) setTimeout(() => flashDirectHit('p2', event.directHqDamage.p2), 200);
+  }
+  if (event.transitionFlags && event.directHqDamage) {
+    for (const [key, flag] of Object.entries(event.transitionFlags)) {
+      if (flag !== 'direct-hq') continue;
+      const owner = state?.board?.[key]?.owner;
+      if (!owner) continue;
+      const targetPlayer = owner === 'p1' ? 'p2' : 'p1';
+      setTimeout(() => {
+        const fromEl = document.querySelector(`.tile[data-key="${key}"] .board-card`);
+        const toEl = document.getElementById(`${targetPlayer}-hq`);
+        if (fromEl && toEl) drawFxConnector(fromEl, toEl);
+      }, 200);
+    }
+  }
+}
+
+function commitState(newState, logLines, transitionFlags, objectiveTransitionFlags, heroActivationKey, directHqDamage) {
   if (isOnline && onlineSyncPaused) {
     setOnlineSyncStatus('Connection interrupted — actions are paused until the shared game reconnects.', 'error');
     return false;
@@ -1251,11 +1293,13 @@ function commitState(newState, logLines, transitionFlags, objectiveTransitionFla
   lastTransitionFlags = transitionFlags ?? new Map();
   lastObjectiveTransitionFlags = objectiveTransitionFlags ?? new Map();
   lastHeroActivationKey = heroActivationKey ?? null;
-  state = { ...newState, log: [...(newState.log ?? []), ...(logLines ?? [])] };
+  const lastEvent = buildLastEvent(transitionFlags, objectiveTransitionFlags, heroActivationKey, directHqDamage);
+  state = { ...newState, log: [...(newState.log ?? []), ...(logLines ?? [])], _lastEvent: lastEvent };
   if (logLines?.length) appendLog(logLines);
   syncArtyTargetingUiState();
   syncObjectivePickUiState();
   redraw();
+  triggerEventEffects(lastEvent);
   pushStateIfOnline(state);
   return true;
 }
@@ -1353,6 +1397,20 @@ function receiveRemoteState(remoteState, { force = false, preserveSyncStatus = f
   if (!shouldAcceptRemoteState(state, normalized, { force: force || onlineSyncPaused })) return;
   const prevLogLen = state?.log?.length ?? 0;
   const prevInitiative = state?.initiative;
+  // This snapshot is worth animating only if it's a single genuine step forward from what we
+  // already had — exactly one committed action ahead, never a jump. That excludes: the very
+  // first snapshot this client ever sees (state?.board still null — nothing to compare against,
+  // and showing an animation for "the game as it already stood" would be replaying history, not
+  // reacting to something that just happened); a reconnect or resume that jumps several actions
+  // at once (same reasoning — those already happened while this client wasn't watching); and a
+  // duplicate delivery of a snapshot already applied (Firebase's local-cache-then-server-ack
+  // sequence can deliver the "same" write twice — the second delivery's revision no longer
+  // differs by exactly 1 from local, since the first delivery already advanced local to match).
+  // Reuses the _revision field the online-sync/conflict-recovery code already maintains — no new
+  // dedup id needed. See buildLastEvent/triggerEventEffects above for what actually gets played.
+  const isSequentialLiveUpdate = Boolean(state?.board)
+    && Number.isSafeInteger(state?._revision) && Number.isSafeInteger(normalized?._revision)
+    && normalized._revision === state._revision + 1;
   // Track tiles changed by the opponent so we can highlight them
   if (state?.board) {
     lastChangedKeys = new Set();
@@ -1364,6 +1422,12 @@ function receiveRemoteState(remoteState, { force = false, preserveSyncStatus = f
     }
   }
   state = normalized;
+  if (isSequentialLiveUpdate && normalized._lastEvent) {
+    const ev = normalized._lastEvent;
+    lastTransitionFlags = ev.transitionFlags ? new Map(Object.entries(ev.transitionFlags)) : new Map();
+    lastObjectiveTransitionFlags = ev.objectiveTransitionFlags ? new Map(Object.entries(ev.objectiveTransitionFlags)) : new Map();
+    lastHeroActivationKey = ev.heroActivationKey ?? null;
+  }
   onlineSyncPaused = false;
   if (!preserveSyncStatus) setOnlineSyncStatus();
   const newEntries = (normalized.log ?? []).slice(prevLogLen);
@@ -1415,6 +1479,7 @@ function receiveRemoteState(remoteState, { force = false, preserveSyncStatus = f
     appendLog(['Connection recovered — an in-progress choice was interrupted and had to be redone.']);
   }
   redraw();
+  if (isSequentialLiveUpdate) triggerEventEffects(normalized._lastEvent);
   checkWin();
   // The opponent's End Turn handler can't prompt us, so an inbound state that hands us the
   // turn is where this client runs its own Hero Phase. runHeroPhase re-checks lastObjLevel,
@@ -1820,14 +1885,17 @@ let pendingUnitManeuverPlacedKey = null; // which just-placed Aircraft triggered
 let pendingUnitManeuverSource = null;    // { key } once the first pick (unit to move) is made
 
 // Candidates for the "1 other friendly Unit" pick: friendly, not the just-placed Unit itself,
-// state === 'normal' (a Suppressed Unit can't be Maneuvered — matches getCommandManeuverSources'
-// convention), AND pre-filtered to only those with at least 1 legal destination so the player
-// can never pick a source that leads to a dead end with nowhere to place it.
+// AND pre-filtered to only those with at least 1 legal destination so the player can never pick
+// a source that leads to a dead end with nowhere to place it. Suppression alone does not
+// disqualify a source — card text (A55/A56/A61-A63/A65) says only "1 other friendly Unit," no
+// unsuppressed/active-Unit wording, and Maneuver itself doesn't clear Suppressed (resolveManeuver
+// preserves state verbatim) — so a Suppressed Unit stays Suppressed after moving, exactly as any
+// other Maneuver source does.
 function getUnitOnPlayManeuverSources(excludeKey) {
   const active = state.initiative;
   return new Set(
     Object.entries(state.board)
-      .filter(([k, u]) => k !== excludeKey && u && u.owner === active && u.state === 'normal')
+      .filter(([k, u]) => k !== excludeKey && u && u.owner === active)
       .map(([k]) => k)
       .filter(k => getManeuverTargets(state, k).length > 0)
   );
@@ -3164,13 +3232,16 @@ const COMMAND_MANEUVER_SOURCE_FILTER = {
   C35: (u) => CARD_BY_ID[u.cardId]?.cls === 'Aircraft',          // Scramble — friendly Aircraft
 };
 
+// Suppression alone does not disqualify a source — none of C21/C27/C35's card text requires an
+// unsuppressed/active Unit, and Maneuver doesn't clear Suppressed (resolveManeuver preserves
+// state verbatim), so a Suppressed Unit stays Suppressed after being Maneuvered by these too.
 function getCommandManeuverSources(commandId, excludeKey = null) {
   const active = state.initiative;
   const filterFn = COMMAND_MANEUVER_SOURCE_FILTER[commandId];
   if (!filterFn) return null;
   return new Set(
     Object.entries(state.board)
-      .filter(([k, u]) => k !== excludeKey && u && u.owner === active && u.state === 'normal' && filterFn(u))
+      .filter(([k, u]) => k !== excludeKey && u && u.owner === active && filterFn(u))
       .map(([k]) => k)
   );
 }
@@ -3703,29 +3774,17 @@ document.getElementById('btn-end-turn').addEventListener('click', () => {
   const turnLog = [...directHQLog, `--- Round ${newRound} — ${newState.initiative.toUpperCase()} ---`, ...effectLog];
   // Direct HQ source-unit pulse — set on the exact keys evaluateDirectHQ reports converted
   // this sweep, so it plays on the very next render alongside everything else this commit
-  // already redraws (same transitionFlags mechanism as Suppressed/Destroyed).
+  // already redraws (same transitionFlags mechanism as Suppressed/Destroyed). The HQ-side
+  // result flash/popup and the source->HQ connector line (both timer-based, deliberately a beat
+  // after the source pulse so SOURCE -> RESULT reads as a brief sequence) now live in
+  // triggerEventEffects, called once here and once on the opponent's client for this same event
+  // via receiveRemoteState — previously they were local setTimeout calls only the acting client
+  // ever saw. Not the full SequenceQueue from the plan (explicitly deferred) — just enough
+  // timing to feel like two steps, layered over the existing synchronous resolution.
   const directHQFlags = new Map();
   directHQ.sources.forEach(({ key }) => directHQFlags.set(key, 'direct-hq'));
-  commitState(newState, turnLog, directHQFlags, objectiveTransitionFlags);
+  commitState(newState, turnLog, directHQFlags, objectiveTransitionFlags, null, { p1: directHQ.hqDamageToP1, p2: directHQ.hqDamageToP2 });
   checkWin();
-  // HQ-side result flash/popup — deliberately a beat after the source pulse above (which
-  // plays immediately on this same commit) rather than simultaneous, so SOURCE → RESULT
-  // reads as a brief sequence instead of everything flashing at once. Not the full
-  // SequenceQueue from the plan (explicitly deferred) — just enough timing to feel like two
-  // steps, layered over the existing synchronous resolution.
-  if (directHQ.hqDamageToP1 > 0) setTimeout(() => flashDirectHit('p1', directHQ.hqDamageToP1), 200);
-  if (directHQ.hqDamageToP2 > 0) setTimeout(() => flashDirectHit('p2', directHQ.hqDamageToP2), 200);
-  // One connector line per converting unit, timed to the same 200ms mark as the HQ flash above
-  // — draws "this unit's unused attack" straight to "this HQ damage", the one causality
-  // pairing on the board that's genuinely hard to follow from timing alone (source and result
-  // sit on opposite ends of the screen).
-  directHQ.sources.forEach(({ key, targetPlayer }) => {
-    setTimeout(() => {
-      const fromEl = document.querySelector(`.tile[data-key="${key}"] .board-card`);
-      const toEl = document.getElementById(`${targetPlayer}-hq`);
-      if (fromEl && toEl) drawFxConnector(fromEl, toEl);
-    }, 200);
-  });
 
   // Local hotseat only — both players share this screen, so flash whose turn it now is.
   // Online is handled separately in receiveRemoteState (fires on the receiving client only).
@@ -4013,9 +4072,9 @@ for (const role of ['p1', 'p2']) {
 // tiles' name/controller/level breakdown).
 {
   const tip = document.getElementById('floating-tip');
-  document.addEventListener('mouseover', e => {
-    const pip = e.target.closest('[data-tip], [data-tip-html]');
-    if (!pip) return;
+  let pinnedPip = null; // set while a [data-tip-tap] toggle (not hover) is holding the tip open
+
+  function positionTip(pip) {
     if (pip.dataset.tipHtml) tip.innerHTML = pip.dataset.tipHtml;
     else tip.textContent = pip.dataset.tip;
     tip.style.display = 'block';
@@ -4029,10 +4088,48 @@ for (const role of ['p1', 'p2']) {
     left = Math.max(4, Math.min(left, window.innerWidth - tipRect.width - 4));
     tip.style.top = `${top}px`;
     tip.style.left = `${left}px`;
+  }
+
+  document.addEventListener('mouseover', e => {
+    const pip = e.target.closest('[data-tip], [data-tip-html]');
+    if (pip) positionTip(pip);
   });
   document.addEventListener('mouseout', e => {
+    if (pinnedPip) return; // a tap/focus toggle is holding it open — hover leaving elsewhere shouldn't close it
     if (e.target.closest('[data-tip], [data-tip-html]')) tip.style.display = 'none';
   });
+
+  // Keyboard accessibility: Tab-focusing a [data-tip-tap] pip (see buildUnitCardInnerHtml,
+  // ui.js) shows the same tip a hover would, so a keyboard-only player can inspect a card-choice
+  // screen's full rules text too. focusin/focusout are the bubbling equivalents of focus/blur,
+  // needed since this listener is delegated at the document level like the others here.
+  document.addEventListener('focusin', e => {
+    const pip = e.target.closest('[data-tip-tap]');
+    if (pip) positionTip(pip);
+  });
+  document.addEventListener('focusout', e => {
+    if (e.target.closest('[data-tip-tap]') && pinnedPip !== e.target) tip.style.display = 'none';
+  });
+
+  // Tap/click accessibility for card-choice screens (Mulligan/Forward Observer/Field
+  // Reserves/Craft): [data-tip-tap] is opt-in (see buildUnitCardInnerHtml) — only the info
+  // pips on those screens carry it, never the normal hand or board cards, so this never
+  // changes existing placement/attack/select click behavior anywhere else. stopPropagation
+  // keeps the tap from also bubbling into the card's own select/confirm handler underneath it —
+  // a touch user can inspect a candidate without that same tap committing to it.
+  document.addEventListener('click', e => {
+    const pip = e.target.closest('[data-tip-tap]');
+    if (!pip) return;
+    e.stopPropagation();
+    e.preventDefault();
+    if (pinnedPip === pip) {
+      pinnedPip = null;
+      tip.style.display = 'none';
+    } else {
+      pinnedPip = pip;
+      positionTip(pip);
+    }
+  }, true); // capture phase — must run before the card's own click handler in normal bubbling
 }
 
 // ── Keyboard shortcuts ────────────────────────────────────────────────────────
@@ -4116,14 +4213,20 @@ if (isOnline && myRole === 'p2') {
   });
 }
 
-// ── Shared deck-look card preview (Forward Observer, Field Reserves) ──────────
-// Read-only card face — same markup renderHand uses for a Unit or Command hand card,
-// but built directly (these modals show cards that are NOT in hand yet, mid-choice).
+// ── Shared deck-look card preview (Mulligan, Forward Observer, Field Reserves, Craft) ──────
+// Read-only card face — same markup renderHand uses for a Unit or Command hand card, but built
+// directly (these modals show cards that are NOT in hand yet, mid-choice). Units route through
+// buildUnitCardInnerHtml (ui.js) so keyword explanations and full rules text (including a
+// generated Craft candidate's actual drawback text) show on hover, exactly like the normal hand —
+// previously this only showed name/cost/stats/bare-keyword-name, the reported gap. `tappable`
+// (true here) marks the info pips as click/focus-toggleable so a touch or keyboard user can
+// inspect a candidate without that click also confirming the pick (see buildUnitCardInnerHtml's
+// own comment and the floating-tip wiring below for how the toggle avoids bubbling into select).
 function buildPreviewCardDiv(card) {
   const cardDiv = document.createElement('div');
   cardDiv.className = 'hand-card mulligan-card';
   if (card.type === 'unit') {
-    cardDiv.innerHTML = `<div class="hc-header">${card.name}</div><div class="hc-cost">${card.cost} ⛽</div><div class="hc-type">${card.cls}</div><div class="hc-dirs"><div></div><div>${card.n}</div><div></div><div>${card.w}</div><div style="color:#444">·</div><div>${card.e}</div><div></div><div>${card.s}</div><div></div></div>${card.keyword ? `<div class="bc-keyword-row"><span class="bc-kw-tag">${card.keyword}</span></div>` : ''}`;
+    cardDiv.innerHTML = buildUnitCardInnerHtml(card, { tappable: true });
   } else if (card.type === 'command') {
     cardDiv.classList.add('hc-command');
     cardDiv.innerHTML = `<div class="hc-header">${card.name}</div><div class="hc-cost">${card.cost} ⛽</div><div class="hc-type hc-command-label">COMMAND</div><div class="hc-effect">${card.effect || ''}</div>`;

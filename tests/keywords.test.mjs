@@ -151,6 +151,56 @@ test('resolveSingleAttack: Blast secondary Hit destroying a Guard Unit deals 0 H
   assert.equal(result.hqDamageToP2, 2, 'only the non-Guard primary kill (2) contributes HQ damage — the Guard secondary kill contributes 0');
 });
 
+// Regression coverage for a reported bug ("units killed by Blast/Barrage secondary hits
+// disappear but their owner's HQ isn't deducted"). Live 2-client reproduction (P1 attacking
+// with AR46 Blast into 3 suppressed defenders, one Guard) confirmed the full game.js ->
+// combat.js -> Firebase integration layer already applies this correctly and identically on
+// both clients — these tests lock in the pure-function layer already backing that, including
+// the two scenarios the live repro didn't directly cover: the reverse attacker/defender
+// ownership direction, and a secondary hit that only Suppresses (no HQ damage at all).
+
+test('resolveSingleAttack: HQ damage is owner-based, not role-hardcoded — P2 attacking deals damage to P1', () => {
+  const state = baseState(boardWith({
+    '1,1': unit('p2', 'AR48', { tempSideBonus: 20 }), // Barrage, P2 is the attacker this time
+    '1,2': unit('p1', 'I1', { state: 'suppressed' }),  // primary, one hit from destroyed
+    '1,3': unit('p1', 'I1', { state: 'suppressed' }),  // Barrage secondary, further along the ray
+  }));
+  const result = resolveSingleAttack(state, '1,1', '1,2');
+  assert.ok(result.boardMutations.some(m => m.key === '1,2' && m.newUnit === null), 'primary destroyed');
+  assert.ok(result.boardMutations.some(m => m.key === '1,3' && m.newUnit === null), 'Barrage secondary destroyed');
+  assert.equal(result.hqDamageToP1, 4, 'both non-Guard kills (2+2) deducted from the DEFENDING side (P1), not the attacker (P2)');
+  assert.equal(result.hqDamageToP2, 0, 'the attacking side takes no HQ damage from its own attack');
+});
+
+test('resolveSingleAttack: Barrage primary destroyed + one Guard secondary destroyed + one non-Guard secondary destroyed sums correctly (matches live 2-client repro)', () => {
+  // AR48's strong side is West; place the attacker at the east edge attacking west so the ray
+  // has room: 1,3 (attacker) -> 1,2 (primary) -> 1,1 (secondary) -> 1,0 (secondary).
+  const state = baseState(boardWith({
+    '1,3': unit('p1', 'AR48', { tempSideBonus: 20 }),
+    '1,2': unit('p2', 'I1', { state: 'suppressed' }),  // primary, non-Guard
+    '1,1': unit('p2', 'I6', { state: 'suppressed' }),  // secondary, Guard
+    '1,0': unit('p2', 'I1', { state: 'suppressed' }),  // secondary, non-Guard
+  }));
+  const result = resolveSingleAttack(state, '1,3', '1,2');
+  const destroyedKeys = result.boardMutations.filter(m => m.newUnit === null).map(m => m.key).sort();
+  assert.deepEqual(destroyedKeys, ['1,0', '1,1', '1,2'], 'primary and both Barrage secondaries all destroyed');
+  assert.equal(result.hqDamageToP2, 4, 'primary (2) + Guard secondary (0) + non-Guard secondary (2) = 4, exactly matching the live 2-client repro (29 -> 25 HQ)');
+});
+
+test('resolveSingleAttack: a secondary hit that only Suppresses (not yet Destroyed) contributes 0 HQ damage', () => {
+  const state = baseState(boardWith({
+    '1,1': unit('p1', 'AR46', { tempSideBonus: 20 }), // Blast
+    '2,1': unit('p2', 'I1', { state: 'suppressed' }),  // primary, one hit from destroyed
+    '2,0': unit('p2', 'I1', { state: 'normal' }),       // secondary, still normal — this hit only Suppresses it
+  }));
+  const result = resolveSingleAttack(state, '1,1', '2,1');
+  const primaryDestroyed = result.boardMutations.some(m => m.key === '2,1' && m.newUnit === null);
+  const secondarySuppressedNotDestroyed = result.boardMutations.some(m => m.key === '2,0' && m.newUnit?.state === 'suppressed');
+  assert.ok(primaryDestroyed, 'primary destroyed (contributes 2)');
+  assert.ok(secondarySuppressedNotDestroyed, 'secondary only Suppressed, still on the board');
+  assert.equal(result.hqDamageToP2, 2, 'only the destroy (2) counts — Suppression alone never deals HQ damage');
+});
+
 // ── Section 5: Blast / Barrage ───────────────────────────────────────────────
 
 test('Blast: a successful Hit also Hits enemies directly left/right of the target (perpendicular)', () => {

@@ -449,6 +449,42 @@ function buildBoardCard(unit, viewer = 'p1', transitionFlag = null, actionIndica
   return el;
 }
 
+// ── Shared unit card face (rules text + stats + keyword explanations) ─────────
+// One builder for "what does this Unit card actually do" — used by the normal hand (below)
+// AND every card-choice screen (Mulligan, Forward Observer, Field Reserves, Craft candidates —
+// see buildChoiceCardFace in game.js, which wraps this for those non-hand contexts). Keeps the
+// keyword-explanation/ability-text markup from drifting between the two instead of each screen
+// re-inventing its own subset (the bug this was built to close: those screens showed name/cost/
+// stats/bare-keyword-name only, never the full rules text — see CHANGELOG).
+//
+// `tappable`, when true, marks the keyword tags and ability pip with `data-tip-tap` so the
+// floating-tip's click handler (game.js) will toggle them open on tap/click, stopping the click
+// from bubbling into the card's own select/confirm handler — a focus/tap-accessible way to
+// inspect a choice without accidentally committing to it. Left off for the normal in-turn hand
+// (unchanged there: those pips still only respond to hover, exactly as before this change),
+// since intercepting a click there would change existing placement-click behavior.
+export function buildUnitCardInnerHtml(card, { pendingBuff = 0, tappable = false } = {}) {
+  const dn = card.n + pendingBuff, de = card.e + pendingBuff, ds = card.s + pendingBuff, dw = card.w + pendingBuff;
+  const dirClass = pendingBuff > 0 ? ' class="bc-dir-up"' : '';
+  const dirTip = pendingBuff > 0 ? ` data-tip="Queued bonus: +${pendingBuff} all sides when this is played"` : '';
+  const tapAttrs = tappable ? ' data-tip-tap="1" tabindex="0" role="button" aria-label="Show full card details"' : '';
+  const kws = card.keyword ? (Array.isArray(card.keyword) ? card.keyword : [card.keyword]) : [];
+  const kwTags = kws.map(k => `<span class="bc-kw-tag"${KEYWORD_TEXT[k] ? ` data-tip="${esc(KEYWORD_TEXT[k])}"${tapAttrs}` : ''}>${k}</span>`).join('');
+  const abilityTag = card.ability ? `<span class="bc-ability-pip" data-tip="${esc(card.ability)}"${tapAttrs}>⚡</span>` : '';
+  const keywordRow = (kwTags || abilityTag) ? `<div class="bc-keyword-row">${kwTags}${abilityTag}</div>` : '';
+  return `
+    <div class="hc-header">${esc(card.name)}</div>
+    <div class="hc-cost">${card.cost} ⛽</div>
+    <div class="hc-type">${esc(card.cls ?? '')}</div>
+    <div class="hc-dirs"${dirTip}>
+      <div></div><div${dirClass}>${dn}</div><div></div>
+      <div${dirClass}>${dw}</div><div style="color:#444">·</div><div${dirClass}>${de}</div>
+      <div></div><div${dirClass}>${ds}</div><div></div>
+    </div>
+    ${keywordRow}
+  `;
+}
+
 // ── Hand rendering ────────────────────────────────────────────────────────────
 
 // Render a player's hand into the element with the given id.

@@ -44,6 +44,22 @@ test('resolveManeuver moves the unit and preserves its state', () => {
   assert.equal(after.board['3,3'].persistentSpent, 1, 'attack-used state preserved');
 });
 
+// Suppression alone must not disqualify a Unit from being Maneuvered (no card text among
+// A55/A56/A61-A63/A65, H16, C21/C27/C35, or Airfield L2 requires an unsuppressed/active Unit),
+// and Maneuver must not incidentally clear it either.
+test('getManeuverTargets does not exclude a Suppressed source Unit from computing destinations', () => {
+  const state = { mapId: 'kursk', board: boardWith({ '0,0': unit('p1', 'I1', { state: 'suppressed' }) }), objectives: {} };
+  const targets = getManeuverTargets(state, '0,0');
+  assert.ok(targets.length > 0, 'a Suppressed Unit still has legal Maneuver destinations');
+});
+
+test('resolveManeuver leaves a Suppressed Unit Suppressed after moving', () => {
+  const state = { mapId: 'kursk', board: boardWith({ '0,0': unit('p1', 'I1', { state: 'suppressed' }) }), objectives: {} };
+  const { state: after } = resolveManeuver(state, '0,0', '3,3');
+  assert.equal(after.board['0,0'], null);
+  assert.equal(after.board['3,3'].state, 'suppressed', 'Maneuver does not clear Suppressed — moving is not a reset');
+});
+
 test('generateCraftCandidates returns exactly 3 candidates, each with a valid keyword and drawback', () => {
   const candidates = generateCraftCandidates();
   assert.equal(candidates.length, 3);
