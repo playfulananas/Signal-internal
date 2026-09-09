@@ -794,6 +794,16 @@ function showOnlineMulligan(mapId) {
       finishStartGame(state, mapId);
       return;
     }
+    // Found 2026-09-09: updatePlayerState's write above can synchronously (reentrantly) fire
+    // the host's own beginOnlineMulligan listener via Firebase's local echo, BEFORE this
+    // function resumes — if the other player was already done, that reentrant call detects
+    // both mulligans complete and runs finishStartGame() right here, mid-call. Resuming past
+    // that point and unconditionally showing the waiting screen would stomp the just-revealed
+    // board with a stale "waiting for mulligan" banner. Bail if the match already started —
+    // state.readyForPlay is the same authoritative "has the match actually started" flag
+    // finishStartGame sets and the P2-online listener already keys off for this exact purpose,
+    // so check that directly rather than inferring it from a DOM side-effect.
+    if (state?.readyForPlay === true) return;
     document.getElementById('waiting-screen').style.display = 'flex';
     document.getElementById('waiting-msg').textContent = myRole === 'p1'
       ? 'Waiting for the other player to finish their mulligan...'
@@ -1358,6 +1368,24 @@ function receiveRemoteState(remoteState, { force = false, preserveSyncStatus = f
   if (!preserveSyncStatus) setOnlineSyncStatus();
   const newEntries = (normalized.log ?? []).slice(prevLogLen);
   if (newEntries.length) appendLog(newEntries);
+  // Found 2026-09-09: this reset list only ever covered a handful of pending-choice vars —
+  // Maneuver (command AND On-Play-Unit), Coordinated Strike, Rotate, and the FO/Field
+  // Reserves/Craft modals were never cleared here, and none of their modals were ever closed.
+  // A force-adopted conflicting state (pushStateIfOnline's conflict-recovery path) can land
+  // while any of those is open locally, with its paid Fuel/activation-lock spend possibly not
+  // even reflected in the state being adopted (that write is exactly what conflicted). Leaving
+  // the modal open would let the player submit it against state it no longer matches. Since
+  // these modals already never refund on cancel by design (their cost is spent before they
+  // open), closing them here without refunding is consistent, not a new inconsistency — the
+  // player just has to redo the interrupted choice instead of risking corrupted shared state.
+  const hadPendingChoice = uiState !== 'idle' || pendingCommandId !== null || selectedHeroZone !== null
+    || pendingUnitManeuverSource !== null || pendingCommandManeuverSource !== null
+    || pendingCoordStrikeFirst !== null || pendingRotation !== null || craftPickerRole !== null
+    || foCards.length > 0 || fieldReservesCards.length > 0 || anyBlockingModalOpen();
+  for (const id of BLOCKING_MODAL_IDS) {
+    const el = document.getElementById(id);
+    if (el) el.style.display = 'none';
+  }
   uiState = 'idle';
   syncArtyTargetingUiState(); // overrides 'idle' above if this client owes an Artillery Position hit
   syncObjectivePickUiState(); // overrides 'idle' above if this client owes an Objective pick
@@ -1365,11 +1393,27 @@ function receiveRemoteState(remoteState, { force = false, preserveSyncStatus = f
   pendingAttackerKey = null;
   pendingCommandId = null;
   preCommandState = null;
+  pendingCommandManeuverSource = null;
+  pendingCommandManeuverRemaining = 0;
+  pendingCoordStrikeFirst = null;
+  pendingUnitManeuverSource = null;
+  pendingUnitManeuverPlacedKey = null;
+  pendingHeroManeuverSource = null;
+  pendingRotation = null;
+  foCards = [];
+  foAssignments = {};
+  foPlayer = '';
+  fieldReservesCards = [];
+  fieldReservesPlayer = null;
+  craftPickerRole = null;
   lastDATargetKey = null;
   selectedHeroZone = null;
   pendingHeroId = null;
   pendingHeroColumn = null;
   pendingHeroTargets = null;
+  if (hadPendingChoice) {
+    appendLog(['Connection recovered — an in-progress choice was interrupted and had to be redone.']);
+  }
   redraw();
   checkWin();
   // The opponent's End Turn handler can't prompt us, so an inbound state that hands us the
@@ -1806,8 +1850,6 @@ function resolveUnitManeuverDestination(destKey) {
   const legalTargets = getManeuverTargets(state, sourceKey);
   if (!legalTargets.includes(destKey)) return;
   const placedKey = pendingUnitManeuverPlacedKey;
-  pendingUnitManeuverSource = null;
-  pendingUnitManeuverPlacedKey = null;
 
   let { state: s, log } = resolveManeuver(state, sourceKey, destKey);
   s = recalculateDynamicStats(s);
@@ -1827,6 +1869,14 @@ function resolveUnitManeuverDestination(destKey) {
   }
 
   const targets = getAttackableTargets(s, placedKey);
+  // Found 2026-09-09: this used to clear the pending-maneuver vars and advance uiState BEFORE
+  // checking whether commitState actually wrote anything — if sync was paused, the mandatory
+  // Maneuver would look resolved locally while the board mutation never reached shared state.
+  // Stay in the mandatory maneuver state (pendingUnitManeuverSource/PlacedKey left intact) so
+  // the player can simply retry once reconnected, instead of the choice silently vanishing.
+  if (!commitState(s, log)) return;
+  pendingUnitManeuverSource = null;
+  pendingUnitManeuverPlacedKey = null;
   if (targets.length > 0) {
     uiState = 'targeting';
     pendingAttackerKey = placedKey;
@@ -1834,7 +1884,11 @@ function resolveUnitManeuverDestination(destKey) {
     uiState = 'idle';
     pendingAttackerKey = null;
   }
-  commitState(s, log);
+  // commitState's own redraw() already fired above, but at that point uiState was still
+  // 'unit-maneuver-destination' — attack highlights/turn-readiness are computed from the
+  // uiState set just now, so without this the board keeps showing the completed choice's
+  // stale controls until some unrelated later action happens to redraw again.
+  redraw();
   checkWin();
 }
 
@@ -1905,7 +1959,11 @@ function handleHeroZoneClick(role, col, shiftKey = false) {
     afterMove = rs.state;
     msgs.push(...rs.log);
   }
-  commitState(afterMove, msgs);
+  // Found 2026-09-09: used to clear pendingCommandId/preCommandState unconditionally right
+  // after commitState — if sync was paused, the write silently no-op'd but Command Shuffle
+  // was marked done anyway, with no preCommandState left to refund it via Cancel. Only clear
+  // once the swap has actually reached shared state.
+  if (!commitState(afterMove, msgs)) return;
   if (shuffleActive) { pendingCommandId = null; preCommandState = null; checkWin(); }
 }
 
@@ -2448,6 +2506,12 @@ document.getElementById('board').addEventListener('click', e => {
 
   // IDLE: select a friendly unit to attack
   if (uiState === "idle") {
+    // Found 2026-09-09: this branch used to be the one action-start path that didn't check the
+    // shared interaction gate, so a pending-but-non-mandatory action (e.g. Command Shuffle
+    // between pick-up and drop, uiState stays 'idle' the whole time) let an attack start and
+    // finish underneath it — Cancel would then revert to preCommandState and silently wipe
+    // that attack's results. Every other action-start handler already gates on this.
+    if (getInteractionDecision(currentInteractionContext()).pending) return;
     const unit = state.board[clickedKey];
     if (!unit) return;
     const active = state.initiative;
@@ -3690,8 +3754,17 @@ document.getElementById('btn-cancel').addEventListener('click', () => {
   const rallyCryAlreadyPicked = ((pendingCommandId === 'C03' || pendingCommandId === 'C10') && pendingRallyCryCount < 2)
     || (pendingCommandId === 'C32' && pendingRallyCryCount === 1);
   if (preCommandState && !rallyCryAlreadyPicked) {
-    state = preCommandState;
+    // Found 2026-09-09: reverting to preCommandState's CONTENT is right, but it also carries
+    // preCommandState's stale (pre-Fuel-spend) _revision. Pushing that as-is would make this
+    // write target the wrong expectedRevision (the Fuel-spend commit already advanced the
+    // server past it) and get rejected as a conflict — which force-adopts the server's stale,
+    // Fuel-spent state right back, undoing the very cancel this is supposed to push. Carry the
+    // CURRENT revision forward onto the reverted content so this write correctly supersedes
+    // the commit it's cancelling, both locally and online.
+    const currentRevision = state?._revision;
+    state = Number.isSafeInteger(currentRevision) ? { ...preCommandState, _revision: currentRevision } : preCommandState;
     preCommandState = null;
+    pushStateIfOnline(state);
   }
   pendingCommandManeuverSource = null;
   pendingHeroManeuverSource = null;
@@ -4119,7 +4192,6 @@ function updateFOButtons() {
 }
 
 function confirmFO() {
-  document.getElementById('fo-modal').style.display = 'none';
   const keepId   = foCards.find(id => foAssignments[id] === 'keep');
   const topId    = foCards.find(id => foAssignments[id] === 'top');
   const bottomId = foCards.find(id => foAssignments[id] === 'bottom'); // undefined when only 2 were drawn (doc 01 §27 — no bottom instruction target)
@@ -4131,10 +4203,18 @@ function confirmFO() {
   const topName    = CARD_BY_ID[topId]?.name    ?? '?';
   const log = [`Forward Observer: kept ${keepName} · ${topName} → top` + (bottomId !== undefined ? ` · ${CARD_BY_ID[bottomId]?.name ?? '?'} → bottom` : '')];
   const rs = applyRuthlessStrategistIfPresent(s, foPlayer);
-  commitState(rs.state, [...log, ...rs.log]);
+  // Found 2026-09-09: used to hide the modal and clear foCards/foAssignments unconditionally,
+  // even when sync was paused and commitState silently no-op'd — the already-paid pick was
+  // just lost with no way back. Leave the modal open (and the tracking vars intact) on failure
+  // so the player can retry the same Confirm once reconnected.
+  if (!commitState(rs.state, [...log, ...rs.log])) return;
+  document.getElementById('fo-modal').style.display = 'none';
   checkWin();
   foCards = [];
   foAssignments = {};
+  // commitState's own redraw() fired while the modal was still open (hasBlockingModal made
+  // turn-readiness/highlights report "pending"); redraw again now that it's actually closed.
+  redraw();
 }
 
 document.getElementById('fo-confirm').addEventListener('click', confirmFO);
@@ -4161,7 +4241,6 @@ function showFieldReservesModal(drawn, player) {
 }
 
 function confirmFieldReserves(takenId) {
-  document.getElementById('field-reserves-modal').style.display = 'none';
   const ps = state[fieldReservesPlayer];
   const rest = fieldReservesCards.filter(id => id !== takenId);
   const hand = takenId != null ? [...ps.hand, takenId] : ps.hand;
@@ -4169,9 +4248,15 @@ function confirmFieldReserves(takenId) {
   const msg = takenId != null
     ? `Field Reserves: took ${CARD_BY_ID[takenId]?.name} — ${rest.length} card(s) to bottom`
     : `Field Reserves: took nothing — 4 card(s) to bottom`;
-  commitState(s, [msg]);
+  // Same fix as confirmFO: don't hide the modal or drop the pending cards until the write
+  // actually lands, so a sync pause doesn't silently lose the pick.
+  if (!commitState(s, [msg])) return;
+  document.getElementById('field-reserves-modal').style.display = 'none';
   fieldReservesCards = [];
   fieldReservesPlayer = null;
+  // Same fix as confirmFO: redraw again now the modal is actually closed — commitState's own
+  // redraw() ran while it was still open and under-reported turn-readiness/highlights.
+  redraw();
 }
 
 document.getElementById('field-reserves-skip').addEventListener('click', () => confirmFieldReserves(null));
@@ -4209,9 +4294,7 @@ function showCraftPickerModal(role) {
 }
 
 function confirmCraftPick(chosenId) {
-  document.getElementById('craft-picker-modal').style.display = 'none';
   const role = craftPickerRole;
-  craftPickerRole = null;
   const ps = state[role];
   const chosen = CARD_BY_ID[chosenId];
   // doc 02 Q024: a full hand sends the generated card to Discard Pile instead.
@@ -4225,7 +4308,14 @@ function confirmCraftPick(chosenId) {
     generatedCards: { ...(state.generatedCards ?? {}), [chosenId]: chosen },
   };
   const log = [`Chief Aircraft Engineer: Crafted ${chosen.name} (${chosen.n}/${chosen.e}/${chosen.s}/${chosen.w}, ${chosen.keyword}) — next activation costs ${nextCraftCost(s[role])}`];
-  commitState(s, log);
+  // Same fix as confirmFO/confirmFieldReserves: keep the modal open and craftPickerRole set
+  // until the write actually lands, so a sync pause doesn't silently lose the crafted card.
+  if (!commitState(s, log)) return;
+  document.getElementById('craft-picker-modal').style.display = 'none';
+  craftPickerRole = null;
+  // Same fix as confirmFO/confirmFieldReserves: redraw again now the modal is actually closed —
+  // commitState's own redraw() ran while it was still open and under-reported turn-readiness.
+  redraw();
 }
 
 // ── Rotate direction modal (Change Formation 124 / Field Engineer 91) ──────────
@@ -4241,10 +4331,8 @@ function showRotateDirectionModal(ctx) {
 }
 
 function confirmRotateDirection(direction) { // direction: 1 = clockwise, -1 = counter-clockwise
-  document.getElementById('rotate-direction-modal').style.display = 'none';
   if (!pendingRotation) return;
   const { kind, targetKey, cardName, s, log, role, heroId, objectiveKey } = pendingRotation;
-  pendingRotation = null;
 
   const unit = s.board[targetKey];
   const newRotation = (((unit.rotation || 0) + direction * 90) % 360 + 360) % 360;
@@ -4267,7 +4355,12 @@ function confirmRotateDirection(direction) { // direction: 1 = clockwise, -1 = c
   // Artillery Position L1 (Objective player-choice pick, 2026-09-01) — the Unit was already
   // chosen via a board click (resolveObjectivePickClick); this modal only ever supplies the
   // direction. Continues the paused Objective-resolution chain instead of committing directly.
+  // pendingObjectivePick lives in shared `state` itself (not just a local var), so unlike the
+  // command/hero path below, this one doesn't need the same guard — the mandatory pick survives
+  // even if resumeObjectiveResolution's own commit fails, whereas pendingRotation is local-only.
   if (kind === 'objective') {
+    document.getElementById('rotate-direction-modal').style.display = 'none';
+    pendingRotation = null;
     resumeObjectiveResolution(next, role, objectiveKey, newLog);
     return;
   }
@@ -4278,7 +4371,16 @@ function confirmRotateDirection(direction) { // direction: 1 = clockwise, -1 = c
     next = rs.state;
     finalLog = [...newLog, ...rs.log];
   }
-  commitState(next, finalLog);
+  // Found 2026-09-09 (live-tested via a forced sync conflict): same fix as
+  // confirmFO/confirmFieldReserves/confirmCraftPick — don't hide the modal or drop
+  // pendingRotation until the write actually lands. Rotate's Fuel spend and target pick
+  // already happened locally before this modal even opened, with preCommandState cleared at
+  // that point (see the C16 case in playInstantCommand) — so unlike those three, there's no
+  // Cancel-refund fallback left if this commit silently no-ops; leaving the modal open is the
+  // only way back for the player once reconnected.
+  if (!commitState(next, finalLog)) return;
+  document.getElementById('rotate-direction-modal').style.display = 'none';
+  pendingRotation = null;
   checkWin();
 }
 
