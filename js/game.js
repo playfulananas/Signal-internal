@@ -1,4 +1,4 @@
-import { CARD_BY_ID, CARDS, ensureGeneratedCard } from './cards.js?v=1788976494';
+import { CARD_BY_ID, CARDS, ensureGeneratedCard } from './cards.js?v=1788976834';
 import {
   createInitialState,
   startOfTurn,
@@ -28,17 +28,17 @@ import {
   markEscalateUse,
   expireTempFuelGrant,
   createBoardUnit,
-} from './state.js?v=1788976494';
-import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, applyGameEvents, unitSuppressedEvent, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff, getObjectivePickEffectType, computeObjectivePickTargets, describeDynamicSideBonus } from './combat.js?v=1788976494';
-import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones, showFxPopup, drawFxConnector, describeAttackOutcome, summarizeTurnReadiness, renderEndTurnSummary } from './ui.js?v=1788976494';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1788976494';
-import { pushState, pushVersionedState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby, updatePlayerState } from './firebase.js?v=1788976494';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1788976494';
-import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1788976494';
-import { runBotTurn } from './bot_player.js?v=1788976494';
-import { bestHeroDeployment } from './bot_ai.js?v=1788976494';
-import { canCancelInteraction, getInteractionDecision, getInteractionGuide } from './interaction.js?v=1788976494';
-import { isPrePlayMulliganSnapshot, normalizeRemoteBoard, prepareVersionedState, shouldAcceptRemoteState } from './sync.js?v=1788976494';
+} from './state.js?v=1788976834';
+import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, applyGameEvents, unitSuppressedEvent, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff, getObjectivePickEffectType, computeObjectivePickTargets, describeDynamicSideBonus } from './combat.js?v=1788976834';
+import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones, showFxPopup, drawFxConnector, describeAttackOutcome, summarizeTurnReadiness, renderEndTurnSummary } from './ui.js?v=1788976834';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1788976834';
+import { pushState, pushVersionedState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby, updatePlayerState } from './firebase.js?v=1788976834';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1788976834';
+import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1788976834';
+import { runBotTurn } from './bot_player.js?v=1788976834';
+import { bestHeroDeployment } from './bot_ai.js?v=1788976834';
+import { canCancelInteraction, getInteractionDecision, getInteractionGuide } from './interaction.js?v=1788976834';
+import { isPrePlayMulliganSnapshot, normalizeRemoteBoard, prepareVersionedState, shouldAcceptRemoteState } from './sync.js?v=1788976834';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
@@ -4331,10 +4331,8 @@ function showRotateDirectionModal(ctx) {
 }
 
 function confirmRotateDirection(direction) { // direction: 1 = clockwise, -1 = counter-clockwise
-  document.getElementById('rotate-direction-modal').style.display = 'none';
   if (!pendingRotation) return;
   const { kind, targetKey, cardName, s, log, role, heroId, objectiveKey } = pendingRotation;
-  pendingRotation = null;
 
   const unit = s.board[targetKey];
   const newRotation = (((unit.rotation || 0) + direction * 90) % 360 + 360) % 360;
@@ -4357,7 +4355,12 @@ function confirmRotateDirection(direction) { // direction: 1 = clockwise, -1 = c
   // Artillery Position L1 (Objective player-choice pick, 2026-09-01) — the Unit was already
   // chosen via a board click (resolveObjectivePickClick); this modal only ever supplies the
   // direction. Continues the paused Objective-resolution chain instead of committing directly.
+  // pendingObjectivePick lives in shared `state` itself (not just a local var), so unlike the
+  // command/hero path below, this one doesn't need the same guard — the mandatory pick survives
+  // even if resumeObjectiveResolution's own commit fails, whereas pendingRotation is local-only.
   if (kind === 'objective') {
+    document.getElementById('rotate-direction-modal').style.display = 'none';
+    pendingRotation = null;
     resumeObjectiveResolution(next, role, objectiveKey, newLog);
     return;
   }
@@ -4368,7 +4371,16 @@ function confirmRotateDirection(direction) { // direction: 1 = clockwise, -1 = c
     next = rs.state;
     finalLog = [...newLog, ...rs.log];
   }
-  commitState(next, finalLog);
+  // Found 2026-09-09 (live-tested via a forced sync conflict): same fix as
+  // confirmFO/confirmFieldReserves/confirmCraftPick — don't hide the modal or drop
+  // pendingRotation until the write actually lands. Rotate's Fuel spend and target pick
+  // already happened locally before this modal even opened, with preCommandState cleared at
+  // that point (see the C16 case in playInstantCommand) — so unlike those three, there's no
+  // Cancel-refund fallback left if this commit silently no-ops; leaving the modal open is the
+  // only way back for the player once reconnected.
+  if (!commitState(next, finalLog)) return;
+  document.getElementById('rotate-direction-modal').style.display = 'none';
+  pendingRotation = null;
   checkWin();
 }
 
