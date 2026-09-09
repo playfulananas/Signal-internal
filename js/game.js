@@ -1,4 +1,4 @@
-import { CARD_BY_ID, CARDS, ensureGeneratedCard } from './cards.js?v=1788974898';
+import { CARD_BY_ID, CARDS, ensureGeneratedCard } from './cards.js?v=1788976494';
 import {
   createInitialState,
   startOfTurn,
@@ -28,17 +28,17 @@ import {
   markEscalateUse,
   expireTempFuelGrant,
   createBoardUnit,
-} from './state.js?v=1788974898';
-import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, applyGameEvents, unitSuppressedEvent, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff, getObjectivePickEffectType, computeObjectivePickTargets, describeDynamicSideBonus } from './combat.js?v=1788974898';
-import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones, showFxPopup, drawFxConnector, describeAttackOutcome, summarizeTurnReadiness, renderEndTurnSummary } from './ui.js?v=1788974898';
-import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1788974898';
-import { pushState, pushVersionedState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby, updatePlayerState } from './firebase.js?v=1788974898';
-import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1788974898';
-import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1788974898';
-import { runBotTurn } from './bot_player.js?v=1788974898';
-import { bestHeroDeployment } from './bot_ai.js?v=1788974898';
-import { canCancelInteraction, getInteractionDecision, getInteractionGuide } from './interaction.js?v=1788974898';
-import { isPrePlayMulliganSnapshot, normalizeRemoteBoard, prepareVersionedState, shouldAcceptRemoteState } from './sync.js?v=1788974898';
+} from './state.js?v=1788976494';
+import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, applyGameEvents, unitSuppressedEvent, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff, getObjectivePickEffectType, computeObjectivePickTargets, describeDynamicSideBonus } from './combat.js?v=1788976494';
+import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones, showFxPopup, drawFxConnector, describeAttackOutcome, summarizeTurnReadiness, renderEndTurnSummary } from './ui.js?v=1788976494';
+import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=1788976494';
+import { pushState, pushVersionedState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby, updatePlayerState } from './firebase.js?v=1788976494';
+import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=1788976494';
+import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=1788976494';
+import { runBotTurn } from './bot_player.js?v=1788976494';
+import { bestHeroDeployment } from './bot_ai.js?v=1788976494';
+import { canCancelInteraction, getInteractionDecision, getInteractionGuide } from './interaction.js?v=1788976494';
+import { isPrePlayMulliganSnapshot, normalizeRemoteBoard, prepareVersionedState, shouldAcceptRemoteState } from './sync.js?v=1788976494';
 
 // ── Deck selection ────────────────────────────────────────────────────────────
 // Tiles are rendered from STARTER_DECKS + saved custom decks. Custom decks are
@@ -799,8 +799,11 @@ function showOnlineMulligan(mapId) {
     // function resumes — if the other player was already done, that reentrant call detects
     // both mulligans complete and runs finishStartGame() right here, mid-call. Resuming past
     // that point and unconditionally showing the waiting screen would stomp the just-revealed
-    // board with a stale "waiting for mulligan" banner. Bail if the match already started.
-    if (document.getElementById('game-area').style.display === 'flex') return;
+    // board with a stale "waiting for mulligan" banner. Bail if the match already started —
+    // state.readyForPlay is the same authoritative "has the match actually started" flag
+    // finishStartGame sets and the P2-online listener already keys off for this exact purpose,
+    // so check that directly rather than inferring it from a DOM side-effect.
+    if (state?.readyForPlay === true) return;
     document.getElementById('waiting-screen').style.display = 'flex';
     document.getElementById('waiting-msg').textContent = myRole === 'p1'
       ? 'Waiting for the other player to finish their mulligan...'
@@ -1365,6 +1368,24 @@ function receiveRemoteState(remoteState, { force = false, preserveSyncStatus = f
   if (!preserveSyncStatus) setOnlineSyncStatus();
   const newEntries = (normalized.log ?? []).slice(prevLogLen);
   if (newEntries.length) appendLog(newEntries);
+  // Found 2026-09-09: this reset list only ever covered a handful of pending-choice vars —
+  // Maneuver (command AND On-Play-Unit), Coordinated Strike, Rotate, and the FO/Field
+  // Reserves/Craft modals were never cleared here, and none of their modals were ever closed.
+  // A force-adopted conflicting state (pushStateIfOnline's conflict-recovery path) can land
+  // while any of those is open locally, with its paid Fuel/activation-lock spend possibly not
+  // even reflected in the state being adopted (that write is exactly what conflicted). Leaving
+  // the modal open would let the player submit it against state it no longer matches. Since
+  // these modals already never refund on cancel by design (their cost is spent before they
+  // open), closing them here without refunding is consistent, not a new inconsistency — the
+  // player just has to redo the interrupted choice instead of risking corrupted shared state.
+  const hadPendingChoice = uiState !== 'idle' || pendingCommandId !== null || selectedHeroZone !== null
+    || pendingUnitManeuverSource !== null || pendingCommandManeuverSource !== null
+    || pendingCoordStrikeFirst !== null || pendingRotation !== null || craftPickerRole !== null
+    || foCards.length > 0 || fieldReservesCards.length > 0 || anyBlockingModalOpen();
+  for (const id of BLOCKING_MODAL_IDS) {
+    const el = document.getElementById(id);
+    if (el) el.style.display = 'none';
+  }
   uiState = 'idle';
   syncArtyTargetingUiState(); // overrides 'idle' above if this client owes an Artillery Position hit
   syncObjectivePickUiState(); // overrides 'idle' above if this client owes an Objective pick
@@ -1372,11 +1393,27 @@ function receiveRemoteState(remoteState, { force = false, preserveSyncStatus = f
   pendingAttackerKey = null;
   pendingCommandId = null;
   preCommandState = null;
+  pendingCommandManeuverSource = null;
+  pendingCommandManeuverRemaining = 0;
+  pendingCoordStrikeFirst = null;
+  pendingUnitManeuverSource = null;
+  pendingUnitManeuverPlacedKey = null;
+  pendingHeroManeuverSource = null;
+  pendingRotation = null;
+  foCards = [];
+  foAssignments = {};
+  foPlayer = '';
+  fieldReservesCards = [];
+  fieldReservesPlayer = null;
+  craftPickerRole = null;
   lastDATargetKey = null;
   selectedHeroZone = null;
   pendingHeroId = null;
   pendingHeroColumn = null;
   pendingHeroTargets = null;
+  if (hadPendingChoice) {
+    appendLog(['Connection recovered — an in-progress choice was interrupted and had to be redone.']);
+  }
   redraw();
   checkWin();
   // The opponent's End Turn handler can't prompt us, so an inbound state that hands us the
@@ -1847,6 +1884,11 @@ function resolveUnitManeuverDestination(destKey) {
     uiState = 'idle';
     pendingAttackerKey = null;
   }
+  // commitState's own redraw() already fired above, but at that point uiState was still
+  // 'unit-maneuver-destination' — attack highlights/turn-readiness are computed from the
+  // uiState set just now, so without this the board keeps showing the completed choice's
+  // stale controls until some unrelated later action happens to redraw again.
+  redraw();
   checkWin();
 }
 
@@ -4170,6 +4212,9 @@ function confirmFO() {
   checkWin();
   foCards = [];
   foAssignments = {};
+  // commitState's own redraw() fired while the modal was still open (hasBlockingModal made
+  // turn-readiness/highlights report "pending"); redraw again now that it's actually closed.
+  redraw();
 }
 
 document.getElementById('fo-confirm').addEventListener('click', confirmFO);
@@ -4209,6 +4254,9 @@ function confirmFieldReserves(takenId) {
   document.getElementById('field-reserves-modal').style.display = 'none';
   fieldReservesCards = [];
   fieldReservesPlayer = null;
+  // Same fix as confirmFO: redraw again now the modal is actually closed — commitState's own
+  // redraw() ran while it was still open and under-reported turn-readiness/highlights.
+  redraw();
 }
 
 document.getElementById('field-reserves-skip').addEventListener('click', () => confirmFieldReserves(null));
@@ -4265,6 +4313,9 @@ function confirmCraftPick(chosenId) {
   if (!commitState(s, log)) return;
   document.getElementById('craft-picker-modal').style.display = 'none';
   craftPickerRole = null;
+  // Same fix as confirmFO/confirmFieldReserves: redraw again now the modal is actually closed —
+  // commitState's own redraw() ran while it was still open and under-reported turn-readiness.
+  redraw();
 }
 
 // ── Rotate direction modal (Change Formation 124 / Field Engineer 91) ──────────

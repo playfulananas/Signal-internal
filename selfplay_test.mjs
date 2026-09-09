@@ -72,6 +72,21 @@ async function handleCraftPicker(page) {
   await page.waitForTimeout(30);
 }
 
+// Found 2026-09-09: neither click below had a bounded timeout or .catch() — both use
+// Playwright's default 30s, and if a click genuinely can't land (e.g. transiently covered by
+// another element), the resulting rejection was uncaught and crashed the whole game instead of
+// just this one deploy attempt. clickOnce gives each click a short budget and one retry — a real
+// transient cover clears well inside that; anything still blocked after two tries is treated the
+// same as "couldn't resolve this modal," which the caller already handles via the STALLED path.
+async function clickOnce(locator, { timeout = 4000, retries = 1 } = {}) {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const ok = await locator.click({ timeout }).then(() => true).catch(() => false);
+    if (ok) return true;
+    await new Promise(r => setTimeout(r, 150));
+  }
+  return false;
+}
+
 // Resolves the Hero deploy modal (starting pick and later reinforcements) using the same
 // bestHeroDeployment scoring the in-page "vs AI" bot uses, falling back to first-hero/first-zone
 // if state can't be read. An unhandled modal doesn't throw — it silently swallows clicks and the
@@ -88,13 +103,13 @@ async function handleHeroDeploy(page) {
   const choice = state && roster.length ? bestHeroDeployment(state, active, roster, heroZones) : null;
 
   if (choice) {
-    await page.locator(`#hero-deploy-cards .hero-card[data-hero-id="${choice.heroId}"]`).first().click();
+    if (!(await clickOnce(page.locator(`#hero-deploy-cards .hero-card[data-hero-id="${choice.heroId}"]`).first()))) return;
     await page.waitForTimeout(20);
-    await page.locator(".hero-zone-pick").nth(choice.col).click();
+    await clickOnce(page.locator(".hero-zone-pick").nth(choice.col));
   } else {
-    await page.locator("#hero-deploy-cards .hero-card").first().click();
+    if (!(await clickOnce(page.locator("#hero-deploy-cards .hero-card").first()))) return;
     await page.waitForTimeout(20);
-    await page.locator("#hero-deploy-zones .hero-zone-pick:not([disabled])").first().click();
+    await clickOnce(page.locator("#hero-deploy-zones .hero-zone-pick:not([disabled])").first());
   }
   await page.waitForTimeout(30);
 }
