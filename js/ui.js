@@ -463,18 +463,28 @@ function buildBoardCard(unit, viewer = 'p1', transitionFlag = null, actionIndica
 // inspect a choice without accidentally committing to it. Left off for the normal in-turn hand
 // (unchanged there: those pips still only respond to hover, exactly as before this change),
 // since intercepting a click there would change existing placement-click behavior.
-export function buildUnitCardInnerHtml(card, { pendingBuff = 0, tappable = false } = {}) {
-  const dn = card.n + pendingBuff, de = card.e + pendingBuff, ds = card.s + pendingBuff, dw = card.w + pendingBuff;
-  const dirClass = pendingBuff > 0 ? ' class="bc-dir-up"' : '';
-  const dirTip = pendingBuff > 0 ? ` data-tip="Queued bonus: +${pendingBuff} all sides when this is played"` : '';
+// displayCost/discounted let callers (the normal hand, below) show a Tank-discount or
+// Command-Specialist-discount price through the same markup instead of the printed card.cost —
+// falls back to card.cost when omitted, so card-choice screens that never discount don't need to
+// pass anything. All numeric fields are validated via safeStat: a malformed n/e/s/w/cost/
+// pendingBuff (corrupt local data, or a tampered value arriving from the opponent's client over
+// the online sync channel) collapses to 0 instead of being interpolated as a raw string into the
+// template, which is what would let it become executable markup.
+export function buildUnitCardInnerHtml(card, { pendingBuff = 0, tappable = false, displayCost = null, discounted = false } = {}) {
+  const buff = safeStat(pendingBuff);
+  const dn = safeStat(card.n) + buff, de = safeStat(card.e) + buff, ds = safeStat(card.s) + buff, dw = safeStat(card.w) + buff;
+  const dirClass = buff > 0 ? ' class="bc-dir-up"' : '';
+  const dirTip = buff > 0 ? ` data-tip="Queued bonus: +${buff} all sides when this is played"` : '';
   const tapAttrs = tappable ? ' data-tip-tap="1" tabindex="0" role="button" aria-label="Show full card details"' : '';
   const kws = card.keyword ? (Array.isArray(card.keyword) ? card.keyword : [card.keyword]) : [];
-  const kwTags = kws.map(k => `<span class="bc-kw-tag"${KEYWORD_TEXT[k] ? ` data-tip="${esc(KEYWORD_TEXT[k])}"${tapAttrs}` : ''}>${k}</span>`).join('');
+  const kwTags = kws.map(k => `<span class="bc-kw-tag"${KEYWORD_TEXT[k] ? ` data-tip="${esc(KEYWORD_TEXT[k])}"${tapAttrs}` : ''}>${esc(k)}</span>`).join('');
   const abilityTag = card.ability ? `<span class="bc-ability-pip" data-tip="${esc(card.ability)}"${tapAttrs}>⚡</span>` : '';
   const keywordRow = (kwTags || abilityTag) ? `<div class="bc-keyword-row">${kwTags}${abilityTag}</div>` : '';
+  const cost = safeStat(displayCost != null ? displayCost : card.cost);
+  const costHtml = discounted ? `<span class="hc-cost-discounted">${cost} ⛽</span>` : `${cost} ⛽`;
   return `
     <div class="hc-header">${esc(card.name)}</div>
-    <div class="hc-cost">${card.cost} ⛽</div>
+    <div class="hc-cost">${costHtml}</div>
     <div class="hc-type">${esc(card.cls ?? '')}</div>
     <div class="hc-dirs"${dirTip}>
       <div></div><div${dirClass}>${dn}</div><div></div>
@@ -509,9 +519,6 @@ export function renderHand(handCardIds, containerId, selectedCardId, extras = {}
       const discount = extras.playerState ? discountFor(extras.playerState, card, null) : 0;
       const displayCost = card.cost - discount;
       effectiveCostForAffordability = displayCost;
-      const costHtml = discount > 0
-        ? `<span class="hc-cost-discounted">${displayCost} ⛽</span>`
-        : `${displayCost} ⛽`;
       if (discount > 0) div.classList.add('hc-tank-discounted');
       // Pending stat buff (Deathrattle: Convoy Escort 138) — queued for the next matching
       // class played, ANY copy in hand (not just one arbitrarily marked). Sums every matching
@@ -523,45 +530,31 @@ export function renderHand(handCardIds, containerId, selectedCardId, extras = {}
         .filter(b => b.appliesTo === card.cls)
         .reduce((sum, b) => sum + b.amount, 0);
       if (pendingBuff > 0) div.classList.add('hc-buff-pending');
-      const dn = card.n + pendingBuff, de = card.e + pendingBuff, ds = card.s + pendingBuff, dw = card.w + pendingBuff;
-      const dirClass = pendingBuff > 0 ? ' class="bc-dir-up"' : '';
-      const dirTip = pendingBuff > 0 ? ` data-tip="Queued bonus: +${pendingBuff} all sides when this is played"` : '';
-      div.innerHTML = `
-        <div class="hc-header">${card.name}</div>
-        <div class="hc-cost">${costHtml}</div>
-        <div class="hc-type">${card.cls}</div>
-        <div class="hc-dirs"${dirTip}>
-          <div></div><div${dirClass}>${dn}</div><div></div>
-          <div${dirClass}>${dw}</div><div style="color:#444">·</div><div${dirClass}>${de}</div>
-          <div></div><div${dirClass}>${ds}</div><div></div>
-        </div>
-        ${(() => {
-        const kws = card.keyword ? (Array.isArray(card.keyword) ? card.keyword : [card.keyword]) : [];
-        const kwTags = kws.map(k => `<span class="bc-kw-tag"${KEYWORD_TEXT[k] ? ` data-tip="${esc(KEYWORD_TEXT[k])}"` : ''}>${k}</span>`).join('');
-        const abilityTag = card.ability ? `<span class="bc-ability-pip" data-tip="${esc(card.ability)}">⚡</span>` : '';
-        return (kwTags || abilityTag) ? `<div class="bc-keyword-row">${kwTags}${abilityTag}</div>` : '';
-      })()}
-      `;
+      // Routed through the same builder the card-choice screens use (buildUnitCardInnerHtml,
+      // above) so escaping/validation and markup never drift between the two — this used to be
+      // a fully duplicated inline template here despite that function's docblock already
+      // claiming it was shared.
+      div.innerHTML = buildUnitCardInnerHtml(card, { pendingBuff, displayCost, discounted: discount > 0 });
     } else if (card.type === 'command') {
       div.classList.add('hc-command');
       // Same discount as units above (Command Specialist's Hero Power applies here — see
       // discountFor's 'command' appliesTo — previously shown at full price regardless).
       const cmdDiscount = extras.playerState ? discountFor(extras.playerState, card, null) : 0;
-      const cmdDisplayCost = card.cost - cmdDiscount;
+      const cmdDisplayCost = safeStat(card.cost) - cmdDiscount;
       effectiveCostForAffordability = cmdDisplayCost;
       const cmdCostHtml = cmdDiscount > 0
         ? `<span class="hc-cost-discounted">${cmdDisplayCost} ⛽</span>`
         : `${cmdDisplayCost} ⛽`;
       div.innerHTML = `
-        <div class="hc-header">${card.name}</div>
+        <div class="hc-header">${esc(card.name)}</div>
         <div class="hc-cost">${cmdCostHtml}</div>
         <div class="hc-type hc-command-label">COMMAND</div>
-        <div class="hc-effect">${card.effect || ''}</div>
+        <div class="hc-effect">${esc(card.effect || '')}</div>
       `;
     } else {
       // objective (shouldn't normally be in hand, but handle gracefully)
       div.innerHTML = `
-        <div class="hc-header">${card.name}</div>
+        <div class="hc-header">${esc(card.name)}</div>
         <div class="hc-type">Objective</div>
       `;
     }
@@ -590,6 +583,13 @@ export function renderHand(handCardIds, containerId, selectedCardId, extras = {}
 function esc(s) {
   return String(s ?? '').replace(/[&<>"]/g, ch =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+}
+
+// Coerces a card numeric field (n/e/s/w/cost/pendingBuff) to a safe finite number for direct
+// template interpolation, falling back to 0 for anything malformed (NaN, a string, undefined) —
+// used wherever those fields land in HTML without going through esc().
+function safeStat(v) {
+  return Number.isFinite(v) ? v : 0;
 }
 
 export function heroCardHtml(card) {

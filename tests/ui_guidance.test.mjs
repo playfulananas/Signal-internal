@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { describeAttackOutcome, renderEndTurnSummary, renderHand, summarizeTurnReadiness } from '../js/ui.js?v=2026090402';
+import { describeAttackOutcome, renderEndTurnSummary, renderHand, summarizeTurnReadiness, buildUnitCardInnerHtml } from '../js/ui.js?v=2026090402';
+import { CARD_BY_ID } from '../js/cards.js?v=2026090402';
 
 function unit(cardId = 'I1', extra = {}) {
   return {
@@ -135,6 +136,82 @@ test('hand rendering marks only cards that current Fuel cannot afford', (t) => {
   });
   assert.equal(children[0].classList.contains('cant-afford'), false);
   assert.equal(children[0].attributes['aria-disabled'], undefined);
+});
+
+// GPT review of 289b9cb, finding 4: buildUnitCardInnerHtml escaped name/class/ability but not
+// keyword labels, cost, or directional values — and renderHand (below) never called it at all,
+// keeping its own fully duplicated, unescaped inline markup despite buildUnitCardInnerHtml's own
+// doc comment already claiming it was shared. These would fail against that implementation.
+test('buildUnitCardInnerHtml escapes name/keyword/ability text against injected markup', () => {
+  const malformed = {
+    id: 'TEST-MALFORMED-1',
+    name: '<img src=x onerror=alert(1)>',
+    cls: 'Infantry',
+    cost: 2,
+    n: 3, e: 3, s: 3, w: 3,
+    keyword: ['<script>alert(2)</script>'],
+    ability: '<svg onload=alert(3)>Ability text</svg>',
+  };
+  const html = buildUnitCardInnerHtml(malformed, { tappable: true });
+  assert.ok(!html.includes('<img'), 'name must be escaped, not injected as raw markup');
+  assert.ok(!html.includes('<script>'), 'keyword label must be escaped, not injected as raw markup');
+  assert.ok(!html.includes('<svg onload'), 'ability text must be escaped, not injected as raw markup');
+  assert.ok(html.includes('&lt;img'), 'escaped name should still render as visible text');
+  assert.ok(html.includes('&lt;script&gt;'), 'escaped keyword should still render as visible text');
+});
+
+test('buildUnitCardInnerHtml validates numeric fields — malformed values fall back to 0 instead of raw interpolation', () => {
+  const malformed = {
+    id: 'TEST-MALFORMED-2',
+    name: 'Malformed Stats',
+    cls: 'Infantry',
+    cost: '<b>oops</b>',
+    n: '<script>bad</script>', e: NaN, s: undefined, w: {},
+  };
+  const html = buildUnitCardInnerHtml(malformed, { pendingBuff: '<i>x</i>' });
+  assert.ok(!html.includes('<script>'), 'malformed n must not be interpolated raw');
+  assert.ok(!html.includes('<b>oops</b>'), 'malformed cost must not be interpolated raw');
+  assert.ok(!html.includes('<i>x</i>'), 'malformed pendingBuff must not be interpolated raw');
+  assert.match(html, /hc-cost">0 ⛽/, 'every malformed numeric collapses to 0, not a coerced/injected string');
+});
+
+test('buildUnitCardInnerHtml shows a discounted cost via displayCost/discounted, distinct from the printed cost', () => {
+  const card = { id: 'TEST-DISCOUNT', name: 'Discount Test', cls: 'Tank', cost: 5, n: 1, e: 1, s: 1, w: 1 };
+  const html = buildUnitCardInnerHtml(card, { displayCost: 3, discounted: true });
+  assert.ok(html.includes('hc-cost-discounted'));
+  assert.ok(html.includes('3 ⛽'));
+  assert.ok(!html.includes('5 ⛽'));
+});
+
+test('renderHand routes unit cards through buildUnitCardInnerHtml — malformed fields render safely, not only through Craft\'s own controlled generator', (t) => {
+  CARD_BY_ID['TEST-MALFORMED-HAND'] = {
+    id: 'TEST-MALFORMED-HAND', type: 'unit', name: '<img src=x onerror=alert(1)>', cls: 'Infantry',
+    cost: 1, n: 1, e: 1, s: 1, w: 1, keyword: ['<script>bad</script>'],
+  };
+  t.after(() => { delete CARD_BY_ID['TEST-MALFORMED-HAND']; });
+
+  const children = [];
+  const container = { innerHTML: '', appendChild(child) { children.push(child); } };
+  const createElement = () => ({
+    className: '',
+    classList: { add() {}, contains: () => false },
+    dataset: {},
+    attributes: {},
+    innerHTML: '',
+    setAttribute(name, value) { this.attributes[name] = value; },
+  });
+  const previousDocument = globalThis.document;
+  globalThis.document = { getElementById: () => container, createElement };
+  t.after(() => {
+    if (previousDocument === undefined) delete globalThis.document;
+    else globalThis.document = previousDocument;
+  });
+
+  renderHand(['TEST-MALFORMED-HAND'], 'test-hand', null, { playerState: { fuel: 5, pendingDiscounts: [] } });
+
+  assert.equal(children.length, 1);
+  assert.ok(!children[0].innerHTML.includes('<img'), 'renderHand must not inject an unescaped card name');
+  assert.ok(!children[0].innerHTML.includes('<script>'), 'renderHand must not inject an unescaped keyword label');
 });
 
 test('turn readiness separates clickable attacks from automatic Direct HQ damage', () => {

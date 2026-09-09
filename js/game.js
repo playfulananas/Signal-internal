@@ -341,6 +341,23 @@ let lastObjectiveTransitionFlags = new Map(); // tileKey -> 'obj-captured'|'obj-
 let lastHeroActivationKey = null; // "role-col" of the Hero Zone that just fired this commit, or null
 let gameOver = false;
 
+// Identity-based dedup for the _eventHistory animation system (see buildLastEvent/commitState/
+// receiveRemoteState) — every event id this client has already played-or-decided-not-to-play,
+// so the same id arriving again in a later snapshot's bounded history (a direct pushStateIfOnline
+// path carrying it forward unchanged, or Firebase redelivering an already-applied write) is
+// recognized as stale rather than replayed. Bounded and FIFO-evicted like the event history
+// itself — a match realistically produces well under a hundred events, so eviction is never
+// expected to actually happen, but nothing here should grow unboundedly over a very long session.
+const consumedEventIds = new Set();
+const CONSUMED_EVENT_IDS_MAX = 500;
+function markEventConsumed(id) {
+  if (!id || consumedEventIds.has(id)) return;
+  consumedEventIds.add(id);
+  if (consumedEventIds.size > CONSUMED_EVENT_IDS_MAX) {
+    consumedEventIds.delete(consumedEventIds.values().next().value);
+  }
+}
+
 const BLOCKING_MODAL_IDS = [
   'fo-modal', 'field-reserves-modal',
   'rotate-direction-modal', 'craft-picker-modal', 'hero-deploy-modal',
@@ -479,10 +496,12 @@ function showMulligan(label, hand, onConfirm) {
   document.getElementById('mulligan-screen').style.display = 'flex';
   document.getElementById('btn-mulligan-confirm').onclick = () => {
     document.getElementById('mulligan-screen').style.display = 'none';
+    clearPinnedTip();
     onConfirm([...mulliganSelected]);
   };
   document.getElementById('btn-mulligan-keep').onclick = () => {
     document.getElementById('mulligan-screen').style.display = 'none';
+    clearPinnedTip();
     onConfirm([]);
   };
 }
@@ -1241,33 +1260,70 @@ function syncObjectivePickUiState() {
 // position with no animation at all. buildLastEvent captures exactly the same data commitState
 // already collects for its OWN local redraw into a small serializable object, stored on `state`
 // itself so it rides along on the normal Firebase push — no separate channel, no risk of it
-// arriving out of order relative to the state it describes. See receiveRemoteState for the
-// consuming side and the revision-sequential check that keeps this from replaying on echoes,
-// duplicate snapshots, or reconnects (an event only ever means "something new since my last
-// state", not "something in this snapshot's history").
-function buildLastEvent(transitionFlags, objectiveTransitionFlags, heroActivationKey, directHqDamage) {
+// arriving out of order relative to the state it describes.
+//
+// Found 2026-09-XX (GPT review of 289b9cb): a single `_lastEvent` field plus a "does the incoming
+// revision follow mine by exactly 1" check isn't enough — a direct pushStateIfOnline(state) call
+// that never went through commitState (placement's early-return branches, Cancel restoring
+// preCommandState) spreads whatever `_lastEvent` the state already had and pushes it as-is, so
+// the receiver's "exactly +1" check sees a perfectly sequential revision carrying a stale event
+// and replays it. Every event now gets a unique `id` (nextEventId) and is APPENDED to a small
+// bounded `_eventHistory` array (see commitState) instead of replacing a single field. The
+// receiver (receiveRemoteState) tracks which ids it has already consumed and only ever plays an
+// id once, however many times it happens to ride along in a snapshot — so a direct-push path that
+// carries an old id forward unchanged is harmless by construction: that id was already consumed
+// when it first arrived. This also fixes the flip side (see receiveRemoteState) — a skipped/
+// coalesced Firebase delivery that jumps more than one revision no longer loses whatever events
+// were in between, since they're still sitting in the bounded history of whatever snapshot
+// eventually does arrive, still carrying their own never-yet-consumed ids.
+//
+// Deliberately NOT cleared on the direct-push paths that don't generate a new event: doing so
+// would defeat the catch-up behavior above (nothing left to catch up on) for the sake of a
+// guarantee the id-based dedup already provides for free. See pushStateIfOnline call sites in the
+// PLACING and Cancel handlers for the audited conclusion.
+let eventIdCounter = 0;
+const EVENT_HISTORY_MAX = 8; // small bounded history, per-client consumption tracking below
+
+function nextEventId() {
+  eventIdCounter += 1;
+  return `${myRole ?? 'x'}-${Date.now()}-${eventIdCounter}`;
+}
+
+function buildLastEvent(transitionFlags, objectiveTransitionFlags, heroActivationKey, directHqDamage, popups, connectors) {
   const event = {};
   if (transitionFlags?.size) event.transitionFlags = Object.fromEntries(transitionFlags);
   if (objectiveTransitionFlags?.size) event.objectiveTransitionFlags = Object.fromEntries(objectiveTransitionFlags);
   if (heroActivationKey) event.heroActivationKey = heroActivationKey;
   if (directHqDamage && (directHqDamage.p1 > 0 || directHqDamage.p2 > 0)) event.directHqDamage = directHqDamage;
-  return Object.keys(event).length ? event : null;
+  if (popups?.length) event.popups = popups;
+  if (connectors?.length) event.connectors = connectors;
+  if (!Object.keys(event).length) return null;
+  event.id = nextEventId();
+  return event;
 }
 
 // Timer-based effects that live outside the CSS-class transitionFlags system redraw() already
 // handles (see redraw()'s own transitionFlagsForThisRender/objectiveTransitionFlagsForThisRender/
-// heroActivationKeyForThisRender consumption) — currently just Direct HQ's delayed result flash/
-// popup and its source->HQ connector line. Called once locally right after the commit that
-// produced this event, and once on the receiving client for a genuinely new (sequential) remote
-// event — same function, same 200ms beat, so the SOURCE->RESULT sequencing feels identical on
-// both sides. The connector's source keys are read back out of transitionFlags itself (every
-// 'direct-hq'-flagged unit) rather than needing their own payload field — targetPlayer is always
-// that unit's owner's opponent, since Direct HQ only ever damages the enemy HQ.
-function triggerEventEffects(event) {
+// heroActivationKeyForThisRender consumption) — Direct HQ's delayed result flash/popup and its
+// source->HQ connector line, plus (2026-09-XX) generic combat popups (destroy/suppress/Armor-
+// absorbed text) and causality connectors (Rally/Breakthrough/Last Stand source->target lines),
+// both of which used to fire as direct, local-only DOM calls right inside the attack handler and
+// so never reached the opponent. Called once locally right after the commit that produced this
+// event, and once per not-yet-consumed event on the receiving client (see receiveRemoteState) —
+// same function, same beats, so the SOURCE->RESULT sequencing feels identical on both sides.
+// `extraDelayMs` staggers a batch of several distinct events replayed at once (a skipped/
+// coalesced delivery catching up on more than one event in a single snapshot) so their timer-
+// based effects don't all land in the same instant — 0 for the normal single-event case.
+//
+// popups/connectors carry their finished display text and tile KEYS, not raw pixel coordinates
+// or unit names re-derived later — resolved to actual DOM rects at consumption time (works for
+// both clients' own layouts) and safe to play after the unit they describe has already left the
+// board, since the text was baked in back when it was still there (see the attack handler).
+function triggerEventEffects(event, extraDelayMs = 0) {
   if (!event) return;
   if (event.directHqDamage) {
-    if (event.directHqDamage.p1 > 0) setTimeout(() => flashDirectHit('p1', event.directHqDamage.p1), 200);
-    if (event.directHqDamage.p2 > 0) setTimeout(() => flashDirectHit('p2', event.directHqDamage.p2), 200);
+    if (event.directHqDamage.p1 > 0) setTimeout(() => flashDirectHit('p1', event.directHqDamage.p1), 200 + extraDelayMs);
+    if (event.directHqDamage.p2 > 0) setTimeout(() => flashDirectHit('p2', event.directHqDamage.p2), 200 + extraDelayMs);
   }
   if (event.transitionFlags && event.directHqDamage) {
     for (const [key, flag] of Object.entries(event.transitionFlags)) {
@@ -1279,12 +1335,32 @@ function triggerEventEffects(event) {
         const fromEl = document.querySelector(`.tile[data-key="${key}"] .board-card`);
         const toEl = document.getElementById(`${targetPlayer}-hq`);
         if (fromEl && toEl) drawFxConnector(fromEl, toEl);
-      }, 200);
+      }, 200 + extraDelayMs);
     }
+  }
+  if (event.popups?.length) {
+    for (const p of event.popups) {
+      setTimeout(() => {
+        const tileEl = document.querySelector(`.tile[data-key="${p.tileKey}"]`);
+        if (!tileEl) return;
+        const rect = tileEl.getBoundingClientRect();
+        showFxPopup(rect.left + rect.width / 2, rect.top, p.text);
+      }, extraDelayMs);
+    }
+  }
+  if (event.connectors?.length) {
+    setTimeout(() => {
+      for (const c of event.connectors) {
+        const sourceEl = document.querySelector(`.tile[data-key="${c.fromKey}"] .board-card`);
+        const targetEl = document.querySelector(`.tile[data-key="${c.toKey}"] .board-card`);
+        flashCausalityTarget(c.toKey);
+        if (sourceEl && targetEl) drawFxConnector(sourceEl, targetEl);
+      }
+    }, 150 + extraDelayMs);
   }
 }
 
-function commitState(newState, logLines, transitionFlags, objectiveTransitionFlags, heroActivationKey, directHqDamage) {
+function commitState(newState, logLines, transitionFlags, objectiveTransitionFlags, heroActivationKey, directHqDamage, popups, connectors) {
   if (isOnline && onlineSyncPaused) {
     setOnlineSyncStatus('Connection interrupted — actions are paused until the shared game reconnects.', 'error');
     return false;
@@ -1293,8 +1369,15 @@ function commitState(newState, logLines, transitionFlags, objectiveTransitionFla
   lastTransitionFlags = transitionFlags ?? new Map();
   lastObjectiveTransitionFlags = objectiveTransitionFlags ?? new Map();
   lastHeroActivationKey = heroActivationKey ?? null;
-  const lastEvent = buildLastEvent(transitionFlags, objectiveTransitionFlags, heroActivationKey, directHqDamage);
-  state = { ...newState, log: [...(newState.log ?? []), ...(logLines ?? [])], _lastEvent: lastEvent };
+  const lastEvent = buildLastEvent(transitionFlags, objectiveTransitionFlags, heroActivationKey, directHqDamage, popups, connectors);
+  // Append, don't replace — `newState._eventHistory` is whatever history the state being
+  // committed already carried forward (normally identical to the live `state`'s own history,
+  // since almost every commitState call builds `newState` from it). See buildLastEvent's doc
+  // comment for why this is safe even on the direct pushStateIfOnline paths that skip commitState
+  // entirely and so never append anything here at all.
+  const priorHistory = Array.isArray(newState._eventHistory) ? newState._eventHistory : [];
+  const eventHistory = lastEvent ? [...priorHistory, lastEvent].slice(-EVENT_HISTORY_MAX) : priorHistory;
+  state = { ...newState, log: [...(newState.log ?? []), ...(logLines ?? [])], _eventHistory: eventHistory };
   if (logLines?.length) appendLog(logLines);
   syncArtyTargetingUiState();
   syncObjectivePickUiState();
@@ -1382,6 +1465,16 @@ function normalizeFirebaseState(raw) {
   for (const [id, def] of Object.entries(generatedCards)) {
     ensureGeneratedCard(id, def);
   }
+  // _eventHistory (see buildLastEvent/commitState) is an array of small event objects, each of
+  // which can itself carry a popups/connectors array — every level needs the same Firebase
+  // array-to-object fixup, or a malformed (non-array) popups/connectors field would silently
+  // fail the `.length`/iteration checks in triggerEventEffects and just drop that part of the
+  // event instead of throwing.
+  const eventHistory = toArray(raw._eventHistory).filter(Boolean).map(ev => ({
+    ...ev,
+    ...(ev.popups ? { popups: toArray(ev.popups) } : {}),
+    ...(ev.connectors ? { connectors: toArray(ev.connectors) } : {}),
+  }));
   return {
     ...raw,
     generatedCards,
@@ -1389,28 +1482,33 @@ function normalizeFirebaseState(raw) {
     p1:    fixPlayer(raw.p1),
     p2:    fixPlayer(raw.p2),
     board: normalizeRemoteBoard(raw.board),
+    _eventHistory: eventHistory,
   };
 }
 
 function receiveRemoteState(remoteState, { force = false, preserveSyncStatus = false } = {}) {
   const normalized = normalizeFirebaseState(remoteState);
-  if (!shouldAcceptRemoteState(state, normalized, { force: force || onlineSyncPaused })) return;
+  // Captured BEFORE onlineSyncPaused is reset below (GPT review, finding 2) — the whole point is
+  // to know whether THIS delivery is a recovery snapshot (initial load, forced conflict adoption,
+  // or a reconnect resuming a paused session), and resetting the flag first would make that
+  // indistinguishable from a normal live delivery by the time we check it.
+  const wasSyncPaused = onlineSyncPaused;
+  const isFirstSnapshot = !state?.board; // nothing to compare against yet — see below
+  const isRecoveryDelivery = force || wasSyncPaused || isFirstSnapshot;
+  if (!shouldAcceptRemoteState(state, normalized, { force: force || wasSyncPaused })) return;
   const prevLogLen = state?.log?.length ?? 0;
   const prevInitiative = state?.initiative;
-  // This snapshot is worth animating only if it's a single genuine step forward from what we
-  // already had — exactly one committed action ahead, never a jump. That excludes: the very
-  // first snapshot this client ever sees (state?.board still null — nothing to compare against,
-  // and showing an animation for "the game as it already stood" would be replaying history, not
-  // reacting to something that just happened); a reconnect or resume that jumps several actions
-  // at once (same reasoning — those already happened while this client wasn't watching); and a
-  // duplicate delivery of a snapshot already applied (Firebase's local-cache-then-server-ack
-  // sequence can deliver the "same" write twice — the second delivery's revision no longer
-  // differs by exactly 1 from local, since the first delivery already advanced local to match).
-  // Reuses the _revision field the online-sync/conflict-recovery code already maintains — no new
-  // dedup id needed. See buildLastEvent/triggerEventEffects above for what actually gets played.
-  const isSequentialLiveUpdate = Boolean(state?.board)
-    && Number.isSafeInteger(state?._revision) && Number.isSafeInteger(normalized?._revision)
-    && normalized._revision === state._revision + 1;
+  // Which of this snapshot's bounded event history (see buildLastEvent/commitState) are actually
+  // new to this client, identified by id rather than by revision math — a revision gap no longer
+  // means "lost", since a skipped/coalesced Firebase delivery still carries every event still
+  // inside the bounded window, each still bearing its own never-yet-consumed id (GPT review,
+  // finding 2's "account for skipped/coalesced deliveries" requirement). Every id seen here gets
+  // marked consumed regardless of whether this delivery is a recovery snapshot — that's what
+  // stops a recovery snapshot's history from replaying later once real play resumes — but only
+  // played (below, after redraw) when it isn't.
+  const incomingHistory = Array.isArray(normalized._eventHistory) ? normalized._eventHistory : [];
+  const freshEvents = incomingHistory.filter(ev => ev?.id && !consumedEventIds.has(ev.id));
+  for (const ev of incomingHistory) markEventConsumed(ev.id);
   // Track tiles changed by the opponent so we can highlight them
   if (state?.board) {
     lastChangedKeys = new Set();
@@ -1422,11 +1520,26 @@ function receiveRemoteState(remoteState, { force = false, preserveSyncStatus = f
     }
   }
   state = normalized;
-  if (isSequentialLiveUpdate && normalized._lastEvent) {
-    const ev = normalized._lastEvent;
-    lastTransitionFlags = ev.transitionFlags ? new Map(Object.entries(ev.transitionFlags)) : new Map();
-    lastObjectiveTransitionFlags = ev.objectiveTransitionFlags ? new Map(Object.entries(ev.objectiveTransitionFlags)) : new Map();
-    lastHeroActivationKey = ev.heroActivationKey ?? null;
+  // Sets up redraw()'s one-shot CSS flourish classes from every fresh event about to be played
+  // (merged in order — a later event's flag for the same tile wins, distinct tiles from different
+  // events both survive) — see triggerEventEffects below for the timer-based half, called once
+  // per fresh event AFTER redraw so both halves see the exact same board redraw() just produced.
+  if (!isRecoveryDelivery && freshEvents.length) {
+    const mergedTransitionFlags = new Map();
+    const mergedObjectiveTransitionFlags = new Map();
+    let mergedHeroActivationKey = null;
+    for (const ev of freshEvents) {
+      if (ev.transitionFlags) for (const [k, v] of Object.entries(ev.transitionFlags)) mergedTransitionFlags.set(k, v);
+      if (ev.objectiveTransitionFlags) for (const [k, v] of Object.entries(ev.objectiveTransitionFlags)) mergedObjectiveTransitionFlags.set(k, v);
+      if (ev.heroActivationKey) mergedHeroActivationKey = ev.heroActivationKey; // last one wins — see triggerEventEffects doc comment
+    }
+    lastTransitionFlags = mergedTransitionFlags;
+    lastObjectiveTransitionFlags = mergedObjectiveTransitionFlags;
+    lastHeroActivationKey = mergedHeroActivationKey;
+  } else {
+    lastTransitionFlags = new Map();
+    lastObjectiveTransitionFlags = new Map();
+    lastHeroActivationKey = null;
   }
   onlineSyncPaused = false;
   if (!preserveSyncStatus) setOnlineSyncStatus();
@@ -1450,6 +1563,7 @@ function receiveRemoteState(remoteState, { force = false, preserveSyncStatus = f
     const el = document.getElementById(id);
     if (el) el.style.display = 'none';
   }
+  clearPinnedTip(); // a modal just closed out from under the player — any pin it held is stale
   uiState = 'idle';
   syncArtyTargetingUiState(); // overrides 'idle' above if this client owes an Artillery Position hit
   syncObjectivePickUiState(); // overrides 'idle' above if this client owes an Objective pick
@@ -1479,7 +1593,11 @@ function receiveRemoteState(remoteState, { force = false, preserveSyncStatus = f
     appendLog(['Connection recovered — an in-progress choice was interrupted and had to be redone.']);
   }
   redraw();
-  if (isSequentialLiveUpdate) triggerEventEffects(normalized._lastEvent);
+  // Never re-executes any gameplay effect to get here — freshEvents is purely display data that
+  // already rode along inside `normalized` itself (see buildLastEvent). One call per fresh event,
+  // each staggered further than the last, so a delivery that's catching up on more than one
+  // distinct event still shows them as distinguishable beats instead of one overlapping blur.
+  if (!isRecoveryDelivery) freshEvents.forEach((ev, i) => triggerEventEffects(ev, i * 260));
   checkWin();
   // The opponent's End Turn handler can't prompt us, so an inbound state that hands us the
   // turn is where this client runs its own Hero Phase. runHeroPhase re-checks lastObjLevel,
@@ -1789,7 +1907,12 @@ function tryActivateHero(role, col) {
           heroesActivatedThisTurn: activatedBefore.includes(hero.id) ? activatedBefore : [...activatedBefore, hero.id],
         },
       };
-      commitState(paid, costModLog);
+      // heroActivationKey fires here, at the pay/lock commit — this is already the moment
+      // heroesActivatedThisTurn records the activation (above), and confirmCraftPick's later
+      // commit only adds the crafted card to hand, so tying the glow to this commit instead
+      // plays it exactly once (Found 2026-09-XX, GPT review: this commit previously omitted it
+      // entirely, so Craft activation never glowed on either client).
+      commitState(paid, costModLog, undefined, undefined, `${role}-${col}`);
       showCraftPickerModal(role);
       return true;
     }
@@ -1834,11 +1957,14 @@ function resolveHeroTargeting(clickedKey) {
   preCommandState = null;
   if (hero.id === 'H11') { // Field Coordinator — rotate, direction chosen via modal
     uiState = 'idle';
-    showRotateDirectionModal({ kind: 'hero', targetKey: clickedKey, cardName: hero.name, s: state, log: [], role, heroId: hero.id });
+    // col threaded through so confirmRotateDirection's final commit can pass heroActivationKey —
+    // pendingHeroColumn was already cleared above, so `col` (captured before that) is the only
+    // copy of it left by the time the modal resolves.
+    showRotateDirectionModal({ kind: 'hero', targetKey: clickedKey, cardName: hero.name, s: state, log: [], role, heroId: hero.id, col });
     return;
   }
   if (hero.id === 'H16') { // Maneuver Commander — this click picked the source unit; now pick a destination
-    pendingHeroManeuverSource = { key: clickedKey, role, hero };
+    pendingHeroManeuverSource = { key: clickedKey, role, hero, col };
     uiState = 'hero-maneuver-destination';
     appendLog([`${hero.name}: choose a destination tile for ${CARD_BY_ID[state.board[clickedKey]?.cardId]?.name ?? 'the unit'}`]);
     redraw();
@@ -1855,7 +1981,7 @@ function resolveHeroTargeting(clickedKey) {
 // Maneuver itself — see resetPersistentAttacks in state.js).
 function resolveHeroManeuverDestination(destKey) {
   if (!pendingHeroManeuverSource) return;
-  const { key: sourceKey, role, hero } = pendingHeroManeuverSource;
+  const { key: sourceKey, role, hero, col } = pendingHeroManeuverSource;
   const legalTargets = getManeuverTargets(state, sourceKey);
   if (!legalTargets.includes(destKey)) return;
   pendingHeroManeuverSource = null;
@@ -1868,7 +1994,9 @@ function resolveHeroManeuverDestination(destKey) {
     ...reset,
     [role]: { ...reset[role], heroesActivatedThisTurn: activatedBefore.includes(hero.id) ? activatedBefore : [...activatedBefore, hero.id] },
   };
-  commitState(next, [...log, `${hero.name}: attacks reset`]);
+  // Found 2026-09-XX (GPT review): this was the only resolution point for H16's activation and
+  // previously never passed heroActivationKey at all, so the glow never fired on either client.
+  commitState(next, [...log, `${hero.name}: attacks reset`], undefined, undefined, `${role}-${col}`);
   checkWin();
 }
 
@@ -2307,6 +2435,12 @@ document.getElementById('board').addEventListener('click', e => {
         selectedHandCardId = null;
         appendLog([`${card.name}: choose a friendly Unit to Maneuver`]);
         redraw();
+        // Direct push, bypassing commitState — audited (GPT review, finding 1): `state` here is
+        // built by spreading the state this handler started with, so its `_eventHistory` is
+        // whatever it already was; this branch never calls buildLastEvent, so nothing new is
+        // appended. Safe by construction under the id-based dedup in receiveRemoteState — any
+        // event riding along was already consumed when it first arrived. See buildLastEvent's
+        // doc comment for the full reasoning.
         pushStateIfOnline(state);
         return;
       }
@@ -2341,6 +2475,9 @@ document.getElementById('board').addEventListener('click', e => {
     }
     redraw();
     checkWin();
+    // Direct push — same audited conclusion as the early-return branch above: no new event is
+    // generated on this path, so whatever `_eventHistory` `state` already carries rides along
+    // unchanged and safely (id-based dedup on the receiving end).
     pushStateIfOnline(state);
     return;
   }
@@ -2469,54 +2606,49 @@ document.getElementById('board').addEventListener('click', e => {
       pendingAttackerKey = null;
     }
 
-    // result.boardMutations always targets clickedKey — newUnit===null means destroyed,
-    // newUnit.state==='suppressed' means this hit just suppressed it, and newUnit.state
-    // still 'normal' (only possible on a hit that actually landed) means Armor/Heavy Armor
-    // absorbed it — applyHit (state.js) always either absorbs or transitions state, no third
-    // outcome, so 'normal' here is unambiguous.
+    // result.boardMutations covers the primary target (always clickedKey, first in the array)
+    // AND every Blast/Barrage secondary victim (any further entries, at their own keys) —
+    // newUnit===null means destroyed, newUnit.state==='suppressed' means this hit just
+    // suppressed it, and newUnit.state still 'normal' (only possible on a hit that actually
+    // landed) means Armor/Heavy Armor absorbed it — applyHit (state.js) always either absorbs or
+    // transitions state, no third outcome, so 'normal' here is unambiguous. Found 2026-09-XX (GPT
+    // review of 289b9cb): this used to read boardMutations[0] only, so secondary victims never
+    // got any suppression/destruction/Armor feedback — every mutation gets its own transition
+    // flag and popup now, primary and secondary alike, on both clients (popups is an
+    // event field, resolved on each client at consumption time — see triggerEventEffects).
     const transitionFlags = new Map();
-    if (result.boardMutations.length > 0) {
-      const { newUnit } = result.boardMutations[0];
+    const popups = [];
+    for (const { key, newUnit } of result.boardMutations) {
       if (newUnit === null) {
-        transitionFlags.set(clickedKey, 'destroyed');
-        // Name popup on the now-empty tile — the destroyed unit's own card, read from
-        // pre-mutation state (still the module-level `state`, not yet reassigned) since
-        // it's already gone from result.boardMutations by this point.
-        const destroyedName = CARD_BY_ID[state.board[clickedKey]?.cardId]?.name;
-        if (destroyedName) {
-          const rect = tile.getBoundingClientRect();
-          showFxPopup(rect.left + rect.width / 2, rect.top, `${destroyedName} destroyed`);
-        }
-      }
-      else if (newUnit.state === 'suppressed') transitionFlags.set(clickedKey, 'suppressed');
-      else if (newUnit.state === 'normal') {
-        transitionFlags.set(clickedKey, 'armor-absorbed');
-        const rect = tile.getBoundingClientRect();
-        showFxPopup(rect.left + rect.width / 2, rect.top, 'ARMOR ABSORBED');
+        transitionFlags.set(key, 'destroyed');
+        // Precomputed now, while `state` (pre-mutation, module-level) still has this unit — the
+        // popup carries the finished text rather than a key to re-derive later, since by the
+        // time this plays (immediately here, or after a redraw on the remote client) board[key]
+        // is already empty.
+        const destroyedName = CARD_BY_ID[state.board[key]?.cardId]?.name;
+        if (destroyedName) popups.push({ tileKey: key, text: `${destroyedName} destroyed` });
+      } else if (newUnit.state === 'suppressed') {
+        transitionFlags.set(key, 'suppressed');
+      } else if (newUnit.state === 'normal') {
+        transitionFlags.set(key, 'armor-absorbed');
+        popups.push({ tileKey: key, text: 'ARMOR ABSORBED' });
       }
     }
 
     // Causality pulse (Rally/Breakthrough): attacker glows now via transitionFlags (same
-    // render pass as everything else above); the affected target(s) flash ~150ms later via a
-    // direct DOM toggle, once the board has actually repainted with their new stats. Skip the
-    // attacker's own tile from the delayed list — Breakthrough's current effects all self-buff,
-    // so source and target are the same tile and a second flash on it would just be redundant.
+    // render pass as everything else above); the affected target(s) flash ~150ms later via
+    // triggerEventEffects, once the board has actually repainted with their new stats, on BOTH
+    // clients (connectors is an event field — this used to be a direct, local-only setTimeout
+    // here, so the opponent never saw the causality line at all). Skip the attacker's own tile
+    // from the delayed list — Breakthrough's current effects all self-buff, so source and target
+    // are the same tile and a second flash on it would just be redundant.
     if (causalityTargets.length > 0 && newState.board[attackerKey]?.state !== 'destroyed') {
       transitionFlags.set(attackerKey, 'causality-source');
     }
     const delayedCausalityTargets = causalityTargets.filter(k => k !== attackerKey);
-    if (delayedCausalityTargets.length > 0) {
-      setTimeout(() => {
-        const sourceEl = document.querySelector(`.tile[data-key="${attackerKey}"] .board-card`);
-        delayedCausalityTargets.forEach(k => {
-          flashCausalityTarget(k);
-          const targetEl = document.querySelector(`.tile[data-key="${k}"] .board-card`);
-          if (sourceEl) drawFxConnector(sourceEl, targetEl);
-        });
-      }, 150);
-    }
+    const connectors = delayedCausalityTargets.map(k => ({ fromKey: attackerKey, toKey: k }));
 
-    commitState(newState, [...rallyLog, ...result.logEntries, ...overrunLog, ...postDestroyLog, ...eventLog], transitionFlags);
+    commitState(newState, [...rallyLog, ...result.logEntries, ...overrunLog, ...postDestroyLog, ...eventLog], transitionFlags, undefined, undefined, undefined, popups, connectors);
     checkWin();
     return;
   }
@@ -3823,6 +3955,12 @@ document.getElementById('btn-cancel').addEventListener('click', () => {
     const currentRevision = state?._revision;
     state = Number.isSafeInteger(currentRevision) ? { ...preCommandState, _revision: currentRevision } : preCommandState;
     preCommandState = null;
+    // Audited (GPT review, finding 1): preCommandState is always a prior snapshot of this same
+    // client's own `state`, captured before the interaction being cancelled began — its
+    // `_eventHistory` is therefore always a prefix of (or identical to) what's already been
+    // pushed and consumed, never something new. Restoring it can only repeat already-consumed
+    // ids, which the receiver's id-based dedup already treats as a no-op. See buildLastEvent's
+    // doc comment.
     pushStateIfOnline(state);
   }
   pendingCommandManeuverSource = null;
@@ -4070,67 +4208,123 @@ for (const role of ['p1', 'p2']) {
 // fitBoardArea's transform: scale()) clipping or shrinking it (see .floating-tip comment
 // in game.css). data-tip is plain text; data-tip-html allows richer markup (Objective
 // tiles' name/controller/level breakdown).
-{
-  const tip = document.getElementById('floating-tip');
-  let pinnedPip = null; // set while a [data-tip-tap] toggle (not hover) is holding the tip open
+//
+// Found 2026-09-XX (GPT review of 289b9cb): pinnedPip only ever cleared when the SAME pip was
+// clicked again — but selecting a card, confirming/cancelling a modal, or a Mulligan/Craft
+// re-render (renderMulliganCards rebuilds `#mulligan-hand` on every selection toggle, the Craft
+// picker rebuilds `#craft-picker-cards` on every open) can all remove the pinned pip's DOM node
+// or hide its modal while the pin variable itself stays set. Once that happens, mouseout's
+// `if (pinnedPip) return` guard permanently blocks hover-driven dismissal for every OTHER tip
+// too, since it never checks whether the pin it's respecting still points at anything real.
+// clearPinnedTip is now called from every place a pin could go stale: outside clicks, Escape,
+// every card-choice modal's confirm/cancel path, and a MutationObserver as a generic backstop
+// for any DOM-rebuild case not covered by an explicit call (belt-and-suspenders — the explicit
+// calls are what make "clear on modal close" true even when the modal only hides itself without
+// touching the pip's DOM node at all).
+const tip = document.getElementById('floating-tip');
+let pinnedPip = null; // set while a [data-tip-tap] toggle (not hover) is holding the tip open
 
-  function positionTip(pip) {
-    if (pip.dataset.tipHtml) tip.innerHTML = pip.dataset.tipHtml;
-    else tip.textContent = pip.dataset.tip;
-    tip.style.display = 'block';
-    const r = pip.getBoundingClientRect();
-    const tipRect = tip.getBoundingClientRect();
-    // Prefer opening above the pip; flip below if that would go off the top of the screen.
-    let top = r.top - tipRect.height - 6;
-    if (top < 4) top = r.bottom + 6;
-    // Anchor right-aligned to the pip, clamped so it never runs off either screen edge.
-    let left = r.right - tipRect.width;
-    left = Math.max(4, Math.min(left, window.innerWidth - tipRect.width - 4));
-    tip.style.top = `${top}px`;
-    tip.style.left = `${left}px`;
-  }
-
-  document.addEventListener('mouseover', e => {
-    const pip = e.target.closest('[data-tip], [data-tip-html]');
-    if (pip) positionTip(pip);
-  });
-  document.addEventListener('mouseout', e => {
-    if (pinnedPip) return; // a tap/focus toggle is holding it open — hover leaving elsewhere shouldn't close it
-    if (e.target.closest('[data-tip], [data-tip-html]')) tip.style.display = 'none';
-  });
-
-  // Keyboard accessibility: Tab-focusing a [data-tip-tap] pip (see buildUnitCardInnerHtml,
-  // ui.js) shows the same tip a hover would, so a keyboard-only player can inspect a card-choice
-  // screen's full rules text too. focusin/focusout are the bubbling equivalents of focus/blur,
-  // needed since this listener is delegated at the document level like the others here.
-  document.addEventListener('focusin', e => {
-    const pip = e.target.closest('[data-tip-tap]');
-    if (pip) positionTip(pip);
-  });
-  document.addEventListener('focusout', e => {
-    if (e.target.closest('[data-tip-tap]') && pinnedPip !== e.target) tip.style.display = 'none';
-  });
-
-  // Tap/click accessibility for card-choice screens (Mulligan/Forward Observer/Field
-  // Reserves/Craft): [data-tip-tap] is opt-in (see buildUnitCardInnerHtml) — only the info
-  // pips on those screens carry it, never the normal hand or board cards, so this never
-  // changes existing placement/attack/select click behavior anywhere else. stopPropagation
-  // keeps the tap from also bubbling into the card's own select/confirm handler underneath it —
-  // a touch user can inspect a candidate without that same tap committing to it.
-  document.addEventListener('click', e => {
-    const pip = e.target.closest('[data-tip-tap]');
-    if (!pip) return;
-    e.stopPropagation();
-    e.preventDefault();
-    if (pinnedPip === pip) {
-      pinnedPip = null;
-      tip.style.display = 'none';
-    } else {
-      pinnedPip = pip;
-      positionTip(pip);
-    }
-  }, true); // capture phase — must run before the card's own click handler in normal bubbling
+function positionTip(pip) {
+  if (pip.dataset.tipHtml) tip.innerHTML = pip.dataset.tipHtml;
+  else tip.textContent = pip.dataset.tip;
+  tip.style.display = 'block';
+  const r = pip.getBoundingClientRect();
+  const tipRect = tip.getBoundingClientRect();
+  // Prefer opening above the pip; flip below if that would go off the top of the screen.
+  let top = r.top - tipRect.height - 6;
+  if (top < 4) top = r.bottom + 6;
+  // Anchor right-aligned to the pip, clamped so it never runs off either screen edge.
+  let left = r.right - tipRect.width;
+  left = Math.max(4, Math.min(left, window.innerWidth - tipRect.width - 4));
+  tip.style.top = `${top}px`;
+  tip.style.left = `${left}px`;
 }
+
+function clearPinnedTip() {
+  if (!pinnedPip) return;
+  pinnedPip = null;
+  tip.style.display = 'none';
+}
+
+// Generic backstop: whenever the DOM changes anywhere under body (a card re-render, a modal's
+// contents being rebuilt), check whether the currently-pinned pip is still attached. Catches
+// every rebuild case without needing an explicit clearPinnedTip() call at each one — the
+// explicit calls below (confirm/cancel handlers) still exist for the equally-real case of a
+// modal that merely hides itself (style.display = 'none') without removing the pip node at all.
+new MutationObserver(() => {
+  if (pinnedPip && !document.body.contains(pinnedPip)) clearPinnedTip();
+}).observe(document.body, { childList: true, subtree: true });
+
+document.addEventListener('mouseover', e => {
+  const pip = e.target.closest('[data-tip], [data-tip-html]');
+  if (pip) positionTip(pip);
+});
+document.addEventListener('mouseout', e => {
+  if (pinnedPip) return; // a tap/focus toggle is holding it open — hover leaving elsewhere shouldn't close it
+  if (e.target.closest('[data-tip], [data-tip-html]')) tip.style.display = 'none';
+});
+
+// Keyboard accessibility: Tab-focusing a [data-tip-tap] pip (see buildUnitCardInnerHtml,
+// ui.js) shows the same tip a hover would, so a keyboard-only player can inspect a card-choice
+// screen's full rules text too. focusin/focusout are the bubbling equivalents of focus/blur,
+// needed since this listener is delegated at the document level like the others here.
+document.addEventListener('focusin', e => {
+  const pip = e.target.closest('[data-tip-tap]');
+  if (pip) positionTip(pip);
+});
+document.addEventListener('focusout', e => {
+  if (e.target.closest('[data-tip-tap]') && pinnedPip !== e.target) tip.style.display = 'none';
+});
+
+// Enter/Space activation for [data-tip-tap] pips presented as buttons (role="button"
+// tabindex="0" — see buildUnitCardInnerHtml) — a <span> doesn't get native Enter/Space
+// activation the way a real <button> does, so a keyboard-only player tabbing to one otherwise
+// has no way to pin it open. Same toggle logic as the click handler below, and same
+// preventDefault reasoning (Space's default is to scroll the page).
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  const pip = document.activeElement?.closest?.('[data-tip-tap]');
+  if (!pip) return;
+  e.preventDefault();
+  if (pinnedPip === pip) clearPinnedTip();
+  else { pinnedPip = pip; positionTip(pip); }
+});
+
+// Escape dismisses a pinned tip first, and only that — stopImmediatePropagation keeps this from
+// also falling through to the global Escape-to-Cancel handler (Keyboard shortcuts, below), which
+// would otherwise cancel a real in-progress interaction (e.g. a targeted attack) as a side effect
+// of a player just trying to close a tooltip. No effect when nothing is pinned.
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape' || !pinnedPip) return;
+  clearPinnedTip();
+  e.stopImmediatePropagation();
+});
+
+// Tap/click accessibility for card-choice screens (Mulligan/Forward Observer/Field
+// Reserves/Craft): [data-tip-tap] is opt-in (see buildUnitCardInnerHtml) — only the info
+// pips on those screens carry it, never the normal hand or board cards, so this never
+// changes existing placement/attack/select click behavior anywhere else. stopPropagation
+// keeps the tap from also bubbling into the card's own select/confirm handler underneath it —
+// a touch user can inspect a candidate without that same tap committing to it.
+document.addEventListener('click', e => {
+  const pip = e.target.closest('[data-tip-tap]');
+  if (!pip) {
+    // Outside click (anywhere that isn't a tip-tap pip itself, including the tip's own text)
+    // dismisses a pinned tip but otherwise falls through untouched — ordinary hand/board clicks
+    // (selecting a card, placing a unit) behave exactly as before, just with a stale pin no
+    // longer suppressing the NEXT hover's dismissal (see mouseout above).
+    if (!e.target.closest('#floating-tip')) clearPinnedTip();
+    return;
+  }
+  e.stopPropagation();
+  e.preventDefault();
+  if (pinnedPip === pip) {
+    clearPinnedTip();
+  } else {
+    pinnedPip = pip;
+    positionTip(pip);
+  }
+}, true); // capture phase — must run before the card's own click handler in normal bubbling
 
 // ── Keyboard shortcuts ────────────────────────────────────────────────────────
 
@@ -4312,6 +4506,7 @@ function confirmFO() {
   // so the player can retry the same Confirm once reconnected.
   if (!commitState(rs.state, [...log, ...rs.log])) return;
   document.getElementById('fo-modal').style.display = 'none';
+  clearPinnedTip();
   checkWin();
   foCards = [];
   foAssignments = {};
@@ -4355,6 +4550,7 @@ function confirmFieldReserves(takenId) {
   // actually lands, so a sync pause doesn't silently lose the pick.
   if (!commitState(s, [msg])) return;
   document.getElementById('field-reserves-modal').style.display = 'none';
+  clearPinnedTip();
   fieldReservesCards = [];
   fieldReservesPlayer = null;
   // Same fix as confirmFO: redraw again now the modal is actually closed — commitState's own
@@ -4415,6 +4611,7 @@ function confirmCraftPick(chosenId) {
   // until the write actually lands, so a sync pause doesn't silently lose the crafted card.
   if (!commitState(s, log)) return;
   document.getElementById('craft-picker-modal').style.display = 'none';
+  clearPinnedTip();
   craftPickerRole = null;
   // Same fix as confirmFO/confirmFieldReserves: redraw again now the modal is actually closed —
   // commitState's own redraw() ran while it was still open and under-reported turn-readiness.
@@ -4435,7 +4632,7 @@ function showRotateDirectionModal(ctx) {
 
 function confirmRotateDirection(direction) { // direction: 1 = clockwise, -1 = counter-clockwise
   if (!pendingRotation) return;
-  const { kind, targetKey, cardName, s, log, role, heroId, objectiveKey } = pendingRotation;
+  const { kind, targetKey, cardName, s, log, role, heroId, objectiveKey, col } = pendingRotation;
 
   const unit = s.board[targetKey];
   const newRotation = (((unit.rotation || 0) + direction * 90) % 360 + 360) % 360;
@@ -4481,7 +4678,11 @@ function confirmRotateDirection(direction) { // direction: 1 = clockwise, -1 = c
   // that point (see the C16 case in playInstantCommand) — so unlike those three, there's no
   // Cancel-refund fallback left if this commit silently no-ops; leaving the modal open is the
   // only way back for the player once reconnected.
-  if (!commitState(next, finalLog)) return;
+  // heroActivationKey only for kind === 'hero' (H11) — a plain Command/Objective rotate never
+  // activated a Hero, so it must never glow a Hero Zone (Found 2026-09-XX, GPT review: H11's
+  // rotate previously never passed heroActivationKey at all, at its only commit point).
+  const heroActivationKey = kind === 'hero' ? `${role}-${col}` : undefined;
+  if (!commitState(next, finalLog, undefined, undefined, heroActivationKey)) return;
   document.getElementById('rotate-direction-modal').style.display = 'none';
   pendingRotation = null;
   checkWin();
