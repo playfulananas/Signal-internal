@@ -9,6 +9,86 @@ Newest first.
 
 ---
 
+## 2026-09-10 — Corrected 4 findings from a third review of the gameplay-corrections branch
+
+A third, independent review of `fix/signal-gameplay-corrections` (commit `9404302`, itself the
+result of a second review's corrections) found 4 remaining issues in the event-identity/animation
+system and the tooltip pin lifecycle, plus one about the prior round's own test script's rigor.
+All 4 confirmed real and fixed; the test-rigor finding addressed by rewriting the affected script.
+
+- **Local events never marked consumed (finding 1)**: `commitState` played its own newly-built
+  event locally (`triggerEventEffects`) but never added its id to `consumedEventIds` — only
+  `receiveRemoteState` did that, on the RECEIVING side. Confirmed repro: P1 activates a Hero
+  (glow plays locally), P1's own Firebase echo is correctly ignored (self-push guard), but the
+  next delivery that happens to still carry that event id forward (an opponent update built from
+  a state that already includes it) arrives at P1 looking exactly like a fresh, unseen event —
+  P1 replays its own glow. Fixed by calling `markEventConsumed(lastEvent.id)` right where
+  `commitState` plays the event, immediately after `triggerEventEffects`. Deliberately doesn't
+  touch the opponent's own independent right to play the same id once — `consumedEventIds` is a
+  per-client Set, marking it locally has no effect on what the other client's own instance does
+  with the same id when it first arrives there.
+- **Batched multi-event playback lost distinct effects (finding 2)**: `receiveRemoteState` merged
+  every fresh event's `transitionFlags`/`heroActivationKey` into one combined render — two
+  different Hero activations in the same coalesced delivery only ever showed the LAST one's glow
+  (the other silently dropped, no fallback), and two conflicting flags on the same tile just
+  overwrote each other the same way. Replaced the merge with one full redraw + `triggerEventEffects`
+  pass PER fresh event, 600ms apart (safely above every flourish animation's actual duration —
+  game.css's fx-flash-glow/fx-flash-inset/fx-destroy-shake all finish within 300-500ms) — so a
+  coalesced delivery now shows each distinct event as its own visible beat. Also fixed the
+  "old unit's animation painted onto a different unit that's since occupied the same tile" gap
+  the prior round's `tileUnitSnapshot` stale-guard didn't fully close: comparing every event
+  against the single FINAL board (the only one a coalesced delivery has) meant an EARLIER event
+  in a legitimate same-tile, same-unit sequence (e.g. suppressed, then later something else) could
+  wrongly fail its own snapshot check, since by then the final board already reflected the LAST
+  event's outcome. `computeDisplayFlags` now threads a per-delivery `simulatedBoard` — seeded
+  from the real board as it stood right before the delivery, advanced by each event's own
+  `tileUnitSnapshot` as it's displayed — so same-tile sequences from the SAME delivery compare
+  correctly step-by-step, while a genuinely different, later-arrived unit is still caught.
+- **Pinned tooltip lost its own content on hover-elsewhere (finding 4)**: hovering a different
+  `[data-tip]`/`[data-tip-html]` pip while one was pinned correctly left the OTHER pip's tooltip
+  visible (by design — briefly inspecting something else without losing the pin), but mousing
+  back out of that other pip did nothing, since the mouseout guard only checked "is anything
+  pinned" and returned — leaving the tip stuck showing the hovered pip's now-stale text instead
+  of the actual pin's. Fixed: on mouseout while pinned, if the element being left isn't the
+  pinned pip itself, restore the pinned pip's own content (`positionTip(pinnedPip)`) rather than
+  leaving whatever was last hovered on screen.
+- **Multiplayer animation test's soft assertions (finding 3, re: `multiplayer_review2_animation_
+  test.mjs` from the prior round)**: every animation check logged a `NOTE` and fell through to a
+  pass when the expected class/popup wasn't caught in time, rather than failing — the script
+  could report PASS without ever actually having observed what it claimed to verify. Rewrote
+  around `armObserver`/`readObserver`, a small MutationObserver-based recorder armed on the page
+  BEFORE the triggering action and read back after — records every sighting (tile key, hero
+  zone, text) even if a later redraw removes the class again, so nothing can be missed by bad
+  timing. Every animation check is now a hard `fail()` if never observed. Added a `setupFail()`
+  vs `fail()` split so a broken selector or a sync timeout reports as a setup problem, not a
+  false pass or a false assertion failure. Also added: the Direct HQ connector line (previously
+  only the popup was checked), and an explicit "observed exactly once across the whole sequence"
+  check for the acting client's own event (the literal finding-1 repro, from the actor's side —
+  the prior version only checked the opponent-observing side).
+- **New regression coverage**: added `window.__SIGNAL_TEST_HOOKS__` (debug-only, same
+  no-gameplay-effect contract as `window.__SIGNAL_DEBUG__` — exposes `receiveRemoteState`,
+  `getState`, `getConsumedEventIds`) so the scenarios GPT asked for that need precise control
+  over synthetic snapshots (duplicate delivery, an event-free placement/Cancel-style delivery, a
+  forced-recovery delivery followed by a genuine new one, a single coalesced delivery containing
+  two distinct Hero activations plus a same-tile sequence) could be tested deterministically in
+  `event_consumption_regression_test.mjs` (solo browser, no live-network timing to fight) instead
+  of choreographing exact real-network races across two clients for every one of them. Also
+  covers finding 4's pin-A/hover-B/leave-B scenario, on the Mulligan screen (the only place
+  `[data-tip-tap]` pips exist). All pass, run twice for stability. `multiplayer_review2_
+  animation_test.mjs` still separately covers the same core scenarios live, two real clients.
+
+**Live-verified** (2-client match, `multiplayer_review2_animation_test.mjs`, hardened per finding
+3 above, 2 full clean passes): Blast secondary-victim feedback, Direct HQ damage/popup/connector,
+and Hero-activation glow all OBSERVED (not just inferred) reaching the opponent's client; the
+acting client's own event observed exactly once across the whole sequence, both for a normal
+attack (host as actor) and for a Hero activation followed by an unrelated placement (P2 as
+actor) — covering both roles.
+
+`npm test`: 248/248 (unchanged from the prior round — these fixes are in game.js's DOM-coupled
+paths, not the pure-function suite).
+
+---
+
 ## 2026-09-09 — Corrected 7 findings from a second review of the gameplay-corrections branch
 
 A second, independent review of `fix/signal-gameplay-corrections` (commit `289b9cb`, itself

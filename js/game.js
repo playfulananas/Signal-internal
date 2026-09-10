@@ -1289,7 +1289,14 @@ function nextEventId() {
   return `${myRole ?? 'x'}-${Date.now()}-${eventIdCounter}`;
 }
 
-function buildLastEvent(transitionFlags, objectiveTransitionFlags, heroActivationKey, directHqDamage, popups, connectors) {
+// tileUnitSnapshot: {tileKey: instanceId|null} — which PHYSICAL unit (state.js's stable
+// instanceId, follows a Unit across Maneuver) occupied each flagged tile at the moment this
+// event was created, or null if the flag means the tile should be empty (a 'destroyed' flag).
+// Consulted only at PLAYBACK time (see receiveRemoteState) to skip showing a flourish/popup for
+// a tile whose occupant has since changed — found 2026-09-10 (GPT review): without this, a
+// delayed/queued replay of an old event could paint "just destroyed" or "just suppressed" over
+// a completely different Unit that has since moved onto the same tile.
+function buildLastEvent(transitionFlags, objectiveTransitionFlags, heroActivationKey, directHqDamage, popups, connectors, tileUnitSnapshot) {
   const event = {};
   if (transitionFlags?.size) event.transitionFlags = Object.fromEntries(transitionFlags);
   if (objectiveTransitionFlags?.size) event.objectiveTransitionFlags = Object.fromEntries(objectiveTransitionFlags);
@@ -1299,6 +1306,7 @@ function buildLastEvent(transitionFlags, objectiveTransitionFlags, heroActivatio
   if (connectors?.length) event.connectors = connectors;
   if (!Object.keys(event).length) return null;
   event.id = nextEventId();
+  if (tileUnitSnapshot && Object.keys(tileUnitSnapshot).length) event.tileUnitSnapshot = tileUnitSnapshot;
   return event;
 }
 
@@ -1360,6 +1368,42 @@ function triggerEventEffects(event, extraDelayMs = 0) {
   }
 }
 
+// Builds redraw()'s one-shot CSS flourish inputs for a single event, filtered via
+// tileUnitSnapshot against `simulatedBoard` — a {tileKey: instanceId|null} view of "what each
+// tile looks like as of right before this specific event," NOT the single final authoritative
+// board every event in a coalesced batch shares. GPT review, finding 2 (2026-09-10): the two are
+// only the same for a tile's LAST event in a batch. A tile hit by two of this batch's OWN events
+// in sequence (suppressed, then destroyed) needs the FIRST one checked against the board as it
+// stood before either applied — checking straight against the final (post-destroy) board would
+// wrongly treat the suppress step itself as stale, since the tile is already empty by the time
+// the whole delivery has landed. The caller (receiveRemoteState) seeds `simulatedBoard` from the
+// real board as it stood before this delivery, then advances it by one event's tileUnitSnapshot
+// at a time as each is displayed — so a LATER, truly unrelated occupant (a different physical
+// unit that has since moved onto the same tile, whether from a later event in this same batch or
+// from a live receiveRemoteState assignment that already happened) is still correctly caught. No
+// snapshot recorded for a tile (older/defensive case) shows it unfiltered, same as before.
+function computeDisplayFlags(ev, simulatedBoard) {
+  const transitionFlags = new Map();
+  if (ev.transitionFlags) {
+    for (const [key, flag] of Object.entries(ev.transitionFlags)) {
+      const expected = ev.tileUnitSnapshot?.[key];
+      if (expected === undefined) { transitionFlags.set(key, flag); continue; }
+      const current = simulatedBoard?.[key]?.instanceId ?? null;
+      if (expected === current) transitionFlags.set(key, flag);
+    }
+  }
+  // Advance the simulated timeline to reflect this event's own claim, regardless of whether it
+  // passed the check above — a filtered-out (stale) event shouldn't leave later comparisons
+  // pinned to an even-older, already-wrong baseline.
+  if (ev.tileUnitSnapshot && simulatedBoard) {
+    for (const [key, instanceId] of Object.entries(ev.tileUnitSnapshot)) {
+      simulatedBoard[key] = instanceId ? { instanceId } : null;
+    }
+  }
+  const objectiveTransitionFlags = ev.objectiveTransitionFlags ? new Map(Object.entries(ev.objectiveTransitionFlags)) : new Map();
+  return { transitionFlags, objectiveTransitionFlags, heroActivationKey: ev.heroActivationKey ?? null };
+}
+
 function commitState(newState, logLines, transitionFlags, objectiveTransitionFlags, heroActivationKey, directHqDamage, popups, connectors) {
   if (isOnline && onlineSyncPaused) {
     setOnlineSyncStatus('Connection interrupted — actions are paused until the shared game reconnects.', 'error');
@@ -1369,7 +1413,14 @@ function commitState(newState, logLines, transitionFlags, objectiveTransitionFla
   lastTransitionFlags = transitionFlags ?? new Map();
   lastObjectiveTransitionFlags = objectiveTransitionFlags ?? new Map();
   lastHeroActivationKey = heroActivationKey ?? null;
-  const lastEvent = buildLastEvent(transitionFlags, objectiveTransitionFlags, heroActivationKey, directHqDamage, popups, connectors);
+  // Snapshot which physical unit (instanceId) sits on each flagged tile AFTER this mutation —
+  // null means the flag expects the tile to be empty ('destroyed'). See buildLastEvent's doc
+  // comment for why this rides along on the event itself.
+  const tileUnitSnapshot = {};
+  if (transitionFlags?.size) {
+    for (const key of transitionFlags.keys()) tileUnitSnapshot[key] = newState.board?.[key]?.instanceId ?? null;
+  }
+  const lastEvent = buildLastEvent(transitionFlags, objectiveTransitionFlags, heroActivationKey, directHqDamage, popups, connectors, tileUnitSnapshot);
   // Append, don't replace — `newState._eventHistory` is whatever history the state being
   // committed already carried forward (normally identical to the live `state`'s own history,
   // since almost every commitState call builds `newState` from it). See buildLastEvent's doc
@@ -1383,6 +1434,14 @@ function commitState(newState, logLines, transitionFlags, objectiveTransitionFla
   syncObjectivePickUiState();
   redraw();
   triggerEventEffects(lastEvent);
+  // GPT review, finding 1 (2026-09-10): this client just played its own event locally, but
+  // nothing previously marked its id consumed — only receiveRemoteState did that. A later
+  // delivery (the opponent's own next action, built from a state that already carries this id
+  // forward) would see this client's own past event as "unseen" and replay it right back at it.
+  // Marking it here, right where it's actually played, closes that without touching the
+  // opponent's own independent right to play the SAME id once on THEIR client (their own
+  // consumedEventIds set is separate — this only affects this client's).
+  if (lastEvent) markEventConsumed(lastEvent.id);
   pushStateIfOnline(state);
   return true;
 }
@@ -1519,23 +1578,26 @@ function receiveRemoteState(remoteState, { force = false, preserveSyncStatus = f
       }
     }
   }
+  // Seeded from the real board as it stood right before this delivery — the starting point for
+  // computeDisplayFlags' progressive per-event simulation (see its own doc comment). Captured
+  // before `state = normalized` overwrites the authoritative board with this delivery's final
+  // truth, and threaded through every computeDisplayFlags call this delivery makes (both below
+  // and in the later-events loop further down), never mutated for any other purpose.
+  const simulatedBoard = { ...(state?.board ?? {}) };
   state = normalized;
-  // Sets up redraw()'s one-shot CSS flourish classes from every fresh event about to be played
-  // (merged in order — a later event's flag for the same tile wins, distinct tiles from different
-  // events both survive) — see triggerEventEffects below for the timer-based half, called once
-  // per fresh event AFTER redraw so both halves see the exact same board redraw() just produced.
-  if (!isRecoveryDelivery && freshEvents.length) {
-    const mergedTransitionFlags = new Map();
-    const mergedObjectiveTransitionFlags = new Map();
-    let mergedHeroActivationKey = null;
-    for (const ev of freshEvents) {
-      if (ev.transitionFlags) for (const [k, v] of Object.entries(ev.transitionFlags)) mergedTransitionFlags.set(k, v);
-      if (ev.objectiveTransitionFlags) for (const [k, v] of Object.entries(ev.objectiveTransitionFlags)) mergedObjectiveTransitionFlags.set(k, v);
-      if (ev.heroActivationKey) mergedHeroActivationKey = ev.heroActivationKey; // last one wins — see triggerEventEffects doc comment
-    }
-    lastTransitionFlags = mergedTransitionFlags;
-    lastObjectiveTransitionFlags = mergedObjectiveTransitionFlags;
-    lastHeroActivationKey = mergedHeroActivationKey;
+  // Sets up redraw()'s one-shot CSS flourish classes for the FIRST fresh event only — the common
+  // case (one event) shows its flourish on this same redraw, no artificial delay. Any further
+  // fresh events (a coalesced delivery catching up on more than one distinct event) get their own
+  // later, separately-timed redraw each — see the sequencing below, right after the main redraw.
+  // GPT review, finding 2 (2026-09-10): a single merged render could only ever show the LAST of
+  // several distinct events — two different Hero glows, or two conflicting flags on the same
+  // tile, silently lost all but one. Never merged now; each event gets its own full pass.
+  const [firstFreshEvent, ...laterFreshEvents] = isRecoveryDelivery ? [] : freshEvents;
+  if (firstFreshEvent) {
+    const flags = computeDisplayFlags(firstFreshEvent, simulatedBoard);
+    lastTransitionFlags = flags.transitionFlags;
+    lastObjectiveTransitionFlags = flags.objectiveTransitionFlags;
+    lastHeroActivationKey = flags.heroActivationKey;
   } else {
     lastTransitionFlags = new Map();
     lastObjectiveTransitionFlags = new Map();
@@ -1594,10 +1656,28 @@ function receiveRemoteState(remoteState, { force = false, preserveSyncStatus = f
   }
   redraw();
   // Never re-executes any gameplay effect to get here — freshEvents is purely display data that
-  // already rode along inside `normalized` itself (see buildLastEvent). One call per fresh event,
-  // each staggered further than the last, so a delivery that's catching up on more than one
-  // distinct event still shows them as distinguishable beats instead of one overlapping blur.
-  if (!isRecoveryDelivery) freshEvents.forEach((ev, i) => triggerEventEffects(ev, i * 260));
+  // already rode along inside `normalized` itself (see buildLastEvent). The first fresh event's
+  // timer-based effects (popups/connectors/Direct HQ) fire now, matching the CSS flourish this
+  // same redraw just showed. Any further fresh events each get their OWN later redraw (re-setting
+  // the one-shot flourish inputs for just that event first) plus their own triggerEventEffects
+  // call — 600ms apart, comfortably above every flourish animation's duration (game.css:
+  // fx-flash-glow/fx-flash-inset/fx-destroy-shake all finish within 300-500ms), so a coalesced
+  // delivery catching up on more than one distinct event shows each as its own visible beat
+  // instead of only the last one surviving a single overlapping render.
+  if (firstFreshEvent) triggerEventEffects(firstFreshEvent, 0);
+  laterFreshEvents.forEach((ev, i) => {
+    setTimeout(() => {
+      // Same simulatedBoard object as the first event above — already advanced by its
+      // tileUnitSnapshot, so this event's own check (and any further advancement) continues the
+      // SAME per-delivery timeline rather than restarting from the final authoritative board.
+      const flags = computeDisplayFlags(ev, simulatedBoard);
+      lastTransitionFlags = flags.transitionFlags;
+      lastObjectiveTransitionFlags = flags.objectiveTransitionFlags;
+      lastHeroActivationKey = flags.heroActivationKey;
+      redraw();
+      triggerEventEffects(ev, 0);
+    }, (i + 1) * 600);
+  });
   checkWin();
   // The opponent's End Turn handler can't prompt us, so an inbound state that hands us the
   // turn is where this client runs its own Hero Phase. runHeroPhase re-checks lastObjLevel,
@@ -4257,10 +4337,25 @@ new MutationObserver(() => {
 
 document.addEventListener('mouseover', e => {
   const pip = e.target.closest('[data-tip], [data-tip-html]');
+  // Hovering a DIFFERENT pip while one is pinned is allowed to show — this is deliberately not
+  // blocked, since seeing a second pip's info without losing the pin is useful — but see mouseout
+  // below, which is what previously left this temporary content stuck once the pin's own guard
+  // started swallowing every future mouseout.
   if (pip) positionTip(pip);
 });
 document.addEventListener('mouseout', e => {
-  if (pinnedPip) return; // a tap/focus toggle is holding it open — hover leaving elsewhere shouldn't close it
+  if (pinnedPip) {
+    // GPT review, finding 4 (2026-09-10): mouseover above always repaints the tip with whatever
+    // was just hovered, pinned or not — hovering a second pip while one is pinned overwrote the
+    // pinned pip's own text/position. This guard then unconditionally kept the tip open on the
+    // way back out, so it was left showing that OTHER pip's now-stale content, attributed to
+    // nothing the player actually still has hovered or pinned. Restore the pin's own content
+    // when leaving anything that isn't the pinned pip itself — leaving the pinned pip needs no
+    // action, it's already showing the right thing.
+    const leavingPip = e.target.closest('[data-tip], [data-tip-html]');
+    if (leavingPip && leavingPip !== pinnedPip) positionTip(pinnedPip);
+    return;
+  }
   if (e.target.closest('[data-tip], [data-tip-html]')) tip.style.display = 'none';
 });
 
@@ -4926,3 +5021,18 @@ document.getElementById('debug-turn-go').addEventListener('click', () => {
   const { state: newState, log } = debugSkipToTurn(state, turn);
   commitState(newState, log);
 });
+
+// Debug/testing hook only — same "no gameplay effect" contract as window.__SIGNAL_DEBUG__ above:
+// nothing here is read back into game state by any normal code path. Exposes the receiving half
+// of the animation-event system (see buildLastEvent/commitState/receiveRemoteState) so a
+// regression test can feed a synthetic "remote" snapshot directly — duplicate delivery, a
+// coalesced batch of several distinct events, a forced-recovery adoption followed by a genuine
+// new one — without needing to choreograph exact real-network timing across two live Firebase
+// clients for every scenario. `getState`/`getConsumedEventIds` let a test read back the current
+// state and which event ids this client already considers seen, for setting up a realistic
+// "already consumed this one, here's another" starting point.
+window.__SIGNAL_TEST_HOOKS__ = {
+  receiveRemoteState,
+  getState: () => state,
+  getConsumedEventIds: () => [...consumedEventIds],
+};
