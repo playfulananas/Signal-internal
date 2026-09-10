@@ -9,6 +9,191 @@ Newest first.
 
 ---
 
+## 2026-09-10 — Corrected 4 findings from a third review of the gameplay-corrections branch
+
+A third, independent review of `fix/signal-gameplay-corrections` (commit `9404302`, itself the
+result of a second review's corrections) found 4 remaining issues in the event-identity/animation
+system and the tooltip pin lifecycle, plus one about the prior round's own test script's rigor.
+All 4 confirmed real and fixed; the test-rigor finding addressed by rewriting the affected script.
+
+- **Local events never marked consumed (finding 1)**: `commitState` played its own newly-built
+  event locally (`triggerEventEffects`) but never added its id to `consumedEventIds` — only
+  `receiveRemoteState` did that, on the RECEIVING side. Confirmed repro: P1 activates a Hero
+  (glow plays locally), P1's own Firebase echo is correctly ignored (self-push guard), but the
+  next delivery that happens to still carry that event id forward (an opponent update built from
+  a state that already includes it) arrives at P1 looking exactly like a fresh, unseen event —
+  P1 replays its own glow. Fixed by calling `markEventConsumed(lastEvent.id)` right where
+  `commitState` plays the event, immediately after `triggerEventEffects`. Deliberately doesn't
+  touch the opponent's own independent right to play the same id once — `consumedEventIds` is a
+  per-client Set, marking it locally has no effect on what the other client's own instance does
+  with the same id when it first arrives there.
+- **Batched multi-event playback lost distinct effects (finding 2)**: `receiveRemoteState` merged
+  every fresh event's `transitionFlags`/`heroActivationKey` into one combined render — two
+  different Hero activations in the same coalesced delivery only ever showed the LAST one's glow
+  (the other silently dropped, no fallback), and two conflicting flags on the same tile just
+  overwrote each other the same way. Replaced the merge with one full redraw + `triggerEventEffects`
+  pass PER fresh event, 600ms apart (safely above every flourish animation's actual duration —
+  game.css's fx-flash-glow/fx-flash-inset/fx-destroy-shake all finish within 300-500ms) — so a
+  coalesced delivery now shows each distinct event as its own visible beat. Also fixed the
+  "old unit's animation painted onto a different unit that's since occupied the same tile" gap
+  the prior round's `tileUnitSnapshot` stale-guard didn't fully close: comparing every event
+  against the single FINAL board (the only one a coalesced delivery has) meant an EARLIER event
+  in a legitimate same-tile, same-unit sequence (e.g. suppressed, then later something else) could
+  wrongly fail its own snapshot check, since by then the final board already reflected the LAST
+  event's outcome. `computeDisplayFlags` now threads a per-delivery `simulatedBoard` — seeded
+  from the real board as it stood right before the delivery, advanced by each event's own
+  `tileUnitSnapshot` as it's displayed — so same-tile sequences from the SAME delivery compare
+  correctly step-by-step, while a genuinely different, later-arrived unit is still caught.
+- **Pinned tooltip lost its own content on hover-elsewhere (finding 4)**: hovering a different
+  `[data-tip]`/`[data-tip-html]` pip while one was pinned correctly left the OTHER pip's tooltip
+  visible (by design — briefly inspecting something else without losing the pin), but mousing
+  back out of that other pip did nothing, since the mouseout guard only checked "is anything
+  pinned" and returned — leaving the tip stuck showing the hovered pip's now-stale text instead
+  of the actual pin's. Fixed: on mouseout while pinned, if the element being left isn't the
+  pinned pip itself, restore the pinned pip's own content (`positionTip(pinnedPip)`) rather than
+  leaving whatever was last hovered on screen.
+- **Multiplayer animation test's soft assertions (finding 3, re: `multiplayer_review2_animation_
+  test.mjs` from the prior round)**: every animation check logged a `NOTE` and fell through to a
+  pass when the expected class/popup wasn't caught in time, rather than failing — the script
+  could report PASS without ever actually having observed what it claimed to verify. Rewrote
+  around `armObserver`/`readObserver`, a small MutationObserver-based recorder armed on the page
+  BEFORE the triggering action and read back after — records every sighting (tile key, hero
+  zone, text) even if a later redraw removes the class again, so nothing can be missed by bad
+  timing. Every animation check is now a hard `fail()` if never observed. Added a `setupFail()`
+  vs `fail()` split so a broken selector or a sync timeout reports as a setup problem, not a
+  false pass or a false assertion failure. Also added: the Direct HQ connector line (previously
+  only the popup was checked), and an explicit "observed exactly once across the whole sequence"
+  check for the acting client's own event (the literal finding-1 repro, from the actor's side —
+  the prior version only checked the opponent-observing side).
+- **New regression coverage**: added `window.__SIGNAL_TEST_HOOKS__` (debug-only, same
+  no-gameplay-effect contract as `window.__SIGNAL_DEBUG__` — exposes `receiveRemoteState`,
+  `getState`, `getConsumedEventIds`) so the scenarios GPT asked for that need precise control
+  over synthetic snapshots (duplicate delivery, an event-free placement/Cancel-style delivery, a
+  forced-recovery delivery followed by a genuine new one, a single coalesced delivery containing
+  two distinct Hero activations plus a same-tile sequence) could be tested deterministically in
+  `event_consumption_regression_test.mjs` (solo browser, no live-network timing to fight) instead
+  of choreographing exact real-network races across two clients for every one of them. Also
+  covers finding 4's pin-A/hover-B/leave-B scenario, on the Mulligan screen (the only place
+  `[data-tip-tap]` pips exist). All pass, run twice for stability. `multiplayer_review2_
+  animation_test.mjs` still separately covers the same core scenarios live, two real clients.
+
+**Live-verified** (2-client match, `multiplayer_review2_animation_test.mjs`, hardened per finding
+3 above, 2 full clean passes): Blast secondary-victim feedback, Direct HQ damage/popup/connector,
+and Hero-activation glow all OBSERVED (not just inferred) reaching the opponent's client; the
+acting client's own event observed exactly once across the whole sequence, both for a normal
+attack (host as actor) and for a Hero activation followed by an unrelated placement (P2 as
+actor) — covering both roles.
+
+`npm test`: 248/248 (unchanged from the prior round — these fixes are in game.js's DOM-coupled
+paths, not the pure-function suite).
+
+---
+
+## 2026-09-09 — Corrected 7 findings from a second review of the gameplay-corrections branch
+
+A second, independent review of `fix/signal-gameplay-corrections` (commit `289b9cb`, itself
+already reviewed once) found 7 issues. All 7 were reproduced/verified against the current code
+before anything was changed; findings 1, 3, 4, and 5 were confirmed real bugs and fixed, finding
+2 confirmed real and fixed alongside 1 (same underlying mechanism), finding 6 addressed with new
+regression tests, and finding 7 is a documentation-precision note, not a code defect — recorded
+here rather than "fixed."
+
+- **Event identity and replay (findings 1 and 2)**: `_lastEvent`, a single field replaced whole
+  on every `commitState`, could be inherited unchanged by direct `pushStateIfOnline` calls that
+  skip `commitState` entirely (placement's early-return branches, Cancel restoring
+  `preCommandState`) — a revision-sequential receiver check couldn't tell "genuinely new" from
+  "carried forward from an earlier action," so a Hero-activation glow could replay on the very
+  next placement. Separately, the receiver's "is this worth animating" check
+  (`normalized._revision === state._revision + 1`) didn't account for `force`-adopted conflict
+  recovery or a paused/reconnecting session, so a recovery snapshot exactly one revision ahead
+  could incorrectly play its history. Replaced the single field with a small bounded
+  `_eventHistory` array (max 8) of uniquely-id'd events, appended (never replaced) only by
+  `commitState` — direct-push paths therefore carry the array forward unchanged by construction,
+  which is safe under the new receiver logic rather than because of anything special at those
+  call sites. The receiver now tracks consumed event ids in a bounded `Set` (max 500) and plays
+  only ids it hasn't seen, which also fixes a second, related gap: a skipped/coalesced Firebase
+  delivery no longer loses whichever events were in between, since they're still sitting in
+  whatever snapshot eventually arrives. `isRecoveryDelivery` (`force || onlineSyncPaused ||
+  !state?.board`, captured before `onlineSyncPaused` is reset) marks every event in a recovery
+  delivery as consumed without playing it, so normal playback resumes cleanly on the next genuine
+  event afterward.
+- **Pinned-tooltip lifecycle (finding 3)**: the tap-to-pin tooltip (card-choice screens only)
+  only ever cleared when the same pip was clicked again. Selecting a card, closing a modal, or a
+  Mulligan/Craft re-render (both rebuild their card DOM on every interaction) could remove the
+  pinned pip's anchor while the pin stayed set, after which the hover-dismiss handler's
+  `if (pinnedPip) return` guard blocked dismissal for every other tooltip too. Added: outside-click
+  and Escape dismissal, explicit `clearPinnedTip()` calls at every card-choice modal's
+  confirm/cancel point, a `MutationObserver` backstop that clears the pin the moment its DOM node
+  is actually removed, and Enter/Space activation for the tappable pips (previously mouse/touch
+  only despite already being marked `tabindex`/`role="button"`).
+- **Safe shared card rendering (finding 4)**: `buildUnitCardInnerHtml` (ui.js) escaped name,
+  class, and ability text but not keyword labels, printed cost, or the N/E/S/W values — and
+  `renderHand`, despite the function's own doc comment claiming it was shared, still carried a
+  fully duplicated, separately-unescaped inline template. Not a hole in ordinary play (Craft's
+  own generator only ever produces well-formed values), but a real gap if a malformed value ever
+  reached rendering by another route (a future generator bug, or a tampered value arriving from
+  the opponent's client over the online sync channel). All numeric fields now go through a
+  `safeStat` coercion (malformed -> 0, never interpolated as a raw string) and all text through
+  the existing `esc()`; `renderHand`'s unit branch now actually calls `buildUnitCardInnerHtml`
+  instead of duplicating it, gaining a `displayCost`/`discounted` option so the Tank/Command
+  discount styling it already had keeps working unchanged.
+- **Missing animation coverage (finding 5)**: the attack handler flagged only
+  `result.boardMutations[0]`, so a Blast/Barrage secondary victim got no suppression/destruction/
+  Armor feedback at all, on either client. Now every mutation in the array gets its own
+  transition flag and popup. Hero activation glow (`heroActivationKey`) was never passed at H25's
+  Craft pay/lock commit, H16's Maneuver-destination commit, or H11's rotate-confirm commit (every
+  *other* Hero Power already had it) — added at exactly the commit that already records
+  `heroesActivatedThisTurn`, so it fires once per activation. Generalized `triggerEventEffects`
+  with `popups`/`connectors` event fields (tile keys and pre-baked text, resolved to real DOM
+  rects at consumption time on whichever client is playing them) and rewired the attack handler's
+  destroy/Armor-absorbed popups and Rally/Breakthrough/Last-Stand causality connector — both used
+  to be direct, local-only DOM calls — through them, so they now reach the opponent too.
+- **Regression tests (finding 6)**: 4 new pure-function tests (`tests/ui_guidance.test.mjs`)
+  covering `buildUnitCardInnerHtml`'s escaping/validation and `renderHand`'s use of it — verified
+  failing against 289b9cb via a throwaway worktree checkout, passing after the fix. The remaining
+  scenarios (Maneuver-source functions accepting a Suppressed unit, suppression persisting after
+  the move, a restriction still holding, Blast secondary victims each getting their own flag,
+  tooltip cleanup/click-isolation) are game.js-internal and DOM-coupled — not reachable from a
+  plain Node import (the module runs `document.getElementById(...).addEventListener(...)` at load
+  time) — so they're covered by a new Playwright script instead
+  (`regression_bugfix_checks.mjs`, single browser, hot-seat game, debug panel for setup); 5/5
+  passing across 3 full runs. Cross-client behavior (event no-replay, Direct HQ and Hero-glow
+  reaching the opponent) needed a live 2-client match and isn't practical as an unattended
+  regression test the way the rest are — see the live-verification note below instead.
+- **Damage-audit precision (finding 7)**: no code change — the Blast/Barrage normal-attack HQ
+  pipeline was re-confirmed correct, not re-fixed. For the record, since the prior round's commit
+  message could be read as implying otherwise: the 2026-09-01 entries below (Guard-blocks-HQ-
+  damage, Last-Stand/Breakthrough-skipped-for-non-first-kills) fixed exactly what their titles
+  say — they did not establish, and were never claimed to establish, that ordinary secondary-kill
+  HQ deduction (the `hqDamageToP1 += secondary.hqDamageToP1` accumulation in
+  `resolveSecondaryHits`/`resolveSingleAttack`, combat.js) had ever been broken. That accumulation
+  appears to have been correct all along; this round's audit is what actually re-confirmed it,
+  with its own scenarios (see live-verification below), not the Sept 1 fixes.
+
+**Live-verified** (2-client match, `multiplayer_review2_animation_test.mjs`, 2 full clean runs —
+occasionally needs a rerun due to pre-existing Firebase-timing flakiness in the debug-injection
+setup itself, same category already documented elsewhere in this file, not in the game code under
+test): a Blast attack (Mortar Battery, AR46) against a 3-unit formation shows a Hit outcome on the
+primary AND both secondary victims, on both clients. An isolated Unit's unused attack converts to
+Direct HQ damage identically on both clients, with the "DIRECT HIT" popup reaching the opponent.
+P2 activating H25's Craft shows the Hero Zone glow on the HOST's (opponent's) client. Immediately
+following that activation with a Craft-candidate confirm and then placing an unrelated Unit — the
+exact Hero-activate -> placement sequence finding 1 described — does NOT replay the glow.
+
+**Not fixed, found along the way (separate, pre-existing, out of scope for this round)**:
+`subscribeState`'s self-echo guard (`if (remoteState._pushId === myLastPushId) return;`, game.js)
+only recognizes a client's MOST RECENT own push. Firing several pushes in quick succession (the
+live-verification script's own debug-panel injections did this) can let an earlier push's echo
+arrive after `myLastPushId` has already moved on to a later push; the guard then fails to
+recognize it as an echo and `receiveRemoteState` applies it as if it were a genuine remote update,
+clobbering whatever the later, more recent push had just set locally. Root-caused via temporary
+tracing (not committed); worth a dedicated fix in a future round, but unrelated to any of the 7
+findings addressed here.
+
+`npm test`: 248/248 (244 + 4 new).
+
+---
+
 ## 2026-09-04 — UI intuitiveness updates promoted to internal main
 
 Integrated both `codex/ui-intuitiveness` passes on top of the manual-test hotfixes and promoted
