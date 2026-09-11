@@ -63,20 +63,20 @@ Generated: 2026-09-11
 
 | ID | Name | Fuel | Copies | Keyword(s) | N/E/S/W | Ability |
 |---|---|---|---|---|---|---|
-| AR40 | Ranging Section | 1 | 2 | — | 2/2/6/2 | — |
+| AR40 | Ranging Section | 1 | 2 | — | 3/2/6/2 | — |
 | AR41 | Field Gun | 2 | 2 | — | 3/7/3/3 | — |
 | AR42 | Self-Propelled Gun | 3 | 2 | — | 8/4/4/4 | — |
-| AR43 | Field Howitzer | 2 | 2 | Bombard | 1/1/1/7 | — |
-| AR44 | Heavy Howitzer | 4 | 2 | Bombard | 3/3/9/3 | — |
-| AR45 | Long-Range Battery | 5 | 2 | Bombard | 4/10/4/4 | — |
-| AR46 | Mortar Battery | 2 | 2 | Blast | 2/6/2/2 | Blast: on a successful Hit, also Hit enemy Units directly left/right of the target relative to attack direction. |
-| AR47 | Siege Gun | 4 | 2 | Blast | 3/3/8/3 | Blast: on a successful Hit, also Hit enemy Units directly left/right of the target relative to attack direction. |
-| AR48 | Rocket Battery | 3 | 2 | Barrage | 2/2/2/6 | Barrage: on a successful Hit, also Hit enemy Units farther along the forward attack ray beyond the target. |
+| AR43 | Field Howitzer | 2 | 2 | Bombard | 1/2/2/7 | — |
+| AR44 | Heavy Howitzer | 4 | 2 | Bombard | 3/3/9/4 | — |
+| AR45 | Long-Range Battery | 5 | 2 | Bombard | 4/10/5/5 | — |
+| AR46 | Mortar Battery | 2 | 2 | Blast | 3/6/2/2 | Blast: on a successful Hit, also Hit enemy Units directly left/right of the target relative to attack direction. |
+| AR47 | Siege Gun | 4 | 2 | Blast | 3/4/8/3 | Blast: on a successful Hit, also Hit enemy Units directly left/right of the target relative to attack direction. |
+| AR48 | Rocket Battery | 3 | 2 | Barrage | 2/2/4/6 | Barrage: on a successful Hit, also Hit enemy Units farther along the forward attack ray beyond the target. |
 | AR49 | Heavy Rocket Battery | 5 | 1 | Barrage | 8/3/3/3 | Barrage: on a successful Hit, also Hit enemy Units farther along the forward attack ray beyond the target. |
 | AR50 | Anti-Tank Gun | 2 | 2 | Guard | 3/3/7/3 | — |
 | AR51 | Rapid-Fire Gun | 3 | 2 | Double Attack | 3/3/3/8 | — |
 | AR52 | Rocket Launcher | 3 | 2 | Bombard / Double Attack | 1/1/1/5 | — |
-| AR53 | Grand Battery | 5 | 1 | Bombard / Barrage / Blast | 9/1/1/1 | Combines ranged, forward-ray, and side-splash Hits on a single successful attack; primary Hit resolves first. |
+| AR53 | Grand Battery | 5 | 1 | Bombard / Barrage / Blast | 9/2/2/2 | Combines ranged, forward-ray, and side-splash Hits on a single successful attack; primary Hit resolves first. |
 
 ## Units — Aircraft (12)
 
@@ -116,7 +116,7 @@ Generated: 2026-09-11
 | H15 | Strike Commander | column | active | 1⛽ | Deal 1 Hit to 1 enemy Unit in this Hero's column. |
 | H16 | Maneuver Commander | column | active | 2⛽ | Maneuver 1 friendly Unit in this Hero's column to another legal position and reset its persistent attacks. |
 | H17 | HQ Assault Commander | board | active | 2⛽ | Deal 2 damage to the enemy HQ. |
-| H18 | Artillery Commander | column | active | 1⛽ | Give 1 friendly Artillery in this Hero's column Blast until end of turn. |
+| H18 | Artillery Commander | column | active | 1⛽ | Give 1 friendly Artillery in this Hero's column +1 to all sides and Blast until end of turn. |
 | H19 | Training Officer | board | active | 2⛽ | Give all 1- and 2-cost Units currently in your hand +1 all sides permanently. |
 | H20 | Ruthless Strategist | board | passive | — | Whenever you play a Command, after it fully resolves: draw 1 card, then deal 1 damage to your HQ. |
 | H21 | Emergency Logistics Officer | board | passive | — | The first time you play a Unit each turn, after its own On Play resolves: gain 1 Fuel, then deal 1 damage to your HQ. |
@@ -158,8 +158,8 @@ Generated: 2026-09-11
 | C27 | Blitzkrieg Order | Tank | 2⛽ | 2 | Maneuver 1 friendly Tank to another legal position and give it Armor. Escalate: affect up to 2 friendly Tanks instead. |
 | C28 | Field Repairs | Tank | 1⛽ | 2 | Give 1 friendly Tank Armor. If it already has Armor, give Heavy Armor instead. If already Heavy Armor, nothing happens. |
 | C29 | Armored Offensive | Tank | 1⛽ | 2 | Your next Tank played this turn costs 2 Fuel less. |
-| C30 | Artillery Barrage | Artillery | 2⛽ | 2 | Give 1 friendly Artillery Barrage until end of turn. |
-| C31 | Target Coordinates | Artillery | 1⛽ | 2 | Give 1 friendly Artillery Precision until end of turn. |
+| C30 | Artillery Barrage | Artillery | 2⛽ | 2 | Give 1 friendly Artillery Barrage and +1 to all sides until end of turn. |
+| C31 | Target Coordinates | Artillery | 1⛽ | 2 | Give 1 friendly Artillery Precision and +1 to all sides until end of turn. |
 | C32 | Fire for Effect | Artillery | 3⛽ | 2 | Give 1 friendly Artillery Blast and Barrage until end of turn. Escalate: affect up to 2 friendly Artillery instead. |
 | C33 | Air Strike | Aircraft | 3⛽ | 2 | All friendly Aircraft gain 1 additional legal attack until end of turn. |
 | C34 | Air Superiority | Aircraft | 2⛽ | 2 | All friendly Aircraft get +1 all sides and Precision until end of turn. Escalate: +2 instead. |

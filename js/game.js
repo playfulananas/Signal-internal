@@ -1918,10 +1918,11 @@ function applyHeroPower(s, role, col, hero, targetKey) {
       break;
     }
 
-    case 'H18': { // Artillery Commander — grant Blast until end of turn
+    case 'H18': { // Artillery Commander — grant +1 all sides and Blast until end of turn
+      // (2026-09 Artillery balance pass — was Blast only)
       const u = s.board[targetKey];
-      log.push(`${hero.name}: ${nameOf(targetKey)} gains Blast (until end of turn)`);
-      s = { ...s, board: { ...s.board, [targetKey]: { ...u, tempKeywords: [...(u.tempKeywords || []), 'Blast'] } } };
+      log.push(`${hero.name}: ${nameOf(targetKey)} +1 all sides and gains Blast (until end of turn)`);
+      s = { ...s, board: { ...s.board, [targetKey]: { ...u, tempSideBonus: (u.tempSideBonus || 0) + 1, tempKeywords: [...(u.tempKeywords || []), 'Blast'] } } };
       break;
     }
 
@@ -3906,15 +3907,17 @@ function applyCommandEffect(commandId, targetKey) {
       log.push(`${card.name}: ${unitName} gains ${newKw} (permanent)`);
       break;
     }
-    case 'C30': { // Artillery Barrage (Artillery) — grant Barrage until end of turn (NOT the
-      // old single-target Suppress/Armor-strip effect despite the shared name)
-      s = { ...s, board: { ...s.board, [targetKey]: { ...unit, tempKeywords: [...(unit.tempKeywords || []), 'Barrage'] } } };
-      log.push(`${card.name}: ${unitName} gains Barrage (until end of turn)`);
+    case 'C30': { // Artillery Barrage (Artillery) — grant +1 all sides and Barrage until end of
+      // turn (2026-09 Artillery balance pass — was Barrage only). NOT the old single-target
+      // Suppress/Armor-strip effect despite the shared name.
+      s = { ...s, board: { ...s.board, [targetKey]: { ...unit, tempSideBonus: (unit.tempSideBonus || 0) + 1, tempKeywords: [...(unit.tempKeywords || []), 'Barrage'] } } };
+      log.push(`${card.name}: ${unitName} +1 all sides and gains Barrage (until end of turn)`);
       break;
     }
-    case 'C31': { // Target Coordinates (Artillery) — grant Precision until end of turn
-      s = { ...s, board: { ...s.board, [targetKey]: { ...unit, tempKeywords: [...(unit.tempKeywords || []), 'Precision'] } } };
-      log.push(`${card.name}: ${unitName} gains Precision (until end of turn)`);
+    case 'C31': { // Target Coordinates (Artillery) — grant +1 all sides and Precision until end
+      // of turn (2026-09 Artillery balance pass — was Precision only)
+      s = { ...s, board: { ...s.board, [targetKey]: { ...unit, tempSideBonus: (unit.tempSideBonus || 0) + 1, tempKeywords: [...(unit.tempKeywords || []), 'Precision'] } } };
+      log.push(`${card.name}: ${unitName} +1 all sides and gains Precision (until end of turn)`);
       break;
     }
     case 'C32': { // Fire for Effect (Artillery) — grant Blast + Barrage until end of turn;

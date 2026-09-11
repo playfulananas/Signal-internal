@@ -9,6 +9,44 @@ Newest first.
 
 ---
 
+## 2026-09-11 — Applied the approved Artillery balance pass
+
+Implementation handoff from "SIGNAL Artillery balance changes" (approved by Denis, 11 September
+2026): 8 Artillery Unit stat buffs, 1 Hero buff (H18), 2 Command buffs (C30, C31). Cross-checked
+every "before" value against the current `js/cards.js` before touching anything — all 8 targets
+matched exactly, none were already applied.
+
+- **Units** (`js/cards.js`, final N/E/S/W): AR40 Ranging Section N2→3 (3/2/6/2), AR43 Field
+  Howitzer E,S1→2 (1/2/2/7), AR44 Heavy Howitzer W3→4 (3/3/9/4), AR45 Long-Range Battery
+  S,W4→5 (4/10/5/5), AR46 Mortar Battery N2→3 (3/6/2/2), AR47 Siege Gun E3→4 (3/4/8/3), AR48
+  Rocket Battery S2→4 (2/2/4/6), AR53 Grand Battery E,S,W1→2 (9/2/2/2). Costs, copies, keywords
+  and abilities untouched; applied globally (Combined Arms and other mixed decks included, not
+  just the dedicated Artillery deck — AR43 in particular appears in three different starter
+  decks).
+- **H18 Artillery Commander** — now grants +1 to all sides alongside its existing Blast grant
+  (both until end of turn), instead of Blast alone. Column scope and 1-Fuel cost unchanged.
+- **C30 Artillery Barrage** — now grants +1 to all sides alongside Barrage (both until end of
+  turn), instead of Barrage alone. 2-Fuel cost unchanged.
+- **C31 Target Coordinates** — now grants +1 to all sides alongside Precision (both until end of
+  turn), instead of Precision alone. 1-Fuel cost unchanged.
+- All three reuse the existing `tempSideBonus`/`tempKeywords` mechanism (same fields C34 Air
+  Superiority already combines) rather than introducing a new modifier system — both clear
+  together at end of turn (`state.js`'s per-unit end-of-turn reset), so the stat bonus can never
+  outlive the keyword grant or vice versa. Confirmed live: a Unit that already has the granted
+  keyword printed (e.g. Mortar Battery's own Blast) still receives the stat bonus — the grant
+  isn't skipped as "redundant"; stacking C30 then C31 on the same Unit in one turn reads
+  `tempSideBonus: 2` with both keywords present, not overwritten.
+- **C32 Fire for Effect and every other Command/Hero left untouched**, per the approved scope.
+- No dedicated pure-function test coverage existed for H18/C30/C31/C32 before this pass (they're
+  DOM-coupled `game.js` switch cases, same situation the prior balance pass's H01/H04/H08/H17/H25
+  changes were in) — verified instead via a new live Playwright script,
+  `artillery_balance_verification_test.mjs`, mirroring `balance_pass_verification_test.mjs`'s
+  structure.
+- Decisions explicitly left out of this patch (Denis, same handoff): H13 Supreme Commander's
+  interaction with Artillery Heroes stays as-is pending further design discussion (no replacement
+  effect approved); no additional Combined Arms nerfs; C14 Priority Orders' fit in that deck
+  flagged but not changed.
+
 ## 2026-09-11 — Applied the approved Set 1 Infantry/Tank/Hero balance pass
 
 Implementation handoff from "SIGNAL prototype balance changes" (approved by Denis, 10 September
