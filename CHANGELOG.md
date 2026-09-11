@@ -9,6 +9,63 @@ Newest first.
 
 ---
 
+## 2026-09-11 — Applied the approved Set 1 Infantry/Tank/Hero balance pass
+
+Implementation handoff from "SIGNAL prototype balance changes" (approved by Denis, 10 September
+2026): 11 stat reductions (8 Infantry, 3 Tank) plus 2 Tank targets already matching, and 5
+approved Hero changes. Cross-checked against Drive doc 03 (Card Truth and Migration, already
+updated for this pass) before touching anything — every "before" value in the report matched the
+current prototype exactly, so all 13 stat edits were unambiguous.
+
+- **Infantry** (`js/cards.js`): I1 Rifle Squad S3→2, I6 Shield Bearers N3→2, I9 Motivator W5→4,
+  I12 Assault Trooper E3→2, I13 Combat Engager W4→3, I18 Last Stand Soldier N3→2, I22 Field
+  Commander E3→2, I20 Shock Trooper S4→3. Costs, abilities, copy limits untouched.
+- **Tank**: T32 Tank Hunter S4→3, T36 Flak Halftrack W7→6, T30 Panzer Brigade E6→5. T29 Vanguard
+  Tank's E and T33 Tank Destroyer's N were both already at their target value (5) — confirmed,
+  left alone, not silently "corrected" to a different side.
+- **H01 Quartermaster General** — full ability replacement, not a tweak: "Draw 1 card" →
+  "Look at 3 random cards from your deck, choose 1 to put into your hand; the others remain in
+  the deck." New pure logic (`sampleRandomFromDeck`/`resolveQuartermasterPick`, combat.js) samples
+  by deck INDEX rather than card id, since two of the three samples can be the same printed card
+  (e.g. two remaining Rifle Squads) — id alone can't tell them apart when removing exactly the
+  picked slot. New picker modal (`#quartermaster-modal`, mirrors H25 Craft's pay-then-pick shape:
+  Fuel and the activation lock commit first, so the glow fires once). Blocked (no Fuel spent) on
+  an empty deck — flagged as the one genuinely unspecified edge case in the source report, same
+  reasoning H05 Recovery Officer already uses for "no valid target."
+- **H04 Objective Marshal** — Column → Board scope ("No Column restriction"). The +1 amount was
+  already correct in the prototype (a real discrepancy from the report's "reduced from +2"
+  framing, reported rather than silently re-applied) — only the scope was still column-gated via
+  `inHeroScope`; now board-wide, matching H21's existing pattern.
+- **H08 Infantry Commander** — +2 → +1, Column scope unchanged.
+- **H17 HQ Assault Commander** — 1 → 2 damage to the enemy HQ; `bot_ai.js`'s static utility
+  weight doubled to match (`W_HQ` → `W_HQ * 2`), or the bot would undervalue it after the change.
+- **H25 Chief Aircraft Engineer** — Craft starting cost 5 → 4 Fuel (`nextCraftCost`'s default);
+  progression floor (1) and per-activation -1 step unchanged. Printed `activeCost` updated to
+  match.
+- **Test fixtures updated to match**: `craft_maneuver.test.mjs`'s progression assertion
+  (`[5,4,3,2,1,1]` → `[4,3,2,1,1,1]`); `hero_phase.test.mjs`'s H08 assertions (+2→+1) and its
+  H13-grants-column-freedom demonstration (rebuilt around H08, since H04 no longer has a column
+  restriction to lift — H04 itself got a new test asserting it fires regardless of column with no
+  Supreme Commander present); `hero_primitives.test.mjs`'s Column/Board scope count (12/13 →
+  11/14). 6 new tests added for H01's sampling/pick-resolution logic.
+- **`CARD_TRUTH.md`** (new, generated): a Markdown snapshot of every card, regenerated straight
+  from `js/cards.js` by a new `scripts/generate_card_truth.mjs` — this is what caught H01's
+  ability text itself still reading "Draw 1 card" after the logic had already been rewritten
+  (the card-data field is separate from the game.js/combat.js code path, and I'd only updated
+  the latter). Regenerate any time `cards.js` changes; never hand-edit the output.
+
+**Live-verified** (solo hot-seat, `balance_pass_verification_test.mjs`, 2 clean runs): H01 shows
+1-3 real candidates and moves exactly one card from deck to hand; H04 fires on a placement in a
+different column than its own Hero Zone with no Supreme Commander present; H08 grants exactly
++1; H17 deals exactly 2 HQ damage; H25's first activation costs exactly 4 Fuel. Also reran the
+prior rounds' regression scripts (`multiplayer_craft_test.mjs`, `regression_bugfix_checks.mjs`)
+to confirm the Hero-power/placement code paths this pass touched didn't regress anything else —
+both still pass clean.
+
+`npm test`: 255/255 (249 + 6 new H01 tests).
+
+---
+
 ## 2026-09-10 — Corrected 4 findings from a third review of the gameplay-corrections branch
 
 A third, independent review of `fix/signal-gameplay-corrections` (commit `9404302`, itself the

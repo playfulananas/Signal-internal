@@ -1,8 +1,11 @@
 // Unit tests for Hero Phase turn logic. Run: node --test tests/
 // Updated 2026-08-31 (Run 1, Set 1 surgical update) for the new 25-Hero pool:
-//   H02 Logistics Chief (Fuel cap), H04 Objective Marshal (+1, adjacent to an Objective),
-//   H08 Infantry Commander (+2, first Infantry in column), H13 Supreme Commander (column
-//   freedom), H06 Counteroffensive General (board-wide, fires on Suppression being applied).
+//   H02 Logistics Chief (Fuel cap), H04 Objective Marshal (+1, adjacent to an Objective, Board
+//   scope), H08 Infantry Commander (+1, first Infantry in column, Column scope), H13 Supreme
+//   Commander (column freedom), H06 Counteroffensive General (board-wide, fires on Suppression
+//   being applied).
+// Updated 2026-09 (balance pass): H04 moved Column -> Board scope ("No Column restriction");
+// H08's bonus reduced from +2 to +1.
 // Dropped from this file (no longer applicable):
 //   - old 109 Combined Arms General — archived entirely, no new-truth equivalent.
 //   - old 110 Conventional Warfare Commander's on-PLACEMENT passive test — the new H10 is a
@@ -70,27 +73,41 @@ test('Objective Marshal only fires once per turn, gated by heroTriggeredThisTurn
   assert.equal(log.length, 0);
 });
 
-test('Supreme Commander (H13) makes Objective Marshal (H04) fire outside its own column', () => {
-  // H04 sits in column 0; Unit placed in column 3 — without freedom this must NOT fire.
-  const card = { ...CARD_BY_ID['I1'], cls: 'Artillery' };
-  const objectives = { '0,3': { cardId: 'O1', level: 1 } };
-  const noFreedom = { p1: playerState({ heroZones: ['H04', null, null, null] }), board: boardWith({ '0,3': placedUnit() }), objectives };
-  const { log: log1 } = checkHeroPassivesOnPlace(noFreedom, 'p1', 3, '0,3', card);
-  assert.equal(log1.length, 0, 'column 0 Hero must not affect column 3 without Supreme Commander');
+// 2026-09 balance pass: Objective Marshal (H04) moved from Column to Board scope ("No Column
+// restriction") — it no longer has a column restriction for Supreme Commander to lift, so this
+// demonstration now uses Infantry Commander (H08), which explicitly retains its own Column
+// restriction (doc 03 / balance report's Hero implementation checks).
+test('Supreme Commander (H13) makes Infantry Commander (H08) fire outside its own column', () => {
+  // H08 sits in column 1; Infantry placed in column 3 — without freedom this must NOT fire.
+  const infantry = { ...CARD_BY_ID['I1'], cls: 'Infantry', keyword: null };
+  const noFreedom = { p1: playerState({ heroZones: [null, 'H08', null, null] }), board: boardWith({ '0,3': placedUnit() }), objectives: {} };
+  const { log: log1 } = checkHeroPassivesOnPlace(noFreedom, 'p1', 3, '0,3', infantry);
+  assert.equal(log1.length, 0, 'column 1 Hero must not affect column 3 without Supreme Commander');
 
-  const withFreedom = { p1: playerState({ heroZones: ['H04', null, null, 'H13'] }), board: boardWith({ '0,3': placedUnit() }), objectives };
-  const { log: log2 } = checkHeroPassivesOnPlace(withFreedom, 'p1', 3, '0,3', card);
+  const withFreedom = { p1: playerState({ heroZones: [null, 'H08', null, 'H13'] }), board: boardWith({ '0,3': placedUnit() }), objectives: {} };
+  const { log: log2 } = checkHeroPassivesOnPlace(withFreedom, 'p1', 3, '0,3', infantry);
   assert.equal(log2.length, 1, 'Supreme Commander deployed anywhere lifts the column restriction');
 });
 
-test('Infantry Commander (H08) fires only for Infantry Units in its column, +2 all sides', () => {
+test('Objective Marshal (H04) fires regardless of column — no Column restriction (2026-09 balance pass)', () => {
+  const card = { ...CARD_BY_ID['I1'], cls: 'Artillery' }; // neutralise Infantry Commander for this test
+  const objectives = { '0,3': { cardId: 'O1', level: 1 } };
+  // H04 sits in column 0; Unit placed in column 3, no Supreme Commander present — must still
+  // fire, since H04 has no column restriction left to need lifting.
+  const s = { p1: playerState({ heroZones: ['H04', null, null, null] }), board: boardWith({ '0,3': placedUnit() }), objectives };
+  const { log } = checkHeroPassivesOnPlace(s, 'p1', 3, '0,3', card);
+  assert.equal(log.length, 1, 'Objective Marshal fires board-wide, independent of which column it sits in');
+});
+
+test('Infantry Commander (H08) fires only for Infantry Units in its column, +1 all sides', () => {
+  // 2026-09 balance pass: reduced from +2 to +1.
   const infantry = { ...CARD_BY_ID['I1'], cls: 'Infantry', keyword: null };
   const tank = { ...CARD_BY_ID['T23'], cls: 'Tank', keyword: null };
 
   const s = { p1: playerState({ heroZones: [null, 'H08', null, null] }), board: boardWith({ '0,1': placedUnit() }), objectives: {} };
   const { state: after, log: infLog } = checkHeroPassivesOnPlace(s, 'p1', 1, '0,1', infantry);
   assert.equal(infLog.length, 1);
-  assert.equal(after.board['0,1'].grantedSideBonus, 2);
+  assert.equal(after.board['0,1'].grantedSideBonus, 1);
 
   const { log: tankLog } = checkHeroPassivesOnPlace(s, 'p1', 1, '0,1', tank);
   assert.equal(tankLog.length, 0, 'non-Infantry must not trigger Infantry Commander');
@@ -98,15 +115,16 @@ test('Infantry Commander (H08) fires only for Infantry Units in its column, +2 a
 
 test('multiple column Heroes can stack their bonus onto the same Unit, via Supreme Commander freedom', () => {
   // One Hero per column is a hard rule, so two column-scoped Heroes can never literally share
-  // a column — the only way both can qualify for the SAME placement is if Supreme Commander
-  // (H13) gives at least one of them board-wide reach. H04 sits in column 0 (matches the
-  // placement column directly); H08 sits in column 1 but fires anyway thanks to H13's freedom.
+  // a column. H08 (still Column-scoped) sits in column 1 but fires anyway thanks to H13's
+  // freedom; Objective Marshal (H04, Board-scoped since the 2026-09 balance pass) needs no such
+  // freedom — it fires from column 0 regardless. H13 is kept in this setup because H08 still
+  // needs it; it's just no longer doing anything for H04 specifically.
   const card = { ...CARD_BY_ID['I1'], cls: 'Infantry', keyword: null };
   const objectives = { '0,0': { cardId: 'O1', level: 1 } };
   const s = { p1: playerState({ heroZones: ['H04', 'H08', 'H13', null] }), board: boardWith({ '1,0': placedUnit() }), objectives };
   const { state: after, log } = checkHeroPassivesOnPlace(s, 'p1', 0, '1,0', card);
   assert.equal(log.length, 2);
-  assert.equal(after.board['1,0'].grantedSideBonus, 3); // 1 (Objective Marshal) + 2 (Infantry Commander)
+  assert.equal(after.board['1,0'].grantedSideBonus, 2); // 1 (Objective Marshal) + 1 (Infantry Commander)
 });
 
 test('Emergency Logistics Officer (H21): +1 Fuel, 1 damage to own HQ, on the first Unit played each turn', () => {
@@ -127,17 +145,18 @@ test('Emergency Logistics Officer only fires once per turn, gated the same way a
 });
 
 test('all three on-place passives (Objective Marshal, Infantry Commander, Emergency Logistics Officer) fire together on one qualifying placement, in a fixed order, none stepping on another', () => {
-  // Column 0 for all three column-agnostic-via-Supreme-Commander triggers would collide with
-  // the "one Hero per column" rule, so use Supreme Commander (H13) to give H04/H08 board reach
-  // the same way the stacking test above does, alongside H21 (which is board-scoped natively).
-  // An Infantry Unit placed adjacent to an Objective should trigger all three: +1 (Objective
-  // Marshal), +2 (Infantry Commander), and +1 Fuel/-1 HQ (Emergency Logistics Officer).
+  // Column 0 for H08's column-agnostic-via-Supreme-Commander trigger would collide with the
+  // "one Hero per column" rule, so use Supreme Commander (H13) to give H08 board reach the same
+  // way the stacking test above does, alongside H04 (Board-scoped natively since the 2026-09
+  // balance pass) and H21 (Board-scoped natively). An Infantry Unit placed adjacent to an
+  // Objective should trigger all three: +1 (Objective Marshal), +1 (Infantry Commander), and
+  // +1 Fuel/-1 HQ (Emergency Logistics Officer).
   const card = { ...CARD_BY_ID['I1'], cls: 'Infantry', keyword: null };
   const objectives = { '0,0': { cardId: 'O1', level: 1 } };
   const s = { p1: playerState({ heroZones: ['H04', 'H08', 'H13', 'H21'], fuel: 3, fuelCap: 9, hq: 30 }), board: boardWith({ '1,0': placedUnit() }), objectives };
   const { state: after, log } = checkHeroPassivesOnPlace(s, 'p1', 0, '1,0', card);
   assert.equal(log.length, 3, 'all three passives fire from one placement');
-  assert.equal(after.board['1,0'].grantedSideBonus, 3, '1 (Objective Marshal) + 2 (Infantry Commander)');
+  assert.equal(after.board['1,0'].grantedSideBonus, 2, '1 (Objective Marshal) + 1 (Infantry Commander)');
   assert.equal(after.p1.fuel, 4, 'Emergency Logistics Officer +1 Fuel');
   assert.equal(after.p1.hq, 29, 'Emergency Logistics Officer -1 own HQ');
   assert.deepEqual(after.p1.heroTriggeredThisTurn, { H04: true, H08: true, H21: true }, 'all three independently marked triggered — none overwrote another\'s gate');

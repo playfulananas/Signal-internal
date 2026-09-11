@@ -3,7 +3,7 @@
 // Updated 2026-08-31 (Run 1, Set 1 surgical update) for the new 25-Hero pool and card id scheme.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { columnKeys, unitsInColumn, unitsOnBoard } from '../js/combat.js';
+import { columnKeys, unitsInColumn, unitsOnBoard, sampleRandomFromDeck, resolveQuartermasterPick } from '../js/combat.js';
 import { unsuppressOnBoard, getKeywords } from '../js/state.js';
 import { CARDS } from '../js/cards.js';
 
@@ -99,9 +99,10 @@ test('every hero carries an authoritative scope and implemented flag', () => {
   }
   // All 25 are implemented in Run 1 — no partial/parked Tier-1 subset anymore.
   assert.equal(heroes.filter(h => h.implemented).length, 25);
-  // 12 column / 13 board — see cards.js's Hero list.
-  assert.equal(heroes.filter(h => h.scope === 'column').length, 12);
-  assert.equal(heroes.filter(h => h.scope === 'board').length, 13);
+  // 11 column / 14 board — see cards.js's Hero list. (2026-09 balance pass: Objective Marshal,
+  // H04, moved Column -> Board — was 12/13 before that.)
+  assert.equal(heroes.filter(h => h.scope === 'column').length, 11);
+  assert.equal(heroes.filter(h => h.scope === 'board').length, 14);
 });
 
 test('implemented heroes cover both scopes and multiple power types', () => {
@@ -127,4 +128,60 @@ test('every starter deck roster uses only implemented heroes', async () => {
       assert.ok(byId[id]?.implemented, `${d.name}: hero ${id} (${byId[id]?.name}) is not implemented`);
     }
   }
+});
+
+// ── Quartermaster General (H01) — 2026-09 balance pass ───────────────────────
+// "Look at 3 random cards from your deck, choose 1 to put into your hand; the others remain in
+// the deck." Replaces the old "draw 1 card". sampleRandomFromDeck/resolveQuartermasterPick
+// (combat.js) are the two pure steps; the modal itself (game.js) is DOM-coupled and covered by
+// event_consumption_regression_test.mjs / a live Playwright pass instead.
+
+test('sampleRandomFromDeck returns 3 distinct indices for a deck of 3 or more', () => {
+  const deck = ['I1', 'I2', 'I3', 'I4', 'I5', 'T23'];
+  const picks = sampleRandomFromDeck(deck, 3);
+  assert.equal(picks.length, 3);
+  const indices = picks.map(p => p.index);
+  assert.equal(new Set(indices).size, 3, 'indices must be distinct — no sampling the same slot twice');
+  for (const { index, cardId } of picks) {
+    assert.ok(index >= 0 && index < deck.length);
+    assert.equal(cardId, deck[index], 'cardId must match what is actually at that deck index');
+  }
+});
+
+test('sampleRandomFromDeck gracefully returns fewer than 3 for a smaller deck, and 0 for an empty one', () => {
+  assert.equal(sampleRandomFromDeck(['I1', 'I2'], 3).length, 2);
+  assert.equal(sampleRandomFromDeck(['I1'], 3).length, 1);
+  assert.equal(sampleRandomFromDeck([], 3).length, 0);
+});
+
+test('sampleRandomFromDeck does not mutate the input deck array', () => {
+  const deck = ['I1', 'I2', 'I3'];
+  const before = [...deck];
+  sampleRandomFromDeck(deck, 3);
+  assert.deepEqual(deck, before);
+});
+
+test('sampleRandomFromDeck correctly distinguishes two copies of the same printed card by index', () => {
+  // Two Rifle Squads (I1) in a 3-card deck — sampling all 3 must report both I1 slots as
+  // separate entries (same cardId, different index), never collapse or skip one.
+  const deck = ['I1', 'I1', 'T23'];
+  const picks = sampleRandomFromDeck(deck, 3);
+  assert.equal(picks.length, 3);
+  assert.deepEqual(new Set(picks.map(p => p.index)), new Set([0, 1, 2]));
+});
+
+test('resolveQuartermasterPick moves exactly the picked index to hand, leaving every other card (including a duplicate id) in its original deck position', () => {
+  const ps = { hand: [], deck: ['I1', 'I1', 'T23', 'AR40'] };
+  // Pick index 1 (the SECOND Rifle Squad) — must remove that exact slot, not "the first I1 found".
+  const after = resolveQuartermasterPick(ps, 1);
+  assert.deepEqual(after.hand, ['I1']);
+  assert.deepEqual(after.deck, ['I1', 'T23', 'AR40'], 'index 0\'s I1, and every other card, stay in their original relative order');
+});
+
+test('resolveQuartermasterPick sends the pick to the Discard Pile instead when the hand is already full (doc 02 Q024)', () => {
+  const ps = { hand: Array(10).fill('I2'), deck: ['I1', 'T23'] };
+  const after = resolveQuartermasterPick(ps, 0);
+  assert.equal(after.hand.length, 10, 'hand stays at the cap');
+  assert.deepEqual(after.discardPile, ['I1']);
+  assert.deepEqual(after.deck, ['T23']);
 });

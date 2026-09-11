@@ -1,5 +1,5 @@
 import { CARD_BY_ID, registerGeneratedCard } from './cards.js?v=2026090402';
-import { getSideValue, getKeywords, attackBeats, applyHit, oppositeDir, unsuppressOnBoard, drawCards, addDiscount, remainingAttacks, spendAttack, grantTempAttacks, resetPersistentAttacks, fuelCapOf, gainFuel } from './state.js?v=2026090402';
+import { getSideValue, getKeywords, attackBeats, applyHit, oppositeDir, unsuppressOnBoard, drawCards, addDiscount, remainingAttacks, spendAttack, grantTempAttacks, resetPersistentAttacks, fuelCapOf, gainFuel, shuffle, addCardToHand } from './state.js?v=2026090402';
 import { canPlaceOnTerrain, getTerrain } from './maps.js?v=2026090402';
 
 // Orthogonal directions and their row/col offsets.
@@ -163,13 +163,16 @@ export function checkHeroPassivesOnPlace(s, active, col, key, card) {
     log.push(`${CARD_BY_ID[heroId].name}: ${card.name} +${amount} all sides (until your next turn) — ${reason}`);
   };
 
-  if (inHeroScope(ps, 'H04', col) && !triggered['H04']) { // Objective Marshal — adjacent to an Objective
+  // Objective Marshal — board-wide, no Column restriction (2026-09 balance pass: was
+  // Column-scoped via inHeroScope, matching H08 below; now fires regardless of which column the
+  // Unit was placed in, same "board-wide, first-Unit-this-turn" shape H21 already uses).
+  if ((ps.heroZones ?? []).includes('H04') && !triggered['H04']) {
     const [row, colNum] = tileCoords(key);
     const onOrAdjacent = s.objectives[key] || adjacentTiles(row, colNum).some(({ key: k }) => s.objectives[k]);
     if (onOrAdjacent) fire('H04', 1, 'adjacent to Objective');
   }
   if (inHeroScope(ps, 'H08', col) && !triggered['H08'] && card.cls === 'Infantry') { // Infantry Commander
-    fire('H08', 2, 'first Infantry this turn');
+    fire('H08', 1, 'first Infantry this turn'); // 2026-09 balance pass: was 2
   }
   if ((ps.heroZones ?? []).includes('H21') && !triggered['H21']) { // Emergency Logistics Officer
     const fueled = gainFuel(s[active], 1); // normal capped gain (respects Logistics Chief via fuelCapOf), not "this turn" temp Fuel
@@ -726,13 +729,40 @@ export function resolveCraftDrawback(s, ownerRole, unitKey, drawback) {
   return { state: recalculateDynamicStats(s), log };
 }
 
-// H25's activation-cost progression: 5 -> 4 -> 3 -> 2 -> 1 -> 1... (min 1), never resets
-// except via a full match restart. Stored on PlayerState as `nextCraftCost` (starts at 5).
+// H25's activation-cost progression: 4 -> 3 -> 2 -> 1 -> 1... (min 1), never resets except via a
+// full match restart. Stored on PlayerState as `nextCraftCost` (starts at 4 — 2026-09 balance
+// pass reduced the starting cost from 5; the floor and per-activation -1 step are unchanged).
 export function nextCraftCost(playerState) {
-  return playerState.nextCraftCost ?? 5;
+  return playerState.nextCraftCost ?? 4;
 }
 export function advanceCraftCost(playerState) {
   return { ...playerState, nextCraftCost: Math.max(1, nextCraftCost(playerState) - 1) };
+}
+
+// ── Quartermaster General (H01) — 2026-09 balance pass ──────────────────────
+// Replaces the old "draw 1 card" with "look at 3 random cards from your deck, choose 1 to put
+// into your hand; the others remain in the deck." Split into two pure steps so the UI layer
+// (game.js) can show the sample in a private picker and only resolve the pick once the player
+// actually chooses — no gameplay state changes until then.
+
+// Samples up to `count` DISTINCT random cards from the deck BY INDEX, not by id — two of the
+// three samples can be the same printed card (e.g. two remaining copies of Rifle Squad), so an
+// id alone can't tell them apart when it's time to remove exactly the one that was picked.
+// Gracefully returns fewer than `count` entries for a deck with fewer cards than that (down to
+// 0 for an empty deck) — the caller decides whether an empty result blocks activation.
+export function sampleRandomFromDeck(deck, count) {
+  const indices = shuffle(deck.map((_, i) => i)).slice(0, Math.min(count, deck.length));
+  return indices.map(index => ({ index, cardId: deck[index] }));
+}
+
+// Resolves the player's choice: the card at `pickedIndex` leaves the deck and goes to hand (or
+// Discard Pile if the hand is already full — doc 02 Q024, same rule Craft/Training Officer use).
+// Every other card — including the sampled-but-not-chosen ones — stays in its original deck
+// position; only the one slot is removed, the rest of the array order is untouched.
+export function resolveQuartermasterPick(playerState, pickedIndex) {
+  const cardId = playerState.deck[pickedIndex];
+  const deck = playerState.deck.filter((_, i) => i !== pickedIndex);
+  return { ...addCardToHand(playerState, cardId), deck };
 }
 
 // ── Hand-instance stat buff (Training Officer, H19) ─────────────────────────
