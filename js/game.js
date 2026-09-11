@@ -29,7 +29,7 @@ import {
   expireTempFuelGrant,
   createBoardUnit,
 } from './state.js?v=2026090402';
-import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, applyGameEvents, unitSuppressedEvent, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff, getObjectivePickEffectType, computeObjectivePickTargets, describeDynamicSideBonus } from './combat.js?v=2026090402';
+import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, applyGameEvents, unitSuppressedEvent, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff, getObjectivePickEffectType, computeObjectivePickTargets, describeDynamicSideBonus, sampleRandomFromDeck, resolveQuartermasterPick } from './combat.js?v=2026090402';
 import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones, showFxPopup, drawFxConnector, describeAttackOutcome, summarizeTurnReadiness, renderEndTurnSummary, buildUnitCardInnerHtml } from './ui.js?v=2026090402';
 import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=2026090402';
 import { pushState, pushVersionedState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby, updatePlayerState } from './firebase.js?v=2026090402';
@@ -360,7 +360,7 @@ function markEventConsumed(id) {
 
 const BLOCKING_MODAL_IDS = [
   'fo-modal', 'field-reserves-modal',
-  'rotate-direction-modal', 'craft-picker-modal', 'hero-deploy-modal',
+  'rotate-direction-modal', 'craft-picker-modal', 'quartermaster-modal', 'hero-deploy-modal',
 ];
 
 function anyBlockingModalOpen() {
@@ -1620,6 +1620,7 @@ function receiveRemoteState(remoteState, { force = false, preserveSyncStatus = f
   const hadPendingChoice = uiState !== 'idle' || pendingCommandId !== null || selectedHeroZone !== null
     || pendingUnitManeuverSource !== null || pendingCommandManeuverSource !== null
     || pendingCoordStrikeFirst !== null || pendingRotation !== null || craftPickerRole !== null
+    || quartermasterRole !== null
     || foCards.length > 0 || fieldReservesCards.length > 0 || anyBlockingModalOpen();
   for (const id of BLOCKING_MODAL_IDS) {
     const el = document.getElementById(id);
@@ -1646,6 +1647,8 @@ function receiveRemoteState(remoteState, { force = false, preserveSyncStatus = f
   fieldReservesCards = [];
   fieldReservesPlayer = null;
   craftPickerRole = null;
+  quartermasterRole = null;
+  quartermasterCandidates = [];
   lastDATargetKey = null;
   selectedHeroZone = null;
   pendingHeroId = null;
@@ -1775,10 +1778,10 @@ function applyHeroPower(s, role, col, hero, targetKey) {
   const opp = role === 'p1' ? 'p2' : 'p1';
 
   switch (hero.id) {
-    case 'H01': // Quartermaster General — draw 1
-      s = { ...s, [role]: drawCards(s[role], 1) };
-      log.push(`${hero.name}: draw 1 card`);
-      break;
+    // H01 Quartermaster General no longer resolves through here (2026-09 balance pass — "draw
+    // 1" replaced with "look at 3 random cards, choose 1"): like H25 Craft, it needs a picker
+    // modal, so it's special-cased directly in tryActivateHero (pay/lock, then
+    // showQuartermasterModal) instead of going through applyHeroPower's instant-effect path.
 
     case 'H07': // Armored Commander — next Tank in THIS COLUMN costs 3 less
       s = { ...s, [role]: addDiscount(s[role], { appliesTo: 'Tank', column: col, amount: 3, min: 0 }) };
@@ -1790,9 +1793,9 @@ function applyHeroPower(s, role, col, hero, targetKey) {
       log.push(`${hero.name}: next Command costs 2 less Fuel`);
       break;
 
-    case 'H17': // HQ Assault Commander — deal 1 damage to enemy HQ
-      s = { ...s, [opp]: { ...s[opp], hq: s[opp].hq - 1 } };
-      log.push(`${hero.name}: 1 damage to ${opp.toUpperCase()}'s HQ`);
+    case 'H17': // HQ Assault Commander — deal 2 damage to enemy HQ (2026-09 balance pass: was 1)
+      s = { ...s, [opp]: { ...s[opp], hq: s[opp].hq - 2 } };
+      log.push(`${hero.name}: 2 damage to ${opp.toUpperCase()}'s HQ`);
       break;
 
     case 'H22': { // Frontline Marshal — ALL units in this column, friendly AND enemy, +2 permanent
@@ -1976,6 +1979,32 @@ function tryActivateHero(role, col) {
   const targets = heroTargetKeys(state, role, col, hero);
 
   if (targets === null) { // instant — no target to pick
+    if (hero.id === 'H01') { // Quartermaster General — look at 3 random cards from the deck,
+      // choose 1 (2026-09 balance pass, replaces "draw 1"). Same pay/lock-then-modal shape as
+      // H25 Craft below. Blocked before spending anything if the deck is empty — there would be
+      // nothing to sample, the same "no valid target" reasoning other Heroes use (e.g. H05
+      // Recovery Officer's suppressed-unit check), even though H01 has no board target as such.
+      if (ps.deck.length === 0) {
+        appendLog([`${hero.name}: deck is empty — nothing to look at`]);
+        return true;
+      }
+      const candidates = sampleRandomFromDeck(ps.deck, 3);
+      const activatedBefore = ps.heroesActivatedThisTurn ?? [];
+      const paid = {
+        ...state,
+        [role]: {
+          ...spendCostMods(ps),
+          fuel: ps.fuel - cost,
+          heroesActivatedThisTurn: activatedBefore.includes(hero.id) ? activatedBefore : [...activatedBefore, hero.id],
+        },
+      };
+      // heroActivationKey here, at the pay/lock commit, same reasoning as H25 below — this is
+      // already the moment heroesActivatedThisTurn records the activation, and the later pick
+      // commit only moves the chosen card into hand, so the glow fires exactly once.
+      commitState(paid, costModLog, undefined, undefined, `${role}-${col}`);
+      showQuartermasterModal(role, candidates);
+      return true;
+    }
     if (hero.id === 'H25') { // Chief Aircraft Engineer — Craft: pay/lock now, resolve the
       // 3-candidate picker via modal (see showCraftPickerModal) rather than applyHeroPower.
       const activatedBefore = ps.heroesActivatedThisTurn ?? [];
@@ -4710,6 +4739,63 @@ function confirmCraftPick(chosenId) {
   craftPickerRole = null;
   // Same fix as confirmFO/confirmFieldReserves: redraw again now the modal is actually closed —
   // commitState's own redraw() ran while it was still open and under-reported turn-readiness.
+  redraw();
+}
+
+// ── Quartermaster picker modal (Quartermaster General, H01) ────────────────────
+// Doc 03 / 2026-09 balance pass: "look at 3 random cards from your deck, choose 1 to put into
+// your hand; the others remain in the deck." Fuel and the once-per-turn activation lock are
+// already committed by tryActivateHero before this modal opens (see the H01 special case
+// there) — this only resolves which sampled card actually leaves the deck. Candidates are
+// tracked by deck INDEX (see sampleRandomFromDeck/resolveQuartermasterPick, combat.js), not
+// card id, since two of the three samples can be the same printed card.
+let quartermasterRole = null;
+let quartermasterCandidates = []; // [{index, cardId}, ...] snapshotted when the modal opened
+
+function showQuartermasterModal(role, candidates) {
+  quartermasterRole = role;
+  quartermasterCandidates = candidates;
+  const container = document.getElementById('quartermaster-cards');
+  container.innerHTML = '';
+  candidates.forEach(({ index, cardId }) => {
+    const card = CARD_BY_ID[cardId];
+    const slot = document.createElement('div');
+    slot.className = 'fo-slot';
+    const preview = buildPreviewCardDiv(card);
+    // Same dual-input convention as Craft/FO/Field Reserves: the preview itself and a dedicated
+    // button are both valid picks, so a natural click on the card doesn't look accepted while
+    // leaving the already-paid modal unresolved.
+    preview.style.cursor = 'pointer';
+    preview.addEventListener('click', () => confirmQuartermasterPick(index));
+    slot.appendChild(preview);
+    const btn = document.createElement('button');
+    btn.className = 'fo-pos-btn fo-top';
+    btn.textContent = 'TAKE THIS';
+    btn.addEventListener('click', () => confirmQuartermasterPick(index));
+    slot.appendChild(btn);
+    container.appendChild(slot);
+  });
+  document.getElementById('quartermaster-modal').style.display = 'flex';
+}
+
+function confirmQuartermasterPick(pickedIndex) {
+  const role = quartermasterRole;
+  const ps = state[role];
+  const chosenId = ps.deck[pickedIndex];
+  const chosen = CARD_BY_ID[chosenId];
+  const s = { ...state, [role]: resolveQuartermasterPick(ps, pickedIndex) };
+  const others = quartermasterCandidates.length - 1;
+  const log = [`Quartermaster General: took ${chosen?.name ?? '?'} — ${others} other sampled card${others === 1 ? '' : 's'} stay in the deck`];
+  // Same fix as confirmFO/confirmFieldReserves/confirmCraftPick: keep the modal open and
+  // quartermasterRole set until the write actually lands, so a sync pause doesn't silently lose
+  // the pick.
+  if (!commitState(s, log)) return;
+  document.getElementById('quartermaster-modal').style.display = 'none';
+  clearPinnedTip();
+  quartermasterRole = null;
+  quartermasterCandidates = [];
+  // Same fix as confirmFO/confirmFieldReserves/confirmCraftPick: redraw again now the modal is
+  // actually closed — commitState's own redraw() ran while it was still open.
   redraw();
 }
 

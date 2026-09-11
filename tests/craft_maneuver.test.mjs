@@ -188,12 +188,13 @@ test('ensureGeneratedCard is idempotent — does not overwrite an already-regist
   assert.equal(CARD_BY_ID['Craft-test-2'].name, 'First', 're-registering the same id must not clobber the existing definition');
 });
 
-test('nextCraftCost/advanceCraftCost: 5 -> 4 -> 3 -> 2 -> 1 -> 1 progression, floor 1', () => {
+test('nextCraftCost/advanceCraftCost: 4 -> 3 -> 2 -> 1 -> 1 -> 1 progression, floor 1', () => {
+  // 2026-09 balance pass: starting cost reduced from 5 to 4 (floor and -1 step unchanged).
   let ps = {};
   const seen = [];
   for (let i = 0; i < 6; i++) {
     seen.push(nextCraftCost(ps));
     ps = advanceCraftCost(ps);
   }
-  assert.deepEqual(seen, [5, 4, 3, 2, 1, 1]);
+  assert.deepEqual(seen, [4, 3, 2, 1, 1, 1]);
 });

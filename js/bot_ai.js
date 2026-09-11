@@ -514,10 +514,12 @@ export function scoreCommand(state, active, cardId) {
 // Static value for Powers not worth simulating precisely; H03/H05/H07/H09/H10/H12/H15/H18/H22/
 // H23 are dynamic below.
 const HERO_POWER_UTILITY_VALUE = {
-  H01: 2,    // Quartermaster General — draw 1 card, instant, no target
+  H01: 2,    // Quartermaster General — look at 3 random cards, choose 1 (2026-09 balance pass:
+             // was "draw 1 card"); instant, no board target either way, same static value as
+             // H25's similarly-shaped 3-candidate picker below
   H11: 0.5,  // Field Coordinator — rotate a Unit in column; direction doesn't affect scoring
   H16: 1,    // Maneuver Commander — Maneuver + reset attacks in column; repositioning utility
-  H17: W_HQ, // HQ Assault Commander — 1 guaranteed enemy-HQ damage, same currency as combat
+  H17: W_HQ * 2, // HQ Assault Commander — 2 guaranteed enemy-HQ damage (2026-09 balance pass: was 1), same currency as combat
   H24: 1.5,  // Long War Commander — escalating permanent buff; Power-level scaling not modeled precisely
   H25: 2,    // Chief Aircraft Engineer — Craft, card/board advantage via the 3-candidate picker
 };
@@ -605,9 +607,12 @@ function columnHasObjective(state, col) {
 // Score deploying hero into board column `col`. Prefers implemented abilities (an
 // implemented:false Hero's ability is a no-op today, same as an unautomated command), rewards
 // column-scoped Heroes going into columns with existing friendly board presence (their bonus
-// compounds) or bordering an objective (several column Heroes, e.g. Objective Marshal, key off
-// objective adjacency — see objectiveAdjacencyScore above), and gives board-scoped Heroes a flat
-// baseline since column choice doesn't affect them.
+// compounds) or bordering an objective (e.g. Infantry Commander keys off having Infantry
+// present; column Heroes generally benefit from objective adjacency — see
+// objectiveAdjacencyScore above), and gives board-scoped Heroes a flat baseline since column
+// choice doesn't affect them. Objective Marshal (H04) moved from Column to Board scope in the
+// 2026-09 balance pass — it now falls into the flat-baseline branch below like any other
+// board-scoped Hero, column placement no longer matters for its own bonus.
 function scoreHeroInColumn(state, active, hero, col) {
   if (hero.implemented === false) return 0.1; // ability is a no-op today — still legal, just weak
   let score = hero.powerType === "active" ? 2 : 1; // immediately-usable Powers score a bit higher
