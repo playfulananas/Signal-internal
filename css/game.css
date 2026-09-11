@@ -176,6 +176,32 @@ body[data-theme="light"] .theme-toggle {
 }
 .theme-toggle:hover { opacity: 0.75; }
 
+/* ── Peek-at-board toggle (fixed, bottom-center) — only shown while a picking modal
+   (BLOCKING_MODAL_IDS in game.js) is open. z-index 700 sits above every picking modal
+   (600) so it stays clickable while one is showing; deliberately floats over the tail of
+   the hand row underneath once a modal is hidden to peek — brief and non-blocking, not
+   worth reserving permanent layout space for. ── */
+.peek-toggle-btn {
+  position: fixed;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 700;
+  background: var(--bg-alt);
+  border: 1px solid var(--gold);
+  color: var(--gold);
+  font-size: 11px;
+  font-weight: bold;
+  letter-spacing: 1px;
+  padding: 7px 18px;
+  border-radius: 999px;
+  cursor: pointer;
+  font-family: 'Arial Narrow', Arial, sans-serif;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.4);
+  transition: opacity 0.15s;
+}
+.peek-toggle-btn:hover { opacity: 0.8; }
+
 /* ── Game layout ── */
 .game-layout {
   display: flex;
@@ -1524,6 +1550,7 @@ body.viewer-p2 .stats-panel {
   letter-spacing: 4px;
   font-family: 'Arial Narrow', Arial, sans-serif;
 }
+.end-log-actions { display: flex; gap: 10px; }
 
 /* ── Light mode explicit overrides (E theme from color_preview.html) ── */
 
@@ -1601,7 +1628,11 @@ body[data-theme="light"] .hc-cost-discounted { color: #007a2e; }
 /* ── Forward Observer / Field Reserves modals — full-screen deck-look
    prompts. Same theming-bug fix as #hero-deploy-modal: was a hardcoded rgba(0,0,0,0.88)
    inline background, stayed dark regardless of the theme toggle. ── */
-#fo-modal, #field-reserves-modal, #rotate-direction-modal, #craft-picker-modal {
+/* #quartermaster-modal added 2026-09-11 — it was left out when the modal was built (H01
+   balance pass) and had no full-screen styling of its own, so it never rendered as a proper
+   overlay. It's structurally identical to the other four (same .fo-title/.fo-subtitle/.fo-cards
+   markup), so it belongs in this shared rule, not a standalone one. */
+#fo-modal, #field-reserves-modal, #rotate-direction-modal, #craft-picker-modal, #quartermaster-modal {
   position: fixed;
   inset: 0;
   background: var(--bg);

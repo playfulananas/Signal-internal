@@ -363,8 +363,47 @@ const BLOCKING_MODAL_IDS = [
   'rotate-direction-modal', 'craft-picker-modal', 'quartermaster-modal', 'hero-deploy-modal',
 ];
 
-function anyBlockingModalOpen() {
+function rawBlockingModalOpen() {
   return BLOCKING_MODAL_IDS.some(id => document.getElementById(id)?.style.display === 'flex');
+}
+
+// Peek-at-board: hides whichever picking modal is open (without resolving or cancelling the
+// pending choice) so the player can check the board, then brings it back. `peekedModalId` must
+// still count as a blocking modal — otherwise hiding the modal to peek would incidentally
+// unblock real game actions (playing a card, attacking) while a choice is still pending
+// underneath. See togglePeek/updatePeekButtonVisibility below for the toggle itself.
+let peekedModalId = null;
+
+function anyBlockingModalOpen() {
+  return peekedModalId !== null || rawBlockingModalOpen();
+}
+
+function updatePeekButtonVisibility() {
+  const btn = document.getElementById('peek-toggle-btn');
+  if (!btn) return;
+  if (peekedModalId) {
+    btn.textContent = '◀ Resume Pick';
+    btn.style.display = '';
+  } else if (rawBlockingModalOpen()) {
+    btn.textContent = '👁 View Board';
+    btn.style.display = '';
+  } else {
+    btn.style.display = 'none';
+  }
+}
+
+function togglePeek() {
+  if (peekedModalId) {
+    const modal = document.getElementById(peekedModalId);
+    if (modal) modal.style.display = 'flex';
+    peekedModalId = null;
+  } else {
+    const openId = BLOCKING_MODAL_IDS.find(id => document.getElementById(id)?.style.display === 'flex');
+    if (!openId) return;
+    document.getElementById(openId).style.display = 'none';
+    peekedModalId = openId;
+  }
+  updatePeekButtonVisibility();
 }
 
 function currentInteractionContext() {
@@ -529,6 +568,7 @@ function showHeroDeploy(title, subtitle, roster, occupiedZones, onConfirm) {
       btn.disabled = occupiedZones[col] != null || picked === null;
       btn.onclick = () => {
         modal.style.display = 'none';
+        updatePeekButtonVisibility();
         onConfirm(picked, col);
       };
       zonesEl.appendChild(btn);
@@ -547,6 +587,7 @@ function showHeroDeploy(title, subtitle, roster, occupiedZones, onConfirm) {
 
   renderZones();
   modal.style.display = 'flex';
+  updatePeekButtonVisibility();
 }
 
 // Places a hero into a zone. Pure — returns the new player state.
@@ -1626,6 +1667,8 @@ function receiveRemoteState(remoteState, { force = false, preserveSyncStatus = f
     const el = document.getElementById(id);
     if (el) el.style.display = 'none';
   }
+  peekedModalId = null; // a peeked modal just got force-closed too — nothing left to resume to
+  updatePeekButtonVisibility();
   clearPinnedTip(); // a modal just closed out from under the player — any pin it held is stale
   uiState = 'idle';
   syncArtyTargetingUiState(); // overrides 'idle' above if this client owes an Artillery Position hit
@@ -4598,6 +4641,7 @@ function showFOModal(drawn, player) {
   });
 
   document.getElementById('fo-modal').style.display = 'flex';
+  updatePeekButtonVisibility();
   updateFOButtons();
 }
 
@@ -4630,6 +4674,7 @@ function confirmFO() {
   // so the player can retry the same Confirm once reconnected.
   if (!commitState(rs.state, [...log, ...rs.log])) return;
   document.getElementById('fo-modal').style.display = 'none';
+  updatePeekButtonVisibility();
   clearPinnedTip();
   checkWin();
   foCards = [];
@@ -4660,6 +4705,7 @@ function showFieldReservesModal(drawn, player) {
     }
   });
   document.getElementById('field-reserves-modal').style.display = 'flex';
+  updatePeekButtonVisibility();
 }
 
 function confirmFieldReserves(takenId) {
@@ -4674,6 +4720,7 @@ function confirmFieldReserves(takenId) {
   // actually lands, so a sync pause doesn't silently lose the pick.
   if (!commitState(s, [msg])) return;
   document.getElementById('field-reserves-modal').style.display = 'none';
+  updatePeekButtonVisibility();
   clearPinnedTip();
   fieldReservesCards = [];
   fieldReservesPlayer = null;
@@ -4714,6 +4761,7 @@ function showCraftPickerModal(role) {
     container.appendChild(slot);
   });
   document.getElementById('craft-picker-modal').style.display = 'flex';
+  updatePeekButtonVisibility();
 }
 
 function confirmCraftPick(chosenId) {
@@ -4735,6 +4783,7 @@ function confirmCraftPick(chosenId) {
   // until the write actually lands, so a sync pause doesn't silently lose the crafted card.
   if (!commitState(s, log)) return;
   document.getElementById('craft-picker-modal').style.display = 'none';
+  updatePeekButtonVisibility();
   clearPinnedTip();
   craftPickerRole = null;
   // Same fix as confirmFO/confirmFieldReserves: redraw again now the modal is actually closed —
@@ -4776,6 +4825,7 @@ function showQuartermasterModal(role, candidates) {
     container.appendChild(slot);
   });
   document.getElementById('quartermaster-modal').style.display = 'flex';
+  updatePeekButtonVisibility();
 }
 
 function confirmQuartermasterPick(pickedIndex) {
@@ -4791,6 +4841,7 @@ function confirmQuartermasterPick(pickedIndex) {
   // the pick.
   if (!commitState(s, log)) return;
   document.getElementById('quartermaster-modal').style.display = 'none';
+  updatePeekButtonVisibility();
   clearPinnedTip();
   quartermasterRole = null;
   quartermasterCandidates = [];
@@ -4809,6 +4860,7 @@ let pendingRotation = null;
 function showRotateDirectionModal(ctx) {
   pendingRotation = ctx;
   document.getElementById('rotate-direction-modal').style.display = 'flex';
+  updatePeekButtonVisibility();
 }
 
 function confirmRotateDirection(direction) { // direction: 1 = clockwise, -1 = counter-clockwise
@@ -4841,6 +4893,7 @@ function confirmRotateDirection(direction) { // direction: 1 = clockwise, -1 = c
   // even if resumeObjectiveResolution's own commit fails, whereas pendingRotation is local-only.
   if (kind === 'objective') {
     document.getElementById('rotate-direction-modal').style.display = 'none';
+    updatePeekButtonVisibility();
     pendingRotation = null;
     resumeObjectiveResolution(next, role, objectiveKey, newLog);
     return;
@@ -4865,12 +4918,47 @@ function confirmRotateDirection(direction) { // direction: 1 = clockwise, -1 = c
   const heroActivationKey = kind === 'hero' ? `${role}-${col}` : undefined;
   if (!commitState(next, finalLog, undefined, undefined, heroActivationKey)) return;
   document.getElementById('rotate-direction-modal').style.display = 'none';
+  updatePeekButtonVisibility();
   pendingRotation = null;
   checkWin();
 }
 
 document.getElementById('rotate-cw-btn').addEventListener('click', () => confirmRotateDirection(1));
 document.getElementById('rotate-ccw-btn').addEventListener('click', () => confirmRotateDirection(-1));
+
+document.getElementById('peek-toggle-btn').addEventListener('click', togglePeek);
+
+// ── Battle log export ────────────────────────────────────────────────────────
+// Reads directly off the rendered #game-log DOM (appendLog in ui.js already appends one
+// .log-entry div per line, in chronological order) rather than keeping a parallel array —
+// the DOM is already the full authoritative history, nothing else to stay in sync with.
+function getLogText() {
+  return Array.from(document.querySelectorAll('#game-log .log-entry')).map(el => el.textContent).join('\n');
+}
+
+document.getElementById('log-copy-btn').addEventListener('click', () => {
+  const btn = document.getElementById('log-copy-btn');
+  navigator.clipboard.writeText(getLogText()).then(() => {
+    const original = btn.textContent;
+    btn.textContent = 'Copied!';
+    btn.disabled = true;
+    setTimeout(() => { btn.textContent = original; btn.disabled = false; }, 1500);
+  });
+});
+
+document.getElementById('log-download-btn').addEventListener('click', () => {
+  const winner = document.getElementById('end-winner').textContent.trim().toLowerCase().replace(/\s+/g, '-') || 'match';
+  const date = new Date().toISOString().slice(0, 10);
+  const blob = new Blob([getLogText()], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `signal-log-${date}-${winner}.txt`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+});
 
 // ── Theme toggle ──────────────────────────────────────────────────────────────
 // The attribute itself is already set by the inline blocking script at the top of <body>

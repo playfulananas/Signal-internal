@@ -14,6 +14,12 @@
   <!-- Theme toggle — fixed top-right, visible on all screens -->
   <button id="theme-toggle" class="theme-toggle">☾ LIGHT</button>
 
+  <!-- Peek-at-board toggle — fixed bottom-center, only shown while one of the picking
+       modals (BLOCKING_MODAL_IDS in game.js) is open. Hides that modal so the board is
+       visible underneath without abandoning the pending choice; click again to bring the
+       modal back. See togglePeek/updatePeekButtonVisibility in game.js. -->
+  <button id="peek-toggle-btn" class="peek-toggle-btn" style="display:none;">👁 View Board</button>
+
   <!-- Shared ability-pip tooltip — position:fixed, appended once at body level so it can
        never be clipped by a card's own overflow:hidden (which every card needs, for its
        own rounded-corner/name-truncation clipping). Any element with a data-tip attribute
@@ -144,6 +150,10 @@
     <div class="end-content">
       <div class="end-winner" id="end-winner"></div>
       <div class="end-subtitle" id="end-subtitle">HQ DESTROYED</div>
+      <div class="end-log-actions">
+        <button class="btn btn-secondary" id="log-copy-btn">Copy Log</button>
+        <button class="btn btn-secondary" id="log-download-btn">Download Log</button>
+      </div>
       <button class="btn btn-primary" onclick="window.location.href='index.html'">Main Menu</button>
     </div>
   </div>
