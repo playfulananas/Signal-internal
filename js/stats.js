@@ -274,3 +274,90 @@ export function recordObjectiveControl(state) {
     }
   });
 }
+
+// ── Final record ───────────────────────────────────────────────────────────────
+// Pure: counters + the final state in, one flat Firebase-safe record out. `winner` is 'p1' | 'p2'
+// | null. Things that can be derived from the final state are derived here instead of tracked
+// live: cards drawn (starting deck minus what's left in the deck), dead cards (hand at the end),
+// fatigue damage (1 + 2 + ... + fatigueCount), and "other" (HQ lost that no recorder claimed).
+// `durationMs` is passed in, measured on the writing client's own clock; it is never derived from
+// endedAt - startedAt, because startedAt comes from the host's clock and the writer may be P2.
+export function buildMatchRecord(state, { winner = null, endReason = 'hq', endedAt = Date.now(), durationMs, site = '' } = {}) {
+  const stats = normalizeStats(state.stats);
+  const players = {};
+  for (const role of ROLES) {
+    const ps = state[role] ?? {};
+    const p = stats.players[role];
+    const remainingDeck = countIds(toArray(ps.deck));
+    const inHand = countIds(toArray(ps.hand).map(statsCardKey));
+    const blank = () => ({ copies: 0, drawn: 0, played: 0, roundSum: 0, fuelSpent: 0, inHandAtEnd: 0 });
+    const cards = {};
+    for (const [id, copies] of Object.entries(p.deck)) {
+      cards[id] = { ...blank(), copies, drawn: Math.max(0, copies - (remainingDeck[id] ?? 0)) };
+    }
+    for (const [id, e] of Object.entries(p.cards)) {
+      const c = cards[id] ?? (cards[id] = blank());
+      c.played = e.played ?? 0;
+      c.roundSum = e.roundSum ?? 0;
+      c.fuelSpent = e.fuelSpent ?? 0;
+    }
+    for (const [id, n] of Object.entries(inHand)) {
+      (cards[id] ?? (cards[id] = blank())).inHandAtEnd = n;
+    }
+
+    const hqDamageTaken = { ...p.hqDamageTaken };
+    const fatigueCount = ps.fatigueCount ?? 0;
+    if (fatigueCount > 0) hqDamageTaken.fatigue = (fatigueCount * (fatigueCount + 1)) / 2;
+    const attributed = Object.values(hqDamageTaken).reduce((a, b) => a + b, 0);
+    const startHq = stats.startHq[role] ?? 30;
+    const other = (startHq - (ps.hq ?? startHq)) - attributed;
+    if (other !== 0) hqDamageTaken.other = other;
+
+    players[role] = {
+      deck: p.deck,
+      heroRoster: p.heroRoster,
+      finalHq: ps.hq ?? null,
+      hqDamageTaken,
+      cards,
+      heroes: p.heroes,
+      trades: p.trades,
+      triggers: p.triggers,
+      directHqUnits: p.directHqUnits,
+      fuelUnspent: p.fuelUnspent,
+      fuelLostToCap: p.fuelLostToCap,
+      mulliganReturned: toArray(ps.mulliganReturned),
+      craftPicks: p.craftPicks,
+    };
+  }
+
+  const objectives = {};
+  for (const [slot, obj] of Object.entries(state.objectives ?? {})) {
+    objectives[slot] = { ...(stats.objectives[slot] ?? {}), cardId: obj.cardId, heldAtEnd: obj.controller ?? 'none' };
+  }
+
+  const turn = state.turn ?? 1;
+  const winnerSeat = winner == null ? 'none' : (winner === stats.firstPlayer ? 'first' : 'second');
+  return JSON.parse(JSON.stringify({
+    v: STATS_SCHEMA_VERSION,
+    matchId: stats.matchId,
+    buildLabel: STATS_BUILD_LABEL,
+    rulesHash: computeRulesHash(),
+    site,
+    mode: stats.mode,
+    source: stats.source,
+    debugUsed: stats.debugUsed,
+    startedAt: stats.startedAt,
+    endedAt,
+    durationMs: Number.isFinite(durationMs) ? Math.max(0, Math.round(durationMs)) : undefined, // undefined is dropped by the JSON round trip
+    mapId: stats.mapId,
+    firstPlayer: stats.firstPlayer,
+    winner,
+    winnerSeat,
+    endReason,
+    turnsPlayed: turn,
+    rounds: Math.ceil(turn / 2),
+    players,
+    objectives,
+    turns: stats.turns,
+  }));
+}

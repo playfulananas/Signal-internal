@@ -216,3 +216,51 @@ test('objective recorders track control per turn, activations, level, backbone a
   });
   assert.deepEqual(s.stats.objectives['2,3'].turnsHeld, { none: 1 });
 });
+
+import { buildMatchRecord, STATS_BUILD_LABEL } from '../js/stats.js?v=2026090402';
+
+test('buildMatchRecord derives drawn/dead cards, fatigue, unattributed damage and winner seat', () => {
+  let s = freshMatch({ turn: 13 });
+  const crafted = craftCandidateToCard({ stats: { n: 6, e: 6, s: 6, w: 6 }, keyword: 'Armor', drawback: 'ownHqDamage' }, 'p1');
+  s = {
+    ...s,
+    // p1: 18 left in deck (9 + 9), so 6 of each card left the deck; ends holding 1 T33 + 1 crafted card.
+    p1: { ...s.p1, hq: 20, fatigueCount: 0, deck: [...Array(9).fill('I1'), ...Array(9).fill('T33')], hand: ['T33', crafted.id], mulliganReturned: ['I1'] },
+    // p2: HQ -1 = 31 damage taken; 25 recorded + 3 fatigue (1 + 2) leaves 3 unattributed.
+    p2: { ...s.p2, hq: -1, fatigueCount: 2, deck: [] },
+    objectives: { '1,0': { cardId: 'O1', level: 4, controller: 'p1' } },
+  };
+  s = recordCardPlayed(s, 'p1', 'T33', 4);
+  s = recordHqDamage(s, 'p2', 25, 'combat');
+  s = recordHqDamage(s, 'p1', 10, 'objectiveBackbone');
+  s = recordObjectiveActivation(s, '1,0', 'p1', 4, 2);
+
+  // endedAt - startedAt would be 998000: durationMs must come from the explicit local-clock value.
+  const record = buildMatchRecord(s, { winner: 'p1', endReason: 'hq', endedAt: 999000, durationMs: 60000.4, site: 'test' });
+  assert.equal(record.winnerSeat, 'first');
+  assert.equal(record.rounds, 7);
+  assert.equal(record.turnsPlayed, 13);
+  assert.equal(record.durationMs, 60000);
+  assert.equal(record.endedAt, 999000);
+  assert.equal(record.buildLabel, STATS_BUILD_LABEL);
+  assert.match(record.rulesHash, /^[0-9a-f]{8}$/);
+  assert.deepEqual(record.players.p1.cards.T33, { copies: 15, drawn: 6, played: 1, roundSum: 7, fuelSpent: 4, inHandAtEnd: 1 });
+  assert.deepEqual(record.players.p1.cards.I1, { copies: 15, drawn: 6, played: 0, roundSum: 0, fuelSpent: 0, inHandAtEnd: 0 });
+  assert.equal(record.players.p1.cards.CRAFTED.inHandAtEnd, 1);
+  assert.deepEqual(record.players.p1.hqDamageTaken, { objectiveBackbone: 10 });
+  assert.deepEqual(record.players.p2.hqDamageTaken, { combat: 25, fatigue: 3, other: 3 });
+  assert.deepEqual(record.players.p1.mulliganReturned, ['I1']);
+  assert.equal(record.players.p2.finalHq, -1);
+  assert.equal(record.objectives['1,0'].cardId, 'O1');
+  assert.equal(record.objectives['1,0'].heldAtEnd, 'p1');
+  assert.deepEqual(record.objectives['1,0'].backbone, { p1: 2 });
+  assert.deepEqual(JSON.parse(JSON.stringify(record)), record, 'record must be Firebase-safe');
+});
+
+test('buildMatchRecord for a match with no winner (disconnect) and no known duration', () => {
+  const record = buildMatchRecord(freshMatch(), { winner: null, endReason: 'disconnect', endedAt: 5000, site: 'test' });
+  assert.equal(record.winnerSeat, 'none');
+  assert.equal(record.endReason, 'disconnect');
+  assert.equal('durationMs' in record, false, 'never derived from two different clocks');
+  assert.deepEqual(JSON.parse(JSON.stringify(record)), record);
+});
