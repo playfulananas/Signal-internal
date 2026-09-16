@@ -1556,6 +1556,21 @@ body.viewer-p2 .stats-panel {
 .end-stats textarea { width: 100%; resize: vertical; background: var(--bg); color: inherit; border: 1px solid var(--end-sub); border-radius: 3px; padding: 6px 8px; font-family: inherit; font-size: 12px; }
 .end-stats-status { min-height: 14px; font-size: 11px; color: var(--end-sub); }
 
+/* ── Statistics page (stats.html) ── */
+.stats-page { max-width: 1200px; margin: 0 auto; padding: 24px 16px 64px; }
+.stats-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; margin: 16px 0 8px; font-size: 12px; letter-spacing: 1px; font-family: 'Arial Narrow', Arial, sans-serif; }
+.stats-filters label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
+.stats-filters select { background: var(--bg); color: inherit; border: 1px solid var(--end-sub); padding: 3px 6px; }
+.stats-status { min-height: 16px; font-size: 12px; color: var(--end-sub); }
+.stats-section { margin-top: 28px; }
+.stats-section-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.stats-section-header h2 { margin: 0; font-size: 14px; letter-spacing: 3px; color: var(--gold); font-family: 'Arial Narrow', Arial, sans-serif; }
+.stats-table-wrap { margin-top: 8px; overflow-x: auto; }
+.stats-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.stats-table th, .stats-table td { padding: 4px 8px; text-align: left; white-space: nowrap; border-bottom: 1px solid var(--end-sub); }
+.stats-table th { cursor: pointer; user-select: none; }
+.stats-table input[type="text"] { width: 220px; background: var(--bg); color: inherit; border: 1px solid var(--end-sub); padding: 2px 4px; }
+
 /* ── Light mode explicit overrides (E theme from color_preview.html) ── */
 
 /* Hand cards */

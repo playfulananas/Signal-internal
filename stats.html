@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>SIGNAL — Statistics</title>
+  <link rel="stylesheet" href="css/game.css?v=2026090402">
+</head>
+<body>
+  <script>(function(){try{if(localStorage.getItem('signal-theme')==='light')document.body.dataset.theme='light';}catch(e){}})();</script>
+  <button id="theme-toggle" class="theme-toggle">☾ LIGHT</button>
+
+  <div class="stats-page">
+    <div class="db-header">
+      <div>
+        <div class="lobby-title" style="font-size:30px;">STATISTICS</div>
+        <div class="lobby-subtitle" id="stats-count">LOADING…</div>
+      </div>
+      <button class="btn btn-secondary" id="stats-back">Main Menu</button>
+    </div>
+
+    <div class="stats-filters">
+      <label><input type="checkbox" id="f-included" checked> Included only</label>
+      <label><input type="checkbox" id="f-exclude-debug" checked> Exclude debug-panel matches</label>
+      <span>SOURCE</span>
+      <label><input type="checkbox" name="f-source" value="human" checked> Human</label>
+      <label><input type="checkbox" name="f-source" value="selfplay"> Bot self-play</label>
+      <span>MODE</span>
+      <label><input type="checkbox" name="f-mode" value="online" checked> Online</label>
+      <label><input type="checkbox" name="f-mode" value="vsAi" checked> vs AI</label>
+      <label><input type="checkbox" name="f-mode" value="hotseat" checked> Local</label>
+      <label>BUILD <select id="f-build"><option value="">All</option></select></label>
+      <button class="btn btn-secondary" id="stats-reload">Reload from Firebase</button>
+      <label class="btn btn-secondary">Load self-play file<input type="file" id="f-file" accept=".jsonl,.txt" hidden></label>
+    </div>
+    <div class="stats-status" id="stats-status"></div>
+    <div id="stats-sections"></div>
+  </div>
+
+  <script type="module" src="./js/stats-page.js?v=2026090402"></script>
+</body>
+</html>
