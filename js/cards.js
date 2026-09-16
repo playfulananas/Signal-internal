@@ -63,7 +63,7 @@ export const CARDS = [
   { id:"T30", name:"Panzer Brigade",      cls:"Tank", rarity:"Common", type:"unit", cost:5, copies:2, keyword:"Heavy Armor", n:6, e:5, s:5, w:6, ability:null },
   { id:"T31", name:"Tiger I",             cls:"Tank", rarity:"Common", type:"unit", cost:6, copies:2, keyword:"Heavy Armor", n:7, e:7, s:8, w:5, ability:null },
   { id:"T32", name:"Tank Hunter",         cls:"Tank", rarity:"Common", type:"unit", cost:3, copies:2, keyword:"Breakthrough", n:6, e:4, s:3, w:5, ability:"Breakthrough: this Unit gains +1 all sides permanently." },
-  { id:"T33", name:"Tank Destroyer",      cls:"Tank", rarity:"Common", type:"unit", cost:4, copies:2, keyword:"Breakthrough", n:5, e:6, s:5, w:6, ability:"Breakthrough: your next Tank costs 1 Fuel (set-cost; other reductions can still apply)." },
+  { id:"T33", name:"Tank Destroyer",      cls:"Tank", rarity:"Common", type:"unit", cost:4, copies:2, keyword:"Breakthrough", n:5, e:6, s:5, w:6, ability:"Breakthrough: your next Tank costs 1 Fuel less." },
   { id:"T34", name:"Breakthrough Tank",   cls:"Tank", rarity:"Common", type:"unit", cost:5, copies:2, keyword:"Breakthrough", n:6, e:7, s:6, w:7, ability:"Breakthrough: this Unit gains Armor." },
   { id:"T35", name:"Ace Tank",            cls:"Tank", rarity:"Common", type:"unit", cost:6, copies:2, keyword:"Breakthrough", n:6, e:6, s:9, w:6, ability:"Breakthrough: this Unit gains Double Attack." },
   { id:"T36", name:"Flak Halftrack",      cls:"Tank", rarity:"Common", type:"unit", cost:4, copies:2, keyword:"Double Attack", n:5, e:5, s:4, w:6, ability:null },

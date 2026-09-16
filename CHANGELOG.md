@@ -9,6 +9,27 @@ Newest first.
 
 ---
 
+## 2026-09-16 — Playtest corrections from 15 September
+
+Three bugs Filip reported from the 15 September playtest.
+
+- **H07 Armored Commander discounted Tank Commands.** The cause was in `discountMatches`
+  (`js/state.js`), not H07 itself: class discounts only checked `card.cls`, and C27 Blitzkrieg
+  Order, C28 Field Repairs and C29 Armored Offensive all have `cls:"Tank"`. Class discounts now
+  require `type === 'unit'`. Same fix covers every other "next Tank" source, which all had the
+  same leak: C29 Armored Offensive, Factory L3, and T33 Tank Destroyer.
+- **Crafted Aircraft (H25 Craft) random stat lines now have a minimum of 1 per side**, was 0.
+  The fixed 6/6/6/6 option and the 27 total are unchanged. `randomStatsTotaling27` (`js/combat.js`)
+  starts each side at 1 and splits the remaining 23. This reverses the Section 8 QA checklist's
+  "zero side is legal" item, and the old test for it was flipped to check that no side is 0.
+- **T33 Tank Destroyer's Breakthrough is now "your next Tank costs 1 Fuel less"**, was "costs 1
+  Fuel" (set-cost). Now a normal -1 Tank discount. The `setCost` support in `discountFor` stays
+  in place (doc 01 §3 rule), but no card uses it now.
+- Tests: new class-discount-vs-Command test, T33 test rewritten, Craft stat-floor tests updated.
+  `npm test` 256/256. `CARD_TRUTH.md` regenerated.
+
+---
+
 ## 2026-09-11 — Applied the approved Artillery balance pass
 
 Implementation handoff from "SIGNAL Artillery balance changes" (approved by Denis, 11 September

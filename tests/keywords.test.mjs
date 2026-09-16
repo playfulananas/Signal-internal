@@ -71,6 +71,16 @@ test("discountFor: appliesTo 'unit' does NOT match a Command", () => {
   assert.equal(discountFor(ps, { type: 'command', cost: 3 }, null), 0);
 });
 
+// 2026-09-15 playtest: H07 Armored Commander's "next Tank" discount was reducing Tank-class
+// Commands (C27-C29 carry cls:"Tank"), because class matching ignored card type.
+test("discountFor: a class appliesTo ('Tank') matches Tank Units only, never a Tank-class Command", () => {
+  const ps = addDiscount({ pendingDiscounts: [] }, { appliesTo: 'Tank', column: 1, amount: 3, min: 0 });
+  assert.equal(discountFor(ps, { type: 'unit', cls: 'Tank', cost: 5 }, 1), 3);
+  assert.equal(discountFor(ps, { type: 'unit', cls: 'Infantry', cost: 5 }, 1), 0);
+  assert.equal(discountFor(ps, CARD_BY_ID['C28'], null), 0, 'Field Repairs (cls Tank) is a Command');
+  assert.equal(discountFor(ps, CARD_BY_ID['C29'], null), 0, 'Armored Offensive (cls Tank) is a Command');
+});
+
 // ── Section 3/5: Guard / Precision ──────────────────────────────────────────
 
 test('Guard: a reachable Guard candidate restricts the legal-target pool to Guard only', () => {
@@ -354,11 +364,11 @@ test('Breakthrough (T32 Tank Hunter): the surviving attacker gains +1 all sides 
   assert.equal(after.board['0,0'].permanentSideBonus, 1);
 });
 
-test('Breakthrough (T33 Tank Destroyer): sets a Tank set-cost discount that other reductions can still stack through', () => {
+test('Breakthrough (T33 Tank Destroyer): next Tank costs 1 Fuel less, not set to 1', () => {
   const state = baseState(boardWith({ '0,0': unit('p1', 'T33'), '0,1': unit('p2', 'I1') }));
   const { state: after } = resolveDestructionChain(state, { unitKey: '0,1', sourceUnitKey: '0,0' });
-  const tankCard = { cost: 5, cls: 'Tank' };
-  assert.equal(discountFor(after.p1, tankCard, null), 4, 'Tank Destroyer sets cost to 1, i.e. a discount of (cost - 1)');
+  assert.equal(discountFor(after.p1, { type: 'unit', cls: 'Tank', cost: 5 }, null), 1, 'a 5-cost Tank costs 4, not 1');
+  assert.equal(discountFor(after.p1, { type: 'command', cls: 'Tank', cost: 1 }, null), 0, 'does not touch Tank Commands');
 });
 
 test('Breakthrough (T34 Breakthrough Tank): gains Armor, no-ops if it already has Armor/Heavy Armor', () => {

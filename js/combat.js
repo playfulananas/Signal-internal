@@ -552,10 +552,10 @@ function runBreakthroughEffect(s, key, unit, card) {
       s = { ...s, board: { ...s.board, [key]: { ...unit, permanentSideBonus: (unit.permanentSideBonus || 0) + 1 } } };
       log.push(`${tag} +1 all sides (permanent)`);
       return { state: s, log, causalityTargets: [key] };
-    case 'T33': { // Tank Destroyer — your next Tank costs 1 Fuel (set-cost; see discountFor's
-      // `setCost` handling in state.js — other reductions can still stack on top, down to 0).
-      s = { ...s, [unit.owner]: addDiscount(s[unit.owner], { appliesTo: 'Tank', column: null, setCost: 1 }) };
-      log.push(`${tag} next Tank costs 1 Fuel`);
+    case 'T33': { // Tank Destroyer — your next Tank costs 1 Fuel less (2026-09-16 playtest
+      // correction: was a set-cost-to-1, which read as a far bigger discount than intended).
+      s = { ...s, [unit.owner]: addDiscount(s[unit.owner], { appliesTo: 'Tank', column: null, amount: 1, min: 0 }) };
+      log.push(`${tag} next Tank costs 1 less Fuel`);
       return { state: s, log, causalityTargets: [] };
     }
     case 'T34': { // Breakthrough Tank — gains Armor (permanent — no "until" wording on this
@@ -649,11 +649,13 @@ export function getAttackableTargets(state, attackerKey) {
 // Keyword: one of Bombard/Double Attack/Armor. Drawback: one of the 3 below. Each candidate
 // picks independently across all three pools.
 function randomStatsTotaling27() {
-  // Stick-breaking: 3 random cut points in [0,27] split the range into 4 non-negative parts
-  // summing to exactly 27 — satisfies doc 01's "min 0 each side, no max" constraint; the
-  // exact distribution algorithm is implementation-defined per doc 05 §20.
-  const cuts = [0, 27, Math.floor(Math.random() * 28), Math.floor(Math.random() * 28), Math.floor(Math.random() * 28)].sort((a, b) => a - b);
-  return { n: cuts[1] - cuts[0], e: cuts[2] - cuts[1], s: cuts[3] - cuts[2], w: cuts[4] - cuts[3] };
+  // Min 1 each side, no max (2026-09-16 playtest correction: doc 01 allowed 0). Every side
+  // starts at 1, then stick-breaking splits the remaining 23: 3 random cut points in [0,23]
+  // give 4 non-negative parts. The exact distribution algorithm is implementation-defined
+  // per doc 05 §20.
+  const spare = 27 - 4;
+  const cuts = [0, spare, Math.floor(Math.random() * (spare + 1)), Math.floor(Math.random() * (spare + 1)), Math.floor(Math.random() * (spare + 1))].sort((a, b) => a - b);
+  return { n: 1 + cuts[1] - cuts[0], e: 1 + cuts[2] - cuts[1], s: 1 + cuts[3] - cuts[2], w: 1 + cuts[4] - cuts[3] };
 }
 
 const CRAFT_KEYWORD_POOL = ['Bombard', 'Double Attack', 'Armor'];

@@ -69,7 +69,7 @@ test('generateCraftCandidates returns exactly 3 candidates, each with a valid ke
     const total = c.stats.n + c.stats.e + c.stats.s + c.stats.w;
     const isFixed = c.stats.n === 6 && c.stats.e === 6 && c.stats.s === 6 && c.stats.w === 6;
     assert.ok(isFixed || total === 27, `stats must be 6/6/6/6 or total 27, got ${JSON.stringify(c.stats)}`);
-    assert.ok(c.stats.n >= 0 && c.stats.e >= 0 && c.stats.s >= 0 && c.stats.w >= 0, 'no negative side');
+    assert.ok(c.stats.n >= 1 && c.stats.e >= 1 && c.stats.s >= 1 && c.stats.w >= 1, 'every side at least 1');
   }
 });
 
@@ -82,10 +82,10 @@ test('random27 stats integrity holds across many rolls', () => {
   }
 });
 
-// Checklist Section 8: "6/6/6/6 stats option can occur" and "zero side is legal" — both are
-// probabilistic, so assert they actually show up across enough rolls rather than just being
-// theoretically possible (a regression that silently narrowed either range wouldn't fail the
-// integrity check above, since e.g. always-random27 or always-nonzero would still pass it).
+// Checklist Section 8: "6/6/6/6 stats option can occur" — probabilistic, so assert it actually
+// shows up across enough rolls rather than just being theoretically possible. The checklist's
+// "zero side is legal" was reversed by the 2026-09-15 playtest (min 1 per side): the test below
+// now checks a 1-value side still occurs, so the floor is 1 and not accidentally higher.
 test('the fixed 6/6/6/6 stats option actually occurs across many rolls', () => {
   let sawFixed = false;
   for (let i = 0; i < 500 && !sawFixed; i++) {
@@ -95,13 +95,15 @@ test('the fixed 6/6/6/6 stats option actually occurs across many rolls', () => {
   assert.ok(sawFixed, '6/6/6/6 never rolled in 500 tries — statsRoll===0 branch may be broken');
 });
 
-test('a zero-value side actually occurs across many random27 rolls', () => {
-  let sawZero = false;
-  for (let i = 0; i < 500 && !sawZero; i++) {
+test('random27 never rolls a zero side, but a 1-value side does occur', () => {
+  let sawOne = false;
+  for (let i = 0; i < 500; i++) {
     const [c] = generateCraftCandidates();
-    if ([c.stats.n, c.stats.e, c.stats.s, c.stats.w].includes(0)) sawZero = true;
+    const sides = [c.stats.n, c.stats.e, c.stats.s, c.stats.w];
+    assert.ok(!sides.includes(0), `zero side rolled: ${JSON.stringify(c.stats)}`);
+    if (sides.includes(1)) sawOne = true;
   }
-  assert.ok(sawZero, 'no zero side rolled in 500 tries — stick-breaking cut points may never collide');
+  assert.ok(sawOne, 'no 1-value side rolled in 500 tries — floor may be higher than 1');
 });
 
 test('craftCandidateToCard produces a real Aircraft card definition, not in the static pool', () => {

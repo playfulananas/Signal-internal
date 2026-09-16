@@ -405,7 +405,10 @@ function discountMatches(d, card, col) {
   // 'unit' means "any Unit class" (Factory L2/L4's "next Unit played" — as opposed to a
   // specific class like 'Tank'/'Aircraft', or a Command, which 'unit' must exclude).
   else if (d.appliesTo === 'unit') { if (card.type !== 'unit') return false; }
-  else if (d.appliesTo && card.cls !== d.appliesTo) return false;
+  // A class name means "a Unit of that class". Commands carry a cls too (C27-C29 are
+  // cls:"Tank"), so without the type check "your next Tank" discounts (H07, C29, Factory L3,
+  // T33) also discounted Tank Commands. Found in 2026-09-15 playtest.
+  else if (d.appliesTo && (card.type !== 'unit' || card.cls !== d.appliesTo)) return false;
   // col === null means "don't filter by column" — used by the hand display and the
   // affordability pre-check, which run before a tile has been chosen, so they show the
   // best case. Placement passes the real column and gets the true figure.
@@ -416,8 +419,8 @@ function discountMatches(d, card, col) {
 // Total Fuel reduction available to this card, relative to its PRINTED cost.
 // Doc 01 §3: "If an effect sets a cost to a specific value, apply the set-cost first, then
 // other reductions; normal minimum remains 0 unless explicitly overridden." A `setCost` entry
-// (Breakthrough: Tank Destroyer) replaces the baseline cost outright; ordinary subtractive
-// entries then apply against THAT baseline (floor 0 unless a matching entry sets a higher
+// (no current card uses one; T33 Tank Destroyer did until 2026-09-16) replaces the baseline
+// cost outright; ordinary subtractive entries then apply against THAT baseline (floor 0 unless a matching entry sets a higher
 // `min`) — so a set-cost is not itself a floor other discounts are blocked by.
 export function discountFor(playerState, card, col = null) {
   const matches = (playerState.pendingDiscounts ?? []).filter(d => discountMatches(d, card, col));

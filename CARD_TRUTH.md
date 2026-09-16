@@ -4,7 +4,7 @@
 any time `js/cards.js` changes. Every value here comes directly from `CARDS` in that file — the
 code that actually runs — so this can never drift the way `card_list.csv` did (see CLAUDE.md).
 
-Generated: 2026-09-11
+Generated: 2026-09-16
 
 65 Units • 25 Heroes • 35 Commands • 5 Objectives • 125 collectible
 
@@ -51,7 +51,7 @@ Generated: 2026-09-11
 | T30 | Panzer Brigade | 5 | 2 | Heavy Armor | 6/5/5/6 | — |
 | T31 | Tiger I | 6 | 2 | Heavy Armor | 7/7/8/5 | — |
 | T32 | Tank Hunter | 3 | 2 | Breakthrough | 6/4/3/5 | Breakthrough: this Unit gains +1 all sides permanently. |
-| T33 | Tank Destroyer | 4 | 2 | Breakthrough | 5/6/5/6 | Breakthrough: your next Tank costs 1 Fuel (set-cost; other reductions can still apply). |
+| T33 | Tank Destroyer | 4 | 2 | Breakthrough | 5/6/5/6 | Breakthrough: your next Tank costs 1 Fuel less. |
 | T34 | Breakthrough Tank | 5 | 2 | Breakthrough | 6/7/6/7 | Breakthrough: this Unit gains Armor. |
 | T35 | Ace Tank | 6 | 2 | Breakthrough | 6/6/9/6 | Breakthrough: this Unit gains Double Attack. |
 | T36 | Flak Halftrack | 4 | 2 | Double Attack | 5/5/4/6 | — |
