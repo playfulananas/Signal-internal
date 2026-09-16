@@ -149,3 +149,30 @@ export async function fetchUserDecks(uid) {
   // Firebase can return a sparse array as an object keyed by index — normalize.
   return Array.isArray(val) ? val : Object.values(val);
 }
+
+// ── Match statistics (docs/plans/2026-09-16-match-statistics.md) ───────────────
+// game.html never calls initAuth; it relies on the anonymous session index.html created, which
+// Firebase restores from its own storage asynchronously. Wait for that restore and sign in only
+// if there was no session, so a stats write can't fail an `auth != null` rule on a cold load.
+export async function ensureSignedIn() {
+  await auth.authStateReady();
+  if (!auth.currentUser) await signInAnonymously(auth);
+  return auth.currentUser.uid;
+}
+
+export async function writeMatchRecord(matchId, record) {
+  await ensureSignedIn();
+  await set(ref(db, `stats/matches/${matchId}`), record);
+}
+
+// Separate path from the record, so a late record write can never overwrite the host's choice.
+export async function writeMatchMeta(matchId, meta) {
+  await ensureSignedIn();
+  await set(ref(db, `stats/meta/${matchId}`), meta);
+}
+
+export async function fetchStatsData() {
+  await ensureSignedIn();
+  const [matches, meta] = await Promise.all([get(ref(db, 'stats/matches')), get(ref(db, 'stats/meta'))]);
+  return { matches: matches.val() ?? {}, meta: meta.val() ?? {} };
+}
