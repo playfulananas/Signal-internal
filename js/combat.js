@@ -1,6 +1,7 @@
 import { CARD_BY_ID, registerGeneratedCard } from './cards.js?v=2026090402';
 import { getSideValue, getKeywords, attackBeats, applyHit, oppositeDir, unsuppressOnBoard, drawCards, addDiscount, remainingAttacks, spendAttack, grantTempAttacks, resetPersistentAttacks, fuelCapOf, gainFuel, shuffle, addCardToHand } from './state.js?v=2026090402';
 import { canPlaceOnTerrain, getTerrain } from './maps.js?v=2026090402';
+import { recordHqDamage, recordUnitHits, recordTrigger, recordFuelLostToCap } from './stats.js?v=2026090402';
 
 // Orthogonal directions and their row/col offsets.
 const DIRS = ["n", "e", "s", "w"];
@@ -175,11 +176,14 @@ export function checkHeroPassivesOnPlace(s, active, col, key, card) {
     fire('H08', 1, 'first Infantry this turn'); // 2026-09 balance pass: was 2
   }
   if ((ps.heroZones ?? []).includes('H21') && !triggered['H21']) { // Emergency Logistics Officer
+    const fuelBeforeH21 = s[active].fuel;
     const fueled = gainFuel(s[active], 1); // normal capped gain (respects Logistics Chief via fuelCapOf), not "this turn" temp Fuel
     s = {
       ...s,
       [active]: { ...fueled, hq: fueled.hq - 1, heroTriggeredThisTurn: { ...fueled.heroTriggeredThisTurn, H21: true } },
     };
+    s = recordFuelLostToCap(s, active, 1 - (fueled.fuel - fuelBeforeH21));
+    s = recordHqDamage(s, active, 1, 'selfInflicted');
     log.push(`${CARD_BY_ID['H21'].name}: +1 Fuel, 1 damage to own HQ — first Unit played this turn`);
   }
 
@@ -345,6 +349,7 @@ export function checkRally(s, attackerKey) {
   const log = [];
   const causalityTargets = [];
   const tag = `${card.name} (Rally):`;
+  s = recordTrigger(s, owner, 'Rally', card.id);
 
   switch (card.id) {
     case 'I12': // Assault Trooper — draw 1
@@ -445,6 +450,7 @@ export function resolveDestructionChain(s, { unitKey, sourceUnitKey = null, caus
     for (let i = 0; i < (doubled ? 2 : 1); i++) {
       const r = runLastStandEffect(s, unitKey, dyingUnit, card, owner, usedTargets);
       s = r.state;
+      s = recordTrigger(s, owner, 'Last Stand', dyingUnit.cardId);
       log.push(...r.log);
       causalityTargets.push(...(r.causalityTargets ?? []));
       if (r.targetKey) usedTargets.add(r.targetKey);
@@ -459,6 +465,7 @@ export function resolveDestructionChain(s, { unitKey, sourceUnitKey = null, caus
       const sourceCard = CARD_BY_ID[sourceUnit.cardId];
       const r = runBreakthroughEffect(s, sourceUnitKey, sourceUnit, sourceCard);
       s = r.state;
+      s = recordTrigger(s, sourceUnit.owner, 'Breakthrough', sourceUnit.cardId);
       log.push(...r.log);
       causalityTargets.push(...(r.causalityTargets ?? []));
       s = recalculateDynamicStats(s);
@@ -488,6 +495,7 @@ export function applyPostDestructionEffects(s, { unitKey, dyingUnit, sourceUnitK
     for (let i = 0; i < (doubled ? 2 : 1); i++) {
       const r = runLastStandEffect(s, unitKey, dyingUnit, card, owner, usedTargets);
       s = r.state;
+      s = recordTrigger(s, owner, 'Last Stand', dyingUnit.cardId);
       log.push(...r.log);
       causalityTargets.push(...(r.causalityTargets ?? []));
       if (r.targetKey) usedTargets.add(r.targetKey);
@@ -501,6 +509,7 @@ export function applyPostDestructionEffects(s, { unitKey, dyingUnit, sourceUnitK
       const sourceCard = CARD_BY_ID[sourceUnit.cardId];
       const r = runBreakthroughEffect(s, sourceUnitKey, sourceUnit, sourceCard);
       s = r.state;
+      s = recordTrigger(s, sourceUnit.owner, 'Breakthrough', sourceUnit.cardId);
       log.push(...r.log);
       causalityTargets.push(...(r.causalityTargets ?? []));
       s = recalculateDynamicStats(s);
@@ -715,6 +724,7 @@ export function resolveCraftDrawback(s, ownerRole, unitKey, drawback) {
     log.push('Craft drawback: every friendly Unit independently rotates 90° left or right');
   } else if (drawback === 'ownHqDamage') {
     s = { ...s, [ownerRole]: { ...s[ownerRole], hq: s[ownerRole].hq - 3 } };
+    s = recordHqDamage(s, ownerRole, 3, 'selfInflicted');
     log.push('Craft drawback: 3 damage to own HQ');
   } else if (drawback === 'suppressRandomFriendly') {
     const list = unitsOnBoard(s, ownerRole).filter(({ unit }) => unit.state === 'normal');
@@ -722,6 +732,7 @@ export function resolveCraftDrawback(s, ownerRole, unitKey, drawback) {
       const pick = list[Math.floor(Math.random() * list.length)];
       const suppressed = { ...pick.unit, state: 'suppressed' };
       s = { ...s, board: { ...s.board, [pick.key]: suppressed } };
+      s = recordUnitHits(s, ownerRole, 'self', { [pick.key]: pick.unit }, [{ key: pick.key, newUnit: suppressed }]);
       log.push(`Craft drawback: ${CARD_BY_ID[pick.unit.cardId]?.name ?? 'a friendly Unit'} suppressed`);
       const triggered = applyGameEvents(s, [unitSuppressedEvent(pick.key, pick.unit, suppressed)]);
       s = triggered.state;
@@ -784,8 +795,10 @@ export function applyHandBuff(playerState, amount, filterFn, role) {
   const newHand = playerState.hand.map(cardId => {
     const card = CARD_BY_ID[cardId];
     if (!card || card.type !== 'unit' || !filterFn(card)) return cardId;
+    // statsBaseId: match statistics count this copy as the printed card it came from (see
+    // statsCardKey in stats.js). Travels in generatedCards with the rest of the definition.
     const buffed = registerGeneratedCard({
-      ...card, n: card.n + amount, e: card.e + amount, s: card.s + amount, w: card.w + amount,
+      ...card, statsBaseId: card.statsBaseId ?? card.id, n: card.n + amount, e: card.e + amount, s: card.s + amount, w: card.w + amount,
     }, role);
     generated.push(buffed);
     log.push(`${card.name} +${amount} all sides (permanent)`);
