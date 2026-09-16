@@ -32,7 +32,8 @@ import {
 import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, applyGameEvents, unitSuppressedEvent, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff, getObjectivePickEffectType, computeObjectivePickTargets, describeDynamicSideBonus, sampleRandomFromDeck, resolveQuartermasterPick } from './combat.js?v=2026090402';
 import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones, showFxPopup, drawFxConnector, describeAttackOutcome, summarizeTurnReadiness, renderEndTurnSummary, buildUnitCardInnerHtml } from './ui.js?v=2026090402';
 import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=2026090402';
-import { pushState, pushVersionedState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby, updatePlayerState } from './firebase.js?v=2026090402';
+import { pushState, pushVersionedState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby, updatePlayerState, writeMatchRecord, writeMatchMeta } from './firebase.js?v=2026090402';
+import { createMatchStats, normalizeStats, markDebugUsed, recordCardPlayed, recordHqDamage, recordUnitHits, recordHeroDeployed, recordHeroActivation, recordDirectHq, recordFuelLostToCap, recordTurnEnd, recordTerminalTurn, recordCraftPick, recordObjectiveActivation, recordObjectiveYield, recordObjectiveControl, buildMatchRecord } from './stats.js?v=2026090402';
 import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=2026090402';
 import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=2026090402';
 import { runBotTurn } from './bot_player.js?v=2026090402';
@@ -340,6 +341,11 @@ let lastTransitionFlags = new Map(); // tileKey -> 'suppressed'|'destroyed'|'arm
 let lastObjectiveTransitionFlags = new Map(); // tileKey -> 'obj-captured'|'obj-leveled' this commit — same one-shot idea, kept separate from lastTransitionFlags since it describes the objective at that tile, not a unit
 let lastHeroActivationKey = null; // "role-col" of the Hero Zone that just fired this commit, or null
 let gameOver = false;
+// Match statistics, both on this client's own clock (never compared with the other client's):
+// when the current turn started here (null when it's not this client's turn to measure), and when
+// the match became playable here. See recordTurnEnd / buildMatchRecord in stats.js.
+let turnStartedAtMs = null;
+let matchStartedAtMs = null;
 
 // Identity-based dedup for the _eventHistory animation system (see buildLastEvent/commitState/
 // receiveRemoteState) — every event id this client has already played-or-decided-not-to-play,
@@ -490,7 +496,9 @@ function applyMulligan(s, role, indices) {
   const keep = ps.hand.filter((_, i) => !indices.includes(i));
   const newDeck = shuffle([...putBack, ...ps.deck]);
   const drawn = newDeck.slice(0, putBack.length);
-  return { ...s, [role]: { ...ps, hand: [...keep, ...drawn], deck: newDeck.slice(putBack.length) } };
+  // mulliganReturned lives on the player slice (not state.stats) because online mulligans are
+  // written with updatePlayerState, which only sends that player's slice.
+  return { ...s, [role]: { ...ps, hand: [...keep, ...drawn], deck: newDeck.slice(putBack.length), mulliganReturned: putBack } };
 }
 
 function renderMulliganCards(hand) {
@@ -701,8 +709,27 @@ function runHeroPhase(role) {
 // Heroes are no longer picked before the match — the first one deploys at round 2
 // (Objective Level 1) via runHeroPhase, same mechanism as every later reinforcement.
 // See lastObjLevel: 0 in state.js and the timing note on runHeroPhase.
+// selfplay_test.mjs sets this before loading the page, so bot-vs-bot games are tagged and kept
+// out of Firebase. Everything else is a human game.
+function statsSource() {
+  try {
+    return localStorage.getItem('signal-stats-source') === 'selfplay' ? 'selfplay' : 'human';
+  } catch {
+    return 'human';
+  }
+}
+
 function startGame(p1Ids, p2Ids, mapId, p1Heroes = [], p2Heroes = []) {
   let s = createInitialState(p1Ids, p2Ids, mapId, p1Heroes, p2Heroes);
+  s = {
+    ...s,
+    stats: createMatchStats(s, {
+      matchId: `${gameId ?? 'local'}-${Date.now().toString(36)}`,
+      mode: isOnline ? 'online' : isAiMode ? 'vsAi' : 'hotseat',
+      source: statsSource(),
+      startedAt: Date.now(),
+    }),
+  };
 
   if (isOnline && myRole === 'p1') {
     beginOnlineMulligan(s, mapId);
@@ -754,6 +781,8 @@ function finishStartGame(s, mapId) {
   // apart from "still in the pre-objectives simultaneous-mulligan phase" (see
   // beginOnlineMulligan/showOnlineMulligan below), where `turn` alone can't distinguish the two.
   state = { ...state, readyForPlay: true, log: [`Game started on ${mapName} — ${state.initiative.toUpperCase()} goes first.`] };
+  matchStartedAtMs = Date.now();
+  turnStartedAtMs = !isOnline || state.initiative === myRole ? Date.now() : null;
   appendLog(state.log);
   redraw();
 
@@ -1468,6 +1497,9 @@ function commitState(newState, logLines, transitionFlags, objectiveTransitionFla
     setOnlineSyncStatus('Connection interrupted — actions are paused until the shared game reconnects.', 'error');
     return false;
   }
+  // Every debug panel action logs "[DEBUG] ...". Matches touched by it are flagged so the
+  // Statistics page can leave them out.
+  if (logLines?.some(line => typeof line === 'string' && line.startsWith('[DEBUG]'))) newState = markDebugUsed(newState);
   lastChangedKeys = new Set(); // player acted — clear opponent highlights
   lastTransitionFlags = transitionFlags ?? new Map();
   lastObjectiveTransitionFlags = objectiveTransitionFlags ?? new Map();
@@ -1572,6 +1604,7 @@ function normalizeFirebaseState(raw) {
     pendingDiscounts: toArray(p.pendingDiscounts),
     pendingUnitBuffs: toArray(p.pendingUnitBuffs),
     discardPile: toArray(p.discardPile),
+    mulliganReturned: toArray(p.mulliganReturned),
   } : p;
   // Craft (H25) / Training Officer (H19) generate card definitions at runtime that only ever
   // existed in the crafting client's own in-memory CARD_BY_ID — without this, the receiving
@@ -1601,6 +1634,8 @@ function normalizeFirebaseState(raw) {
     p2:    fixPlayer(raw.p2),
     board: normalizeRemoteBoard(raw.board),
     _eventHistory: eventHistory,
+    // Only add the key when present: an `undefined` value would make the next Firebase write fail.
+    ...(raw.stats ? { stats: normalizeStats(raw.stats) } : {}),
   };
 }
 
@@ -1756,6 +1791,12 @@ function receiveRemoteState(remoteState, { force = false, preserveSyncStatus = f
     // player-choice secondary, resolves before free Hero deployment) — resumeObjectiveResolution
     // runs Hero Phase itself once the last pending pick drains.
     if (!normalized.pendingObjectivePick) runHeroPhase(myRole);
+  }
+  // Start this client's clocks the first time it sees a playable match / its own turn (covers turn
+  // hand-offs and the non-host client, which never runs finishStartGame).
+  if (isOnline && normalized.readyForPlay && matchStartedAtMs == null) matchStartedAtMs = Date.now();
+  if (isOnline && !gameOver && normalized.readyForPlay && normalized.initiative === myRole && turnStartedAtMs == null) {
+    turnStartedAtMs = Date.now();
   }
 }
 
@@ -3021,6 +3062,12 @@ function applyObjectiveEffects(s, player, resumeAfterKey = null) {
 
     const backbone = lv >= 3 ? 2 : 1;
     s = { ...s, [opp]: { ...s[opp], hq: s[opp].hq - backbone } };
+    s = recordHqDamage(s, opp, backbone, 'objectiveBackbone');
+    s = recordObjectiveActivation(s, key, player, lv, backbone);
+    // Secondary-effect yields are measured as a before/after diff around the switch below, so no
+    // individual Objective case needs its own recorder call.
+    const fuelBeforeEffect = s[player].fuel;
+    const deckBeforeEffect = s[player].deck.length;
     log.push(`${nm} L${lv}: ${backbone} HQ damage to ${opp.toUpperCase()}`);
 
     // Doc 04 §5/§19 (locked): "lethal backbone stops later secondary/Objective resolution"
@@ -3171,6 +3218,8 @@ function applyObjectiveEffects(s, player, resumeAfterKey = null) {
       }
       default: log.push(`${nm} L${lv}: effect triggered (not automated)`);
     }
+    s = recordObjectiveYield(s, key, player, 'fuel', s[player].fuel - fuelBeforeEffect);
+    s = recordObjectiveYield(s, key, player, 'draws', deckBeforeEffect - s[player].deck.length);
   }
   return { state: recalculateDynamicStats(s), log, pendingArtyHits: artyHits, pendingPick: null };
 }
@@ -4034,6 +4083,16 @@ document.getElementById('btn-end-turn').addEventListener('click', () => {
     p2: { ...directHQ.state.p2, hq: directHQ.state.p2.hq - directHQ.hqDamageToP2 },
   };
   const directHQLog = directHQ.log;
+  s = recordHqDamage(s, 'p1', directHQ.hqDamageToP1, 'directHq');
+  s = recordHqDamage(s, 'p2', directHQ.hqDamageToP2, 'directHq');
+  s = recordDirectHq(s, currentPlayer, directHQ.sources.length);
+  s = recordTurnEnd(s, {
+    role: currentPlayer,
+    ms: turnStartedAtMs == null ? undefined : Date.now() - turnStartedAtMs,
+    fuelUnspent: s[currentPlayer].fuel,
+  });
+  // Local/vs AI: this client measures the next turn too. Online: the other client measures it.
+  turnStartedAtMs = isOnline ? null : Date.now();
 
   // Lethal Direct HQ ends the match right here (doc 01 §19 step 7: check victory after each
   // damage instance). Found in the 2026-09-16 stats plan review: this used to carry on into
@@ -4062,10 +4121,15 @@ document.getElementById('btn-end-turn').addEventListener('click', () => {
                                                           // bonus draw, so their first turn (turn 2) must draw here.
     newState = { ...newState, [newActive]: drawCards(newState[newActive], 1) };
   }
+  const fuelBeforeRefresh = newState[newActive].fuel;
+  const pendingFuelBeforeRefresh = newState[newActive].pendingFuelGain ?? 0;
   newState = startOfTurn(newState);                      // gain fuel for new active player
+  // startOfTurn adds 3 capped plus pendingFuelGain uncapped; whatever of the 3 didn't land hit the cap.
+  newState = recordFuelLostToCap(newState, newActive, 3 + pendingFuelBeforeRefresh - (newState[newActive].fuel - fuelBeforeRefresh));
   const objectivesBeforeThisTurn = newState.objectives;
   newState = updateObjectiveLevels(newState);            // escalate objective levels
   newState = checkObjectiveControl(newState);            // check majority-adjacent control
+  newState = recordObjectiveControl(newState);
 
   // Capture/level-up feedback — previously silent (both recalculate here every turn with no
   // transition of any kind). Diffed against the snapshot just above rather than threaded
