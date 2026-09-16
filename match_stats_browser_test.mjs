@@ -14,7 +14,13 @@
 //   - P2 deals lethal: exactly one record, written by P2 (the client that ended the match);
 //     only P1 (host) sees the include/note controls
 //   - P1 deals lethal: no record until the game-ending transaction commits
-//   - the game-ending transaction is rejected: no record at all
+//   - the game-ending transaction is rejected: no record at all, and the client can keep playing
+//   - an ending and the winner leaving arrive in one snapshot: the survivor shows the result and
+//     writes nothing (no disconnect record over the HQ record)
+//   - a disconnect during mulligan writes no record; after the match starts it writes one
+//   - Main Menu stays blocked until the game-ending write and the record write are both done
+// Fake Firebase fidelity: undefined/NaN/Infinity and invalid keys rejected, held listener
+// deliveries coalesce to the newest value.
 // Statistics page:
 //   - default filters, match-list include toggle (writes stats/meta), sorting, CSV export,
 //     loading a self-play .jsonl file
@@ -64,6 +70,27 @@ async function waitFor(fn, timeout = 6000, step = 100) {
 
 const matchWrites = (ff, prefix = "") => ff.writes.filter(w => w.path.startsWith(`stats/matches/${prefix}`));
 const readState = page => page.evaluate(() => window.__SIGNAL_TEST_HOOKS__.getState());
+
+// End-screen Main Menu button: whether it exists, is disabled, and whether a forced click navigates.
+async function menuState(page) {
+  const btn = page.locator("#end-menu-btn");
+  if (!(await btn.count())) return { exists: false, disabled: false };
+  return { exists: true, disabled: await btn.isDisabled() };
+}
+async function forcedMenuClickNavigates(page) {
+  const before = page.url();
+  await page.locator("#end-menu-btn").click({ force: true, timeout: 2000 }).catch(() => {});
+  await page.waitForTimeout(500);
+  return page.url() !== before;
+}
+
+// The exact write js/firebase.js's setPlayerLeft makes when a player uses Exit.
+async function writePlayerLeft(page, code, role) {
+  await page.evaluate(async ([gameCode, who]) => {
+    const db = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js");
+    await db.update(db.ref(db.getDatabase(), `games/${gameCode}`), { _playerLeft: who });
+  }, [code, role]);
+}
 
 // ── Local game helpers ─────────────────────────────────────────────────────────
 async function newLocalPage(browser, ff, label) {
@@ -174,12 +201,17 @@ async function localRetryAfterFailedWrite(browser) {
     await page.locator("#btn-end-turn").click();
     const retryShown = await page.locator("#stats-retry-btn").waitFor({ state: "visible", timeout: 6000 }).then(() => true).catch(() => false);
     check("Failed write: Retry button appears and nothing was saved", retryShown && matchWrites(ff).length === 0, `retry=${retryShown} writes=${matchWrites(ff).length}`);
+    await page.locator("#end-screen").waitFor({ state: "visible", timeout: 5000 });
+    const failedMenu = await menuState(page);
+    check("Failed write: Main Menu stays blocked while the record is unsaved", failedMenu.exists && failedMenu.disabled && !(await forcedMenuClickNavigates(page)), JSON.stringify(failedMenu));
     const builtId = await page.evaluate(() => window.__SIGNAL_STATS__?.lastRecord?.matchId);
     await page.locator("#stats-retry-btn").click();
     await waitFor(async () => matchWrites(ff).length > 0);
     const writes = matchWrites(ff);
     check("Failed write: Retry saves exactly one record, same match id", writes.length === 1 && writes[0].path === `stats/matches/${builtId}`, JSON.stringify(writes.map(w => w.path)));
-    check("Failed write: status confirms the save and Retry hides", (await page.locator("#stats-status").innerText()).includes("saved") && !(await page.locator("#stats-retry-btn").isVisible()), await page.locator("#stats-status").innerText());
+    check("Failed write: status confirms the save and Retry hides", (await page.locator("#stats-status").innerText()).includes("Match saved") && !(await page.locator("#stats-retry-btn").isVisible()), await page.locator("#stats-status").innerText());
+    await waitFor(async () => !(await menuState(page)).disabled, 3000);
+    check("Failed write: a successful Retry enables Main Menu", (await menuState(page)).exists && !(await menuState(page)).disabled, JSON.stringify(await menuState(page)));
   } finally {
     await context.close();
   }
@@ -253,13 +285,14 @@ async function localH16CancelStats(browser) {
 }
 
 // ── Online game helpers ────────────────────────────────────────────────────────
-async function startOnlineGame(browser, ff, code) {
+async function startOnlineGame(browser, ff, code, { untilMulligan = false } = {}) {
   const hostCtx = await browser.newContext();
   await ff.attach(hostCtx, "p1");
   const joinCtx = await browser.newContext();
   await ff.attach(joinCtx, "p2");
   const host = await hostCtx.newPage();
   const joiner = await joinCtx.newPage();
+  const close = async () => { await hostCtx.close(); await joinCtx.close(); };
   for (const [p, l] of [[host, "host"], [joiner, "joiner"]]) p.on("pageerror", e => check(`${code} ${l}: no page errors`, false, e.message));
   await host.goto(`${BASE_URL}/game.html?game=${code}&role=p1&mapId=kursk`, { waitUntil: "domcontentloaded" });
   await host.locator('#deck-grid .deck-option[data-deck="infantry-formation"]').click();
@@ -267,11 +300,12 @@ async function startOnlineGame(browser, ff, code) {
   await joiner.locator('#deck-grid .deck-option[data-deck="tank-blitz"]').click();
   await host.locator("#mulligan-screen").waitFor({ state: "visible", timeout: 10000 });
   await joiner.locator("#mulligan-screen").waitFor({ state: "visible", timeout: 10000 });
+  if (untilMulligan) return { host, joiner, close };
   await host.locator("#btn-mulligan-keep").click();
   await joiner.locator("#btn-mulligan-keep").click();
   await host.locator("#game-area").waitFor({ state: "visible", timeout: 10000 });
   await joiner.locator("#game-area").waitFor({ state: "visible", timeout: 10000 });
-  return { host, joiner, close: async () => { await hostCtx.close(); await joinCtx.close(); } };
+  return { host, joiner, close };
 }
 
 // Writes a prepared game state server-side, as another client would; both pages receive it.
@@ -407,6 +441,202 @@ async function onlineRejectedTerminalWrite(browser) {
   }
 }
 
+// Blocker regression (2026-09-17 review): P2's lethal is committed and recorded, then P2 leaves
+// (_playerLeft), and the surviving host only processes the newest snapshot, which holds both. The
+// survivor must show the real result and write nothing, never a disconnect record over the HQ one.
+// Run in both directions: the host and the joiner receive snapshots through different listeners.
+async function coalescedEndingAndLeave(browser, { code, ender }) {
+  const survivor = ender === "p1" ? "p2" : "p1";
+  const tag = `Coalesced ending+leave (${ender.toUpperCase()} ends, ${survivor.toUpperCase()} survives)`;
+  const ff = createFakeFirebase();
+  const game = await startOnlineGame(browser, ff, code);
+  const pageOf = role => (role === "p1" ? game.host : game.joiner);
+  try {
+    await injectOnline(ff, code, {
+      turn: 8, initiative: ender, nextUnitInstance: 100,
+      board: board({ "0,0": unit("t-1", ender === "p2" ? "T23" : "I1", ender) }),
+      p1: { ...NO_HEROES, ...(survivor === "p1" ? { hq: 1 } : {}) },
+      p2: { ...NO_HEROES, ...(survivor === "p2" ? { hq: 1 } : {}) },
+    });
+    await waitFor(async () => (await readState(pageOf(survivor)))[survivor].hq === 1 && (await readState(pageOf(ender))).initiative === ender);
+    ff.holdDeliveries(survivor); // the survivor sees nothing until release
+    await pageOf(ender).locator("#btn-end-turn").click();
+    await waitFor(async () => matchWrites(ff, code).length > 0, 8000);
+    const hqWrite = matchWrites(ff, code)[0];
+    check(`${tag}: the ending client wrote the HQ record`, hqWrite?.label === ender && hqWrite?.value?.winner === ender && hqWrite?.value?.endReason === "hq", JSON.stringify(hqWrite && { label: hqWrite.label, winner: hqWrite.value?.winner, reason: hqWrite.value?.endReason }));
+    await writePlayerLeft(pageOf(ender), code, ender);
+    const server = ff.getAt(`games/${code}`);
+    check(`${tag}: the server snapshot holds both the ending and the leave`, isTerminal(server) && server?._playerLeft === ender, JSON.stringify({ p1hq: server?.p1?.hq, p2hq: server?.p2?.hq, left: server?._playerLeft }));
+    await ff.releaseDeliveries(survivor); // exactly one delivery: terminal state + _playerLeft together
+    const survivorPage = pageOf(survivor);
+    await survivorPage.locator("#end-screen").waitFor({ state: "visible", timeout: 6000 }).catch(() => {});
+    await new Promise(r => setTimeout(r, 1500));
+    const winnerText = (await survivorPage.locator("#end-winner").innerText().catch(() => "")).trim();
+    const writes = matchWrites(ff, code);
+    const stored = ff.getAt(`stats/matches/${hqWrite?.value?.matchId}`);
+    check(`${tag}: the survivor shows the real result, not a disconnect`, winnerText === `${ender.toUpperCase()} WINS`, `end-winner="${winnerText}"`);
+    check(`${tag}: the survivor writes nothing (no disconnect record, no second HQ record)`, writes.length === 1 && !writes.some(w => w.label === survivor), JSON.stringify(writes.map(w => [w.label, w.value?.endReason])));
+    check(`${tag}: the stored record is still the original HQ result`, stored?.winner === ender && stored?.endReason === "hq", JSON.stringify(stored && { winner: stored.winner, endReason: stored.endReason }));
+  } finally {
+    await game.close();
+  }
+}
+
+const onlineCoalescedTerminalAndPlayerLeft = browser => coalescedEndingAndLeave(browser, { code: "STATCO", ender: "p2" });
+const onlineCoalescedTerminalAndPlayerLeftJoinerSurvives = browser => coalescedEndingAndLeave(browser, { code: "STATCJ", ender: "p1" });
+
+async function onlineDisconnectDuringMulligan(browser) {
+  const ff = createFakeFirebase();
+  const code = "STATMU";
+  const game = await startOnlineGame(browser, ff, code, { untilMulligan: true });
+  try {
+    const before = await readState(game.host);
+    check("Mulligan disconnect: setup is pre-play with statistics already created", before?.readyForPlay === false && !!before?.stats?.matchId, JSON.stringify({ readyForPlay: before?.readyForPlay, stats: !!before?.stats }));
+    await writePlayerLeft(game.joiner, code, "p2");
+    const shown = await game.host.locator("#end-screen").waitFor({ state: "visible", timeout: 6000 }).then(() => true).catch(() => false);
+    await new Promise(r => setTimeout(r, 2000));
+    const text = (await game.host.locator("#end-winner").innerText().catch(() => "")).trim();
+    check("Mulligan disconnect: the survivor is told the opponent left", shown && text.includes("LEFT THE GAME"), `shown=${shown} text="${text}"`);
+    check("Mulligan disconnect: no match record for a match that never started, and no stats controls", matchWrites(ff, code).length === 0 && !(await game.host.locator("#end-stats").isVisible()), `writes=${matchWrites(ff, code).length}`);
+  } finally {
+    await game.close();
+  }
+}
+
+async function onlineDisconnectAfterReady(browser) {
+  const ff = createFakeFirebase();
+  const code = "STATDC";
+  const game = await startOnlineGame(browser, ff, code);
+  try {
+    check("Post-start disconnect: the match is playable", (await readState(game.host))?.readyForPlay === true, "not readyForPlay");
+    await writePlayerLeft(game.joiner, code, "p2");
+    await waitFor(async () => matchWrites(ff, code).length > 0, 8000);
+    await new Promise(r => setTimeout(r, 1500));
+    const writes = matchWrites(ff, code);
+    check("Post-start disconnect: exactly one disconnect record, no winner, written by the survivor", writes.length === 1 && writes[0].label === "p1" && writes[0].value?.winner === null && writes[0].value?.endReason === "disconnect", JSON.stringify(writes.map(w => ({ label: w.label, winner: w.value?.winner, reason: w.value?.endReason }))));
+  } finally {
+    await game.close();
+  }
+}
+
+// Main Menu must not let the player leave before the ending is durable: first the game-ending
+// transaction, then the match record write. Both are held here and released in turn.
+async function onlineMainMenuWaitsForPersistence(browser) {
+  const ff = createFakeFirebase();
+  const code = "STATMM";
+  const game = await startOnlineGame(browser, ff, code);
+  const host = game.host;
+  let releaseCas;
+  let releaseWrite;
+  const casGate = new Promise(r => { releaseCas = r; });
+  const writeGate = new Promise(r => { releaseWrite = r; });
+  let casHeld = false;
+  let writeHeld = false;
+  try {
+    await injectOnline(ff, code, {
+      turn: 7, initiative: "p1", nextUnitInstance: 100,
+      board: board({ "0,0": unit("t-1", "I1", "p1") }),
+      p1: { ...NO_HEROES }, p2: { ...NO_HEROES, hq: 1 },
+    });
+    await waitFor(async () => (await readState(host)).initiative === "p1" && (await readState(host)).p2.hq === 1);
+    ff.hooks.beforeCas = async ({ path, value }) => {
+      if (path === `games/${code}` && isTerminal(value)) { casHeld = true; await casGate; }
+    };
+    ff.hooks.beforeWrite = async ({ path }) => {
+      if (path.startsWith(`stats/matches/${code}`)) { writeHeld = true; await writeGate; }
+    };
+    await host.locator("#btn-end-turn").click();
+    await waitFor(async () => casHeld);
+    await host.locator("#end-screen").waitFor({ state: "visible", timeout: 6000 }).catch(() => {});
+    const duringCas = await menuState(host);
+    check("Main Menu: blocked while the game-ending transaction is unconfirmed", casHeld && duringCas.exists && duringCas.disabled && !(await forcedMenuClickNavigates(host)), JSON.stringify({ casHeld, ...duringCas }));
+
+    releaseCas();
+    await waitFor(async () => writeHeld);
+    const duringWrite = await menuState(host);
+    check("Main Menu: still blocked while the match record write is in flight", writeHeld && duringWrite.exists && duringWrite.disabled && !(await forcedMenuClickNavigates(host)), JSON.stringify({ writeHeld, ...duringWrite }));
+
+    releaseWrite();
+    await waitFor(async () => (await host.locator("#stats-status").innerText()).includes("Match saved"));
+    await waitFor(async () => !(await menuState(host)).disabled, 3000);
+    const afterSave = await menuState(host);
+    check("Main Menu: enabled once the record is saved (status shown, Retry hidden)", afterSave.exists && !afterSave.disabled && (await host.locator("#stats-status").innerText()).includes("Match saved") && !(await host.locator("#stats-retry-btn").isVisible()), JSON.stringify(afterSave));
+    await host.locator("#end-menu-btn").click({ timeout: 3000 }).catch(() => {});
+    check("Main Menu: navigates once enabled", await waitFor(async () => /index\.html/.test(host.url()), 5000), host.url());
+  } finally {
+    releaseCas?.();
+    releaseWrite?.();
+    ff.hooks.beforeCas = null;
+    ff.hooks.beforeWrite = null;
+    await game.close();
+  }
+}
+
+// Real Firebase rejects invalid keys and non-finite numbers; the server-value placeholder stays legal.
+async function fakeFirebaseValidatesKeysAndNumbers(browser) {
+  const ff = createFakeFirebase();
+  const context = await browser.newContext();
+  await ff.attach(context, "fake-keys");
+  const page = await context.newPage();
+  try {
+    await page.goto(`${BASE_URL}/index.html`, { waitUntil: "domcontentloaded" });
+    const outcome = await page.evaluate(async () => {
+      const db = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js");
+      const attempt = async fn => { try { await fn(); return "accepted"; } catch (err) { return `rejected: ${err.message}`; } };
+      const root = db.getDatabase();
+      const r = db.ref(root, "probe");
+      return {
+        dotKey: await attempt(() => db.set(r, { "a.b": 1 })),
+        nestedSlashKey: await attempt(() => db.set(r, { nested: { "a/b": 1 } })),
+        dollarKey: await attempt(() => db.set(r, { $x: 1 })),
+        bracketKey: await attempt(() => db.set(r, { "[0]": 1 })),
+        hashKey: await attempt(() => db.set(r, { "a#b": 1 })),
+        updateBadSegment: await attempt(() => db.update(r, { "ok/bad#seg": 1 })),
+        updateDeepPath: await attempt(() => db.update(r, { "ok/deep": 1 })),
+        badRefPath: await attempt(() => db.set(db.ref(root, "games/a.b"), 1)),
+        nan: await attempt(() => db.set(r, { n: NaN })),
+        infinity: await attempt(() => db.set(r, { n: Infinity })),
+        serverTimestamp: await attempt(() => db.set(db.ref(root, "probe-ts"), { at: db.serverTimestamp() })),
+      };
+    });
+    for (const k of ["dotKey", "nestedSlashKey", "dollarKey", "bracketKey", "hashKey", "updateBadSegment", "badRefPath", "nan", "infinity"]) {
+      check(`Fake Firebase: rejects ${k}`, outcome[k].startsWith("rejected"), outcome[k]);
+    }
+    check("Fake Firebase: update() with a deep a/b path is accepted", outcome.updateDeepPath === "accepted" && ff.getAt("probe/ok/deep") === 1, `${outcome.updateDeepPath} stored=${JSON.stringify(ff.getAt("probe"))}`);
+    check("Fake Firebase: the {'.sv':'timestamp'} placeholder is accepted as a value", outcome.serverTimestamp === "accepted" && typeof ff.getAt("probe-ts/at") === "number", `${outcome.serverTimestamp} stored=${JSON.stringify(ff.getAt("probe-ts"))}`);
+  } finally {
+    await context.close();
+  }
+}
+
+async function fakeFirebaseHoldsAndCoalescesDeliveries(browser) {
+  const ff = createFakeFirebase();
+  const context = await browser.newContext();
+  await ff.attach(context, "hold-probe");
+  const page = await context.newPage();
+  try {
+    await page.goto(`${BASE_URL}/index.html`, { waitUntil: "domcontentloaded" });
+    await page.evaluate(async () => {
+      const db = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js");
+      window.__seen = [];
+      db.onValue(db.ref(db.getDatabase(), "probe/hold"), snap => window.__seen.push(snap.val()));
+    });
+    await waitFor(async () => (await page.evaluate(() => window.__seen.length)) >= 1);
+    const base = await page.evaluate(() => window.__seen.length);
+    ff.holdDeliveries("hold-probe");
+    for (const n of [1, 2, 3]) await ff.serverSet("probe/hold", { n });
+    await page.waitForTimeout(300);
+    const duringHold = await page.evaluate(() => window.__seen.length);
+    await ff.releaseDeliveries("hold-probe");
+    await page.waitForTimeout(300);
+    const seen = await page.evaluate(() => window.__seen);
+    check("Fake Firebase: a held listener receives nothing while writes continue", duringHold === base, `before=${base} during=${duringHold}`);
+    check("Fake Firebase: release delivers only the newest value, exactly once", seen.length === base + 1 && seen.at(-1)?.n === 3, JSON.stringify(seen));
+  } finally {
+    await context.close();
+  }
+}
+
 // Real Firebase rejects writes containing `undefined`; the stand-in must too, or it would hide a
 // violation of the "never write undefined" rule. Nulls are still allowed (they delete).
 async function fakeFirebaseRejectsUndefined(browser) {
@@ -503,7 +733,11 @@ async function statsPage(browser) {
       localDirectHqRecordAndMeta, localTerminalAttackRow, localRetryAfterFailedWrite,
       localMultiPickCommandCancel, localH16CancelStats,
       onlineP2Lethal, onlineP1LethalWaitsForCommit, onlineRejectedTerminalWrite,
-      fakeFirebaseRejectsUndefined, statsPage,
+      onlineCoalescedTerminalAndPlayerLeft, onlineCoalescedTerminalAndPlayerLeftJoinerSurvives,
+      onlineDisconnectDuringMulligan, onlineDisconnectAfterReady,
+      onlineMainMenuWaitsForPersistence,
+      fakeFirebaseRejectsUndefined, fakeFirebaseValidatesKeysAndNumbers, fakeFirebaseHoldsAndCoalescesDeliveries,
+      statsPage,
     ].filter(s => !only || s.name.toLowerCase().includes(only.toLowerCase()))) {
       try {
         await scenario(browser);

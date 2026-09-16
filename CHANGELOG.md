@@ -9,6 +9,39 @@ Newest first.
 
 ---
 
+## 2026-09-17 — Match statistics review round 2: ending/leave race, pre-play disconnect, Main Menu
+
+Fixes from a second review of the branch (at `b54c9c4`). Each was reproduced first by a browser
+test that fails on `b54c9c4`.
+
+- **Blocker: a win could be recorded as a disconnect.** The three online `subscribeState`
+  listeners checked `_playerLeft` before looking at the snapshot. When a finished match and the
+  winner leaving (Exit) arrived in one delivery, the survivor never adopted the ending, showed
+  "LEFT THE GAME", and wrote a disconnect record over the correct HQ record at
+  `stats/matches/{matchId}` (reproduced in both directions). All three listeners now use
+  `opponentLeftLiveMatch`: a leave counts only when the snapshot is non-terminal, so a terminal
+  snapshot is processed normally and the survivor shows the result and writes nothing.
+- **A disconnect during the online mulligan wrote a record** for a match that never started (the
+  state already carries stats). `showDisconnectScreen` now records only when
+  `state.readyForPlay === true`, and stats controls stay hidden before that. Post-start disconnects
+  still write exactly one record.
+- **Main Menu could lose the record.** The end-screen button (now `#end-menu-btn`, no inline
+  onclick) and Exit are disabled, with "Saving result…", while this client's online game-ending
+  write is unconfirmed or its built record is unsaved. After a failed save they stay disabled, the
+  status says to press Retry, and a successful Retry enables them. Self-play and received endings
+  never block.
+- **Firebase stand-in fidelity:** rejects invalid keys (in objects, `update()` paths and `ref()`
+  paths) and NaN/Infinity, keeps `{'.sv':'timestamp'}` legal, and can hold a client's deliveries
+  (`holdDeliveries`/`releaseDeliveries`) so it only receives the newest value.
+- **Tests:** new scenarios `onlineCoalescedTerminalAndPlayerLeft` (+ joiner-survives variant),
+  `onlineDisconnectDuringMulligan`, `onlineDisconnectAfterReady`,
+  `onlineMainMenuWaitsForPersistence`, `fakeFirebaseValidatesKeysAndNumbers`,
+  `fakeFirebaseHoldsAndCoalescesDeliveries`; `localRetryAfterFailedWrite` extended with Main Menu
+  checks; success-status assertions tightened to "Match saved" (the failure text also contains
+  "saved").
+
+---
+
 ## 2026-09-17 — Match statistics review fixes (branch `feature/match-statistics`)
 
 Fixes from ChatGPT's review of `050dfd9`. Every new check was run against `050dfd9` first and

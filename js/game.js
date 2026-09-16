@@ -798,7 +798,7 @@ function finishStartGame(s, mapId) {
   if (isOnline) {
     pushStateIfOnline(state);
     subscribeState(gameId, remoteState => {
-      if (remoteState._playerLeft && remoteState._playerLeft !== myRole) {
+      if (opponentLeftLiveMatch(remoteState)) {
         showDisconnectScreen(remoteState._playerLeft);
         return;
       }
@@ -846,7 +846,7 @@ async function beginOnlineMulligan(s, mapId) {
   }
   subscribeState(gameId, remoteState => {
     if (hostMulliganPhaseDone) return; // finishStartGame's own listener has taken over by now
-    if (remoteState._playerLeft && remoteState._playerLeft !== myRole) {
+    if (opponentLeftLiveMatch(remoteState)) {
       showDisconnectScreen(remoteState._playerLeft);
       return;
     }
@@ -1557,6 +1557,7 @@ function pushStateIfOnline(s) {
         if (isTerminalState(prepared.state)) {
           localEndingUncommitted = false;
           if (statsEnd) finalizeMatchStats(prepared.state);
+          updateLeaveButtons();
         }
         return result;
       });
@@ -1836,6 +1837,7 @@ function setStatsStatus(text) {
 function saveStatsRecord() {
   if (!statsRecord || statsRecord.source === 'selfplay' || statsRecordSaved || statsWriteInFlight) return;
   statsWriteInFlight = true;
+  updateLeaveButtons();
   const retryBtn = document.getElementById('stats-retry-btn');
   retryBtn.style.display = 'none';
   writeMatchRecord(statsRecord.matchId, statsRecord) // same path + same record: a retry can't duplicate
@@ -1845,11 +1847,44 @@ function saveStatsRecord() {
     })
     .catch(err => {
       console.error('[stats] match record write failed', err);
-      setStatsStatus(`Statistics: match not saved (${err.message}).`);
+      setStatsStatus(`Statistics: match not saved (${err.message}). Press Retry saving match before leaving.`);
       retryBtn.style.display = '';
     })
-    .finally(() => { statsWriteInFlight = false; });
+    .finally(() => {
+      statsWriteInFlight = false;
+      updateLeaveButtons();
+    });
 }
+
+// Leaving the end screen (Main Menu, or Exit before the end screen covers it) waits until the
+// ending is durable: online, this client's game-ending state must be confirmed by the server, and
+// a match record this client built must be saved. Leaving earlier closes the page and silently
+// loses the record, and the other client never writes one. Policy after a failed record write:
+// both stay blocked and Retry is the way forward; closing the tab is the only way to abandon an
+// unsaved record. Self-play records (kept out of Firebase) and matches with nothing to save
+// (a received ending, a match without stats) never block. Found 2026-09-17 in review.
+function endingSavePending() {
+  if (localEndingUncommitted) return true;
+  return !!statsRecord && statsRecord.source !== 'selfplay' && !statsRecordSaved;
+}
+
+function updateLeaveButtons() {
+  const pending = endingSavePending();
+  const saveFailed = pending && !localEndingUncommitted && !statsWriteInFlight;
+  const menu = document.getElementById('end-menu-btn');
+  if (menu) {
+    menu.disabled = pending;
+    menu.textContent = pending && !saveFailed ? 'Saving result…' : 'Main Menu';
+    menu.title = saveFailed ? 'The match is not saved yet. Press Retry saving match first.' : '';
+  }
+  const exit = document.getElementById('btn-exit');
+  if (exit) exit.disabled = pending;
+}
+
+document.getElementById('end-menu-btn').addEventListener('click', () => {
+  if (endingSavePending()) { updateLeaveButtons(); return; }
+  window.location.href = 'index.html';
+});
 
 // `finalState` must be a state this client knows is real: the local state for Local/vs AI and
 // disconnects, or the confirmed pushed state for an online HQ ending.
@@ -1867,10 +1902,12 @@ function finalizeMatchStats(finalState) {
   } catch (err) {
     console.error('[stats] could not build the match record', err);
     setStatsStatus('Statistics: could not build the match record (see console).');
+    updateLeaveButtons();
     return;
   }
   window.__SIGNAL_STATS__ = { lastRecord: statsRecord };
   saveStatsRecord(); // no-op for self-play: selfplay_test.mjs saves those to a local file instead
+  updateLeaveButtons();
 }
 
 function endMatchStats({ winner, endReason, remote = false }) {
@@ -1884,6 +1921,7 @@ document.getElementById('stats-retry-btn').addEventListener('click', saveStatsRe
 
 function showStatsControls() {
   if (!state?.stats?.matchId || state.stats.source === 'selfplay') return;
+  if (state.readyForPlay !== true) return; // a match that never started has no record to annotate
   if (isOnline && myRole !== 'p1') return;
   document.getElementById('end-stats').style.display = 'flex';
 }
@@ -1925,6 +1963,7 @@ function showEndScreen(winner, { remote = false } = {}) {
   gameOver = true;
   endMatchStats({ winner: winner === 'P1' ? 'p1' : 'p2', endReason: 'hq', remote });
   showStatsControls();
+  updateLeaveButtons();
   clearTimeout(endScreenRevealTimer);
   endScreenRevealTimer = setTimeout(() => {
     endScreenRevealTimer = null;
@@ -1952,6 +1991,7 @@ function rollBackUncommittedEnding() {
   localEndingUncommitted = false;
   statsEnd = null;
   if (!statsRecordSaved && !statsWriteInFlight) statsRecord = null;
+  updateLeaveButtons();
 }
 
 function checkWin({ remote = false } = {}) {
@@ -4407,17 +4447,31 @@ document.getElementById('btn-cancel').addEventListener('click', () => {
 // ── Exit ──────────────────────────────────────────────────────────────────────
 
 document.getElementById('btn-exit').addEventListener('click', async () => {
+  if (endingSavePending()) { updateLeaveButtons(); return; } // see endingSavePending
   if (!confirm('Exit to main menu? Current game will be lost.')) return;
   if (isOnline && gameId && myRole) await setPlayerLeft(gameId, myRole);
   window.location.href = 'index.html';
 });
 
+// A snapshot in which the opponent left counts as a disconnect only while the match is still live.
+// If the same snapshot already holds a finished match (an HQ at 0), the leave came after the ending
+// (the winner used Exit), and a listener can receive both in one delivery. The ending takes
+// precedence: the snapshot is processed normally, so the survivor shows the real result and, as a
+// receiver, writes nothing. Checking _playerLeft first used to turn it into a disconnect whose
+// record overwrote the correct HQ record at the same path. Found 2026-09-17 in review.
+function opponentLeftLiveMatch(snapshot) {
+  return !!snapshot?._playerLeft && snapshot._playerLeft !== myRole && !isTerminalState(snapshot);
+}
+
 function showDisconnectScreen(who) {
   // If the match had already ended normally, its record is already handled: don't replace it
-  // with a "disconnect" one just because the other player left the end screen.
-  if (!gameOver) endMatchStats({ winner: null, endReason: 'disconnect' });
+  // with a "disconnect" one just because the other player left the end screen. A match that never
+  // started (online mulligan, readyForPlay still false) gets no record at all, even though its
+  // state already carries stats.
+  if (!gameOver && state?.readyForPlay === true) endMatchStats({ winner: null, endReason: 'disconnect' });
   gameOver = true;
   showStatsControls();
+  updateLeaveButtons();
   document.getElementById('end-winner').textContent = `${who.toUpperCase()} LEFT THE GAME`;
   document.getElementById('end-subtitle').textContent = 'OPPONENT DISCONNECTED';
   document.getElementById('end-screen').style.display = 'flex';
@@ -4793,7 +4847,7 @@ document.addEventListener('keydown', e => {
 if (isOnline && myRole === 'p2') {
   document.getElementById('picker-label').textContent = 'YOUR DECK — CHOOSE A DECK';
   subscribeState(gameId, data => {
-    if (data._playerLeft && data._playerLeft !== myRole && state) {
+    if (opponentLeftLiveMatch(data) && state) {
       showDisconnectScreen(data._playerLeft);
       return;
     }

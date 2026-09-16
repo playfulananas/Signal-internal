@@ -157,7 +157,12 @@ Plan and record format: `docs/plans/2026-09-16-match-statistics.md`.
   client writes it: the client that ended the match (online, only after its game-ending state
   write is confirmed by the revision-checked transaction; a rejected write records nothing and
   the acting client rolls back its local end of match to the server's live state), or
-  the surviving client on a disconnect. A failed write keeps the record and shows a Retry button.
+  the surviving client on a disconnect. A leave that arrives in the same snapshot as an ending is
+  not a disconnect (the survivor shows the result and writes nothing), and a disconnect before the
+  match started (online mulligan) writes no record. A failed write keeps the record and shows a
+  Retry button. Main Menu and Exit stay disabled until the ending is saved (online: game-ending
+  write confirmed, then the record written); after a failed save they stay disabled until Retry
+  succeeds.
 - **Host controls:** online P1, or the only client in Local/vs AI, gets "Include in statistics"
   (unticked by default) and a note on the end screen, saved separately under `stats/meta/{matchId}`.
 - **Tags:** mode (online/vsAi/hotseat), source (human/selfplay), `STATS_BUILD_LABEL` (bump by
@@ -205,8 +210,11 @@ selfplay_vs_ai_smoke.mjs` smoke-tests the in-page "vs AI" bot specifically. Pure
 through the same controls a human uses.
 `node match_stats_browser_test.mjs` drives real local and two-client online games against an
 in-memory Firebase stand-in (`browser_test_fake_firebase.mjs`, no live Firebase) to check match
-statistics end to end: record writer, confirmed/held/rejected game-ending writes, Retry, terminal
-turn rows, Cancel reverting card plays and Hero activations, and the Statistics page.
+statistics end to end: record writer, confirmed/held/rejected game-ending writes, an ending and a
+leave coalesced into one snapshot, disconnects before and after the match starts, Main Menu
+blocking while the ending is saved, Retry, terminal turn rows, Cancel reverting card plays and Hero
+activations, and the Statistics page. The stand-in rejects what real RTDB rejects (undefined,
+NaN/Infinity, invalid keys) and can hold a client's deliveries to coalesce them.
 `node regression_directhq_lethal_h16_cancel.mjs` covers the 2026-09-16 game fixes (lethal Direct
 HQ, H16 Cancel, rotate-modal End Turn, vs AI Quartermaster, stacked Hero deploy timers).
 `node open_lobby_test.mjs` / `multiplayer_craft_test.mjs` / `multiplayer_dual_craft_test.mjs` /
