@@ -117,3 +117,7 @@ current string-ID Set 1 game.
 6. Keep every local runtime import on the shared `?v=2026090402` cache version.
 7. Run `npm test`; add a browser scenario when DOM or multiplayer behavior changes.
 8. Do not deploy or merge into the protected client-testing repository without explicit approval.
+9. A new HQ damage source, card-play path, hit source, or Hero activation path must call the
+   matching recorder in `js/stats.js` (unrecorded HQ damage shows up as "other" in
+   `node scripts/check_selfplay_stats.mjs`). Bump `STATS_BUILD_LABEL` when a balance pass or
+   rules change lands.

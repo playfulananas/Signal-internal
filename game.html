@@ -154,7 +154,14 @@
         <button class="btn btn-secondary" id="log-copy-btn">Copy Log</button>
         <button class="btn btn-secondary" id="log-download-btn">Download Log</button>
       </div>
-      <button class="btn btn-primary" onclick="window.location.href='index.html'">Main Menu</button>
+      <div class="end-stats" id="end-stats" style="display:none;">
+        <label class="end-stats-include"><input type="checkbox" id="stats-include"> Include in statistics</label>
+        <textarea id="stats-note" maxlength="300" rows="2" placeholder="Note (optional), e.g. testing the T33 change"></textarea>
+        <button class="btn btn-secondary" id="stats-save-btn">Save</button>
+      </div>
+      <div class="end-stats-status" id="stats-status"></div>
+      <button class="btn btn-secondary" id="stats-retry-btn" style="display:none;">Retry saving match</button>
+      <button class="btn btn-primary" id="end-menu-btn">Main Menu</button>
     </div>
   </div>
 

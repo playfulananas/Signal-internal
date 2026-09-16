@@ -9,6 +9,90 @@ Newest first.
 
 ---
 
+## 2026-09-17 — Match statistics review round 2: ending/leave race, pre-play disconnect, Main Menu
+
+Fixes from a second review of the branch (at `b54c9c4`). Each was reproduced first by a browser
+test that fails on `b54c9c4`.
+
+- **Blocker: a win could be recorded as a disconnect.** The three online `subscribeState`
+  listeners checked `_playerLeft` before looking at the snapshot. When a finished match and the
+  winner leaving (Exit) arrived in one delivery, the survivor never adopted the ending, showed
+  "LEFT THE GAME", and wrote a disconnect record over the correct HQ record at
+  `stats/matches/{matchId}` (reproduced in both directions). All three listeners now use
+  `opponentLeftLiveMatch`: a leave counts only when the snapshot is non-terminal, so a terminal
+  snapshot is processed normally and the survivor shows the result and writes nothing.
+- **A disconnect during the online mulligan wrote a record** for a match that never started (the
+  state already carries stats). `showDisconnectScreen` now records only when
+  `state.readyForPlay === true`, and stats controls stay hidden before that. Post-start disconnects
+  still write exactly one record.
+- **Main Menu could lose the record.** The end-screen button (now `#end-menu-btn`, no inline
+  onclick) and Exit are disabled, with "Saving result…", while this client's online game-ending
+  write is unconfirmed or its built record is unsaved. After a failed save they stay disabled, the
+  status says to press Retry, and a successful Retry enables them. Self-play and received endings
+  never block.
+- **Firebase stand-in fidelity:** rejects invalid keys (in objects, `update()` paths and `ref()`
+  paths) and NaN/Infinity, keeps `{'.sv':'timestamp'}` legal, and can hold a client's deliveries
+  (`holdDeliveries`/`releaseDeliveries`) so it only receives the newest value.
+- **Tests:** new scenarios `onlineCoalescedTerminalAndPlayerLeft` (+ joiner-survives variant),
+  `onlineDisconnectDuringMulligan`, `onlineDisconnectAfterReady`,
+  `onlineMainMenuWaitsForPersistence`, `fakeFirebaseValidatesKeysAndNumbers`,
+  `fakeFirebaseHoldsAndCoalescesDeliveries`; `localRetryAfterFailedWrite` extended with Main Menu
+  checks; success-status assertions tightened to "Match saved" (the failure text also contains
+  "saved").
+
+---
+
+## 2026-09-17 — Match statistics review fixes (branch `feature/match-statistics`)
+
+Fixes from ChatGPT's review of `050dfd9`. Every new check was run against `050dfd9` first and
+failed there.
+
+- **Blocker: a rejected game-ending write froze the acting client on game over.** When the
+  revision-checked write of a locally lethal state lost to another revision, the server's match
+  was still live and the client adopted that state, but `gameOver`, the scheduled end-screen
+  reveal and `statsEnd` stayed set, so the player could no longer act. `showEndScreen` now tracks
+  an unconfirmed local ending (`localEndingUncommitted`, cleared when a game-ending write commits)
+  and the reveal timer; on a `state-conflict` whose server state is non-terminal,
+  `rollBackUncommittedEnding` cancels the reveal, hides the end screen and stats controls, and
+  clears `gameOver`, `statsEnd` and any unsaved built record before the server state is adopted.
+  It runs whether the rejected write was the game-ending one or an earlier write whose rejection
+  dropped it from the queue. A match whose ending committed is never touched (server terminal),
+  and a rejected ending still produces zero records. Test hook `isGameOver` added.
+- **Fake Firebase now rejects explicit `undefined`** in `set`, `update` and transaction values, like
+  real RTDB, instead of silently dropping it. The full browser suite passes under the stricter
+  check, so no production write carries `undefined`.
+- **CSV:** `toCsv` also quotes cells containing a bare carriage return.
+- **Tests:** `onlineRejectedTerminalWrite` now also checks the end screen is gone, `gameOver` is
+  false, the server state is active, a Unit placement syncs, and a later committed lethal writes
+  exactly one record that includes that placement. New `fakeFirebaseRejectsUndefined` scenario and
+  a carriage-return CSV unit test.
+
+---
+
+## 2026-09-16 — Match statistics (branch `feature/match-statistics`, not pushed)
+
+Implements `docs/plans/2026-09-16-match-statistics.md` (the plan with the ChatGPT review folded
+in), Tasks 2-13. Task 1 (Firebase rules for `stats`) is a manual console step still to do.
+
+- **Collection:** `js/stats.js` (schema, recorders, Firebase normalization, `buildMatchRecord`,
+  rules hash), hooks in `js/combat.js` and `js/game.js`. H19 buffed copies carry `statsBaseId` so
+  they count as their printed card; crafted Aircraft (including H19-buffed ones) group as CRAFTED.
+- **Saving:** one writer per match (the client that ended it; online only after its game-ending
+  transaction commits; surviving client on disconnect); failed writes keep the record and offer
+  Retry; host include/note in `stats/meta`. Durations measured on the writing client's clock.
+- **Statistics page** (`stats.html`, `js/stats-page.js`, `js/stats-aggregate.js`), main menu tile.
+- **Self-play:** records to `selfplay_stats.jsonl`, `scripts/check_selfplay_stats.mjs`.
+- **Tests:** `tests/stats.test.mjs` (18), `tests/stats_combat.test.mjs` (9, incl. Blast/Barrage/
+  Double Attack hit counting through the real attack resolver), `tests/stats_aggregate.test.mjs`
+  (10): `npm test` 293/293. New `match_stats_browser_test.mjs` + `browser_test_fake_firebase.mjs`:
+  34/34 (incl. the Statistics page: filters, include toggle, sorting, CSV, self-play file), and
+  a deliberate mutation run (write immediately online, receiving client also writes,
+  no terminal turn row) failed the 5 checks guarding those. `selfplay_test.mjs 6` + checker:
+  6 records, 0 problems (no unattributed HQ damage). `regression_directhq_lethal_h16_cancel.mjs`
+  still 15/15.
+
+---
+
 ## 2026-09-16 — Self-play harness repaired; three game bugs it was hiding
 
 `selfplay_test.mjs` crashed or stalled on every run (reproduced on `5ef92d5`). Debugged with

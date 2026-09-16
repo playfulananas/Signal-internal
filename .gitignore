@@ -1,3 +1,4 @@
 node_modules/
 selfplay_crash_*.png
 .firebase/
+selfplay_stats.jsonl

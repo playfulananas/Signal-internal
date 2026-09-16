@@ -15,6 +15,10 @@ document.getElementById('btn-local').addEventListener('click', () => {
   window.location.href = 'game.html';
 });
 
+document.getElementById('btn-stats').addEventListener('click', () => {
+  window.location.href = 'stats.html';
+});
+
 document.getElementById('btn-deckbuilder').addEventListener('click', () => {
   window.location.href = 'deckbuilder.html';
 });

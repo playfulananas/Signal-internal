@@ -32,7 +32,8 @@ import {
 import { getAttackableTargets, resolveSingleAttack, tileKey, columnKeys, unitsInColumn, unitsOnBoard, checkHeroPassivesOnPlace, removeSuppression, applyGameEvents, unitSuppressedEvent, hasColumnFreedom, evaluateDirectHQ, recalculateDynamicStats, checkRally, resolveDestructionChain, applyPostDestructionEffects, getManeuverTargets, resolveManeuver, generateCraftCandidates, craftCandidateToCard, resolveCraftDrawback, nextCraftCost, advanceCraftCost, applyHandBuff, getObjectivePickEffectType, computeObjectivePickTargets, describeDynamicSideBonus, sampleRandomFromDeck, resolveQuartermasterPick } from './combat.js?v=2026090402';
 import { renderBoard, renderHand, renderHQ, appendLog, heroCardHtml, renderHeroZones, showFxPopup, drawFxConnector, describeAttackOutcome, summarizeTurnReadiness, renderEndTurnSummary, buildUnitCardInnerHtml } from './ui.js?v=2026090402';
 import { MAPS, getTerrain, canPlaceOnTerrain } from './maps.js?v=2026090402';
-import { pushState, pushVersionedState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby, updatePlayerState } from './firebase.js?v=2026090402';
+import { pushState, pushVersionedState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby, updatePlayerState, writeMatchRecord, writeMatchMeta } from './firebase.js?v=2026090402';
+import { createMatchStats, normalizeStats, markDebugUsed, recordCardPlayed, recordHqDamage, recordUnitHits, recordHeroDeployed, recordHeroActivation, recordDirectHq, recordFuelLostToCap, recordTurnEnd, recordTerminalTurn, recordCraftPick, recordObjectiveActivation, recordObjectiveYield, recordObjectiveControl, buildMatchRecord } from './stats.js?v=2026090402';
 import { debugAddCard, debugSetFuel, debugAdjustFuel, debugSetHQ, debugAdjustHQ, debugSetObjective, debugSetObjectiveCard, debugSetUnitState, debugBuffUnit, debugDrawCards, debugSkipToTurn, debugRemoveCard } from './debug.js?v=2026090402';
 import { STARTER_DECKS, loadCustomDecks, validateDeck, validateHeroRoster } from './decks.js?v=2026090402';
 import { runBotTurn } from './bot_player.js?v=2026090402';
@@ -340,6 +341,11 @@ let lastTransitionFlags = new Map(); // tileKey -> 'suppressed'|'destroyed'|'arm
 let lastObjectiveTransitionFlags = new Map(); // tileKey -> 'obj-captured'|'obj-leveled' this commit — same one-shot idea, kept separate from lastTransitionFlags since it describes the objective at that tile, not a unit
 let lastHeroActivationKey = null; // "role-col" of the Hero Zone that just fired this commit, or null
 let gameOver = false;
+// Match statistics, both on this client's own clock (never compared with the other client's):
+// when the current turn started here (null when it's not this client's turn to measure), and when
+// the match became playable here. See recordTurnEnd / buildMatchRecord in stats.js.
+let turnStartedAtMs = null;
+let matchStartedAtMs = null;
 
 // Identity-based dedup for the _eventHistory animation system (see buildLastEvent/commitState/
 // receiveRemoteState) — every event id this client has already played-or-decided-not-to-play,
@@ -490,7 +496,9 @@ function applyMulligan(s, role, indices) {
   const keep = ps.hand.filter((_, i) => !indices.includes(i));
   const newDeck = shuffle([...putBack, ...ps.deck]);
   const drawn = newDeck.slice(0, putBack.length);
-  return { ...s, [role]: { ...ps, hand: [...keep, ...drawn], deck: newDeck.slice(putBack.length) } };
+  // mulliganReturned lives on the player slice (not state.stats) because online mulligans are
+  // written with updatePlayerState, which only sends that player's slice.
+  return { ...s, [role]: { ...ps, hand: [...keep, ...drawn], deck: newDeck.slice(putBack.length), mulliganReturned: putBack } };
 }
 
 function renderMulliganCards(hand) {
@@ -650,6 +658,7 @@ function runHeroPhase(role) {
     // Hero's Power is available the same turn it's deployed.
     const deployed = deployHero(s[role], heroId, col);
     s = { ...s, [role]: { ...deployed, heroRepositioned: true } };
+    s = recordHeroDeployed(s, role, heroId);
     const verb = isFirstHero ? 'deploys' : 'reinforces';
     commitState(s, [`${role.toUpperCase()} ${verb}: ${CARD_BY_ID[heroId]?.name} → column ${col + 1}`]);
   };
@@ -701,8 +710,27 @@ function runHeroPhase(role) {
 // Heroes are no longer picked before the match — the first one deploys at round 2
 // (Objective Level 1) via runHeroPhase, same mechanism as every later reinforcement.
 // See lastObjLevel: 0 in state.js and the timing note on runHeroPhase.
+// selfplay_test.mjs sets this before loading the page, so bot-vs-bot games are tagged and kept
+// out of Firebase. Everything else is a human game.
+function statsSource() {
+  try {
+    return localStorage.getItem('signal-stats-source') === 'selfplay' ? 'selfplay' : 'human';
+  } catch {
+    return 'human';
+  }
+}
+
 function startGame(p1Ids, p2Ids, mapId, p1Heroes = [], p2Heroes = []) {
   let s = createInitialState(p1Ids, p2Ids, mapId, p1Heroes, p2Heroes);
+  s = {
+    ...s,
+    stats: createMatchStats(s, {
+      matchId: `${gameId ?? 'local'}-${Date.now().toString(36)}`,
+      mode: isOnline ? 'online' : isAiMode ? 'vsAi' : 'hotseat',
+      source: statsSource(),
+      startedAt: Date.now(),
+    }),
+  };
 
   if (isOnline && myRole === 'p1') {
     beginOnlineMulligan(s, mapId);
@@ -754,6 +782,8 @@ function finishStartGame(s, mapId) {
   // apart from "still in the pre-objectives simultaneous-mulligan phase" (see
   // beginOnlineMulligan/showOnlineMulligan below), where `turn` alone can't distinguish the two.
   state = { ...state, readyForPlay: true, log: [`Game started on ${mapName} — ${state.initiative.toUpperCase()} goes first.`] };
+  matchStartedAtMs = Date.now();
+  turnStartedAtMs = !isOnline || state.initiative === myRole ? Date.now() : null;
   appendLog(state.log);
   redraw();
 
@@ -768,7 +798,7 @@ function finishStartGame(s, mapId) {
   if (isOnline) {
     pushStateIfOnline(state);
     subscribeState(gameId, remoteState => {
-      if (remoteState._playerLeft && remoteState._playerLeft !== myRole) {
+      if (opponentLeftLiveMatch(remoteState)) {
         showDisconnectScreen(remoteState._playerLeft);
         return;
       }
@@ -816,7 +846,7 @@ async function beginOnlineMulligan(s, mapId) {
   }
   subscribeState(gameId, remoteState => {
     if (hostMulliganPhaseDone) return; // finishStartGame's own listener has taken over by now
-    if (remoteState._playerLeft && remoteState._playerLeft !== myRole) {
+    if (opponentLeftLiveMatch(remoteState)) {
       showDisconnectScreen(remoteState._playerLeft);
       return;
     }
@@ -1468,6 +1498,9 @@ function commitState(newState, logLines, transitionFlags, objectiveTransitionFla
     setOnlineSyncStatus('Connection interrupted — actions are paused until the shared game reconnects.', 'error');
     return false;
   }
+  // Every debug panel action logs "[DEBUG] ...". Matches touched by it are flagged so the
+  // Statistics page can leave them out.
+  if (logLines?.some(line => typeof line === 'string' && line.startsWith('[DEBUG]'))) newState = markDebugUsed(newState);
   lastChangedKeys = new Set(); // player acted — clear opponent highlights
   lastTransitionFlags = transitionFlags ?? new Map();
   lastObjectiveTransitionFlags = objectiveTransitionFlags ?? new Map();
@@ -1517,7 +1550,17 @@ function pushStateIfOnline(s) {
   onlineWriteQueue = onlineWriteQueue
     .then(() => {
       if (generation !== onlineSyncGeneration) return null;
-      return pushVersionedState(gameId, prepared.state, prepared.expectedRevision);
+      return pushVersionedState(gameId, prepared.state, prepared.expectedRevision).then(result => {
+        // Match statistics: an online match this client ended is recorded from the game-ending
+        // state only once Firebase has accepted it. A rejected write lands in the .catch below
+        // instead, and nothing is recorded for it.
+        if (isTerminalState(prepared.state)) {
+          localEndingUncommitted = false;
+          if (statsEnd) finalizeMatchStats(prepared.state);
+          updateLeaveButtons();
+        }
+        return result;
+      });
     })
     .catch(error => {
       if (generation !== onlineSyncGeneration) return;
@@ -1527,6 +1570,10 @@ function pushStateIfOnline(s) {
       myLastPushId = null;
 
       if (error?.code === 'state-conflict' && error.latestState) {
+        // The rejected write may be the game-ending one, or an earlier write whose rejection just
+        // dropped the queued game-ending one (the generation bump above): either way this client's
+        // ending never reached the server. Undo it before adopting the server's live state.
+        if (localEndingUncommitted && !isTerminalState(error.latestState)) rollBackUncommittedEnding();
         receiveRemoteState(error.latestState, { force: true, preserveSyncStatus: true });
         onlineSyncPaused = false;
         setOnlineSyncStatus('Another update arrived first. The shared game was refreshed; please retry your action.');
@@ -1572,6 +1619,7 @@ function normalizeFirebaseState(raw) {
     pendingDiscounts: toArray(p.pendingDiscounts),
     pendingUnitBuffs: toArray(p.pendingUnitBuffs),
     discardPile: toArray(p.discardPile),
+    mulliganReturned: toArray(p.mulliganReturned),
   } : p;
   // Craft (H25) / Training Officer (H19) generate card definitions at runtime that only ever
   // existed in the crafting client's own in-memory CARD_BY_ID — without this, the receiving
@@ -1601,6 +1649,8 @@ function normalizeFirebaseState(raw) {
     p2:    fixPlayer(raw.p2),
     board: normalizeRemoteBoard(raw.board),
     _eventHistory: eventHistory,
+    // Only add the key when present: an `undefined` value would make the next Firebase write fail.
+    ...(raw.stats ? { stats: normalizeStats(raw.stats) } : {}),
   };
 }
 
@@ -1742,7 +1792,7 @@ function receiveRemoteState(remoteState, { force = false, preserveSyncStatus = f
       triggerEventEffects(ev, 0);
     }, (i + 1) * 600);
   });
-  checkWin();
+  checkWin({ remote: true });
   // The opponent's End Turn handler can't prompt us, so an inbound state that hands us the
   // turn is where this client runs its own Hero Phase. runHeroPhase re-checks lastObjLevel,
   // so arriving at the same state twice can't double-deploy. Gated on the initiative actually
@@ -1757,25 +1807,196 @@ function receiveRemoteState(remoteState, { force = false, preserveSyncStatus = f
     // runs Hero Phase itself once the last pending pick drains.
     if (!normalized.pendingObjectivePick) runHeroPhase(myRole);
   }
+  // Start this client's clocks the first time it sees a playable match / its own turn (covers turn
+  // hand-offs and the non-host client, which never runs finishStartGame).
+  if (isOnline && normalized.readyForPlay && matchStartedAtMs == null) matchStartedAtMs = Date.now();
+  if (isOnline && !gameOver && normalized.readyForPlay && normalized.initiative === myRole && turnStartedAtMs == null) {
+    turnStartedAtMs = Date.now();
+  }
 }
 
-function showEndScreen(winner) {
+// ── Match statistics (docs/plans/2026-09-16-match-statistics.md) ────────────────
+// Exactly one client writes the record: the one that ended the match (checkWin from its own
+// action), or the one left behind on a disconnect. A client that only RECEIVED the final state
+// never writes, so online matches are never counted twice. Online, an HQ ending is written only
+// once this client's game-ending state write is confirmed by Firebase (see pushStateIfOnline):
+// if that write is rejected, nothing is recorded for a state that never became real. Not host-only
+// on purpose: the game doesn't detect a closed tab, so a host-only writer would silently lose every
+// match the host's tab dropped out of. The host (online p1, or the only client in Local/vs AI)
+// gets the include toggle and note, saved under stats/meta.
+let statsEnd = null;            // { winner, endReason } once this client ended the match itself
+let statsRecord = null;         // built once, kept until a write succeeds
+let statsRecordSaved = false;
+let statsWriteInFlight = false;
+
+function setStatsStatus(text) {
+  const el = document.getElementById('stats-status');
+  if (el) el.textContent = text;
+}
+
+function saveStatsRecord() {
+  if (!statsRecord || statsRecord.source === 'selfplay' || statsRecordSaved || statsWriteInFlight) return;
+  statsWriteInFlight = true;
+  updateLeaveButtons();
+  const retryBtn = document.getElementById('stats-retry-btn');
+  retryBtn.style.display = 'none';
+  writeMatchRecord(statsRecord.matchId, statsRecord) // same path + same record: a retry can't duplicate
+    .then(() => {
+      statsRecordSaved = true;
+      setStatsStatus('Match saved to the statistics log.');
+    })
+    .catch(err => {
+      console.error('[stats] match record write failed', err);
+      setStatsStatus(`Statistics: match not saved (${err.message}). Press Retry saving match before leaving.`);
+      retryBtn.style.display = '';
+    })
+    .finally(() => {
+      statsWriteInFlight = false;
+      updateLeaveButtons();
+    });
+}
+
+// Leaving the end screen (Main Menu, or Exit before the end screen covers it) waits until the
+// ending is durable: online, this client's game-ending state must be confirmed by the server, and
+// a match record this client built must be saved. Leaving earlier closes the page and silently
+// loses the record, and the other client never writes one. Policy after a failed record write:
+// both stay blocked and Retry is the way forward; closing the tab is the only way to abandon an
+// unsaved record. Self-play records (kept out of Firebase) and matches with nothing to save
+// (a received ending, a match without stats) never block. Found 2026-09-17 in review.
+function endingSavePending() {
+  if (localEndingUncommitted) return true;
+  return !!statsRecord && statsRecord.source !== 'selfplay' && !statsRecordSaved;
+}
+
+function updateLeaveButtons() {
+  const pending = endingSavePending();
+  const saveFailed = pending && !localEndingUncommitted && !statsWriteInFlight;
+  const menu = document.getElementById('end-menu-btn');
+  if (menu) {
+    menu.disabled = pending;
+    menu.textContent = pending && !saveFailed ? 'Saving result…' : 'Main Menu';
+    menu.title = saveFailed ? 'The match is not saved yet. Press Retry saving match first.' : '';
+  }
+  const exit = document.getElementById('btn-exit');
+  if (exit) exit.disabled = pending;
+}
+
+document.getElementById('end-menu-btn').addEventListener('click', () => {
+  if (endingSavePending()) { updateLeaveButtons(); return; }
+  window.location.href = 'index.html';
+});
+
+// `finalState` must be a state this client knows is real: the local state for Local/vs AI and
+// disconnects, or the confirmed pushed state for an online HQ ending.
+function finalizeMatchStats(finalState) {
+  if (statsRecord || !statsEnd || !finalState?.stats) return;
+  try {
+    const withFinalTurn = recordTerminalTurn(finalState, { ms: turnStartedAtMs == null ? undefined : Date.now() - turnStartedAtMs });
+    statsRecord = buildMatchRecord(withFinalTurn, {
+      winner: statsEnd.winner,
+      endReason: statsEnd.endReason,
+      endedAt: Date.now(),
+      durationMs: matchStartedAtMs == null ? undefined : Date.now() - matchStartedAtMs,
+      site: `${location.origin}${location.pathname}`,
+    });
+  } catch (err) {
+    console.error('[stats] could not build the match record', err);
+    setStatsStatus('Statistics: could not build the match record (see console).');
+    updateLeaveButtons();
+    return;
+  }
+  window.__SIGNAL_STATS__ = { lastRecord: statsRecord };
+  saveStatsRecord(); // no-op for self-play: selfplay_test.mjs saves those to a local file instead
+  updateLeaveButtons();
+}
+
+function endMatchStats({ winner, endReason, remote = false }) {
+  if (remote || statsEnd || !state?.stats) return;
+  statsEnd = { winner, endReason };
+  // Online HQ endings wait for pushStateIfOnline to confirm the game-ending write.
+  if (!isOnline || endReason === 'disconnect') finalizeMatchStats(state);
+}
+
+document.getElementById('stats-retry-btn').addEventListener('click', saveStatsRecord);
+
+function showStatsControls() {
+  if (!state?.stats?.matchId || state.stats.source === 'selfplay') return;
+  if (state.readyForPlay !== true) return; // a match that never started has no record to annotate
+  if (isOnline && myRole !== 'p1') return;
+  document.getElementById('end-stats').style.display = 'flex';
+}
+
+document.getElementById('stats-save-btn').addEventListener('click', () => {
+  const matchId = state?.stats?.matchId;
+  if (!matchId) return;
+  const btn = document.getElementById('stats-save-btn');
+  btn.disabled = true;
+  writeMatchMeta(matchId, {
+    included: document.getElementById('stats-include').checked,
+    note: document.getElementById('stats-note').value.trim(),
+    updatedAt: Date.now(),
+  })
+    .then(() => setStatsStatus('Statistics settings saved.'))
+    .catch(err => {
+      console.error('[stats] settings write failed', err);
+      setStatsStatus(`Statistics settings not saved (${err.message}).`);
+    })
+    .finally(() => { btn.disabled = false; });
+});
+
+// Online only: true from the moment this client ends the match with its own action until that
+// game-ending state is confirmed on the server (see pushStateIfOnline). If the write is rejected
+// instead, rollBackUncommittedEnding undoes the local end of match.
+let localEndingUncommitted = false;
+let endScreenRevealTimer = null;
+
+const isTerminalState = s => (s?.p1?.hq ?? 1) <= 0 || (s?.p2?.hq ?? 1) <= 0;
+
+function showEndScreen(winner, { remote = false } = {}) {
   // gameOver flips synchronously so every `!gameOver` guard elsewhere (Hero Phase, turn
   // toasts, etc.) reacts immediately — only the visual reveal is delayed, so the killing
   // blow's own flash/popup/connector-line sequence gets to finish before the full-screen
   // overlay covers the board. 1800ms matches the Hero modal's delay (see runHeroPhase): the
   // longest piece of any single hit's sequence is the "DIRECT HIT" text popup's 1.6s fade,
   // starting 200ms after the hit lands.
+  if (isOnline && !remote && !gameOver) localEndingUncommitted = true;
   gameOver = true;
-  setTimeout(() => {
+  endMatchStats({ winner: winner === 'P1' ? 'p1' : 'p2', endReason: 'hq', remote });
+  showStatsControls();
+  updateLeaveButtons();
+  clearTimeout(endScreenRevealTimer);
+  endScreenRevealTimer = setTimeout(() => {
+    endScreenRevealTimer = null;
     document.getElementById('end-winner').textContent = `${winner} WINS`;
     document.getElementById('end-screen').style.display = 'flex';
   }, 1800);
 }
 
-function checkWin() {
-  if (state.p1.hq <= 0) { showEndScreen('P2'); return true; }
-  if (state.p2.hq <= 0) { showEndScreen('P1'); return true; }
+// Found 2026-09-17 (ChatGPT review of the stats branch): when this client's game-ending write is
+// rejected (another revision reached the server first), the server's match is still live, but
+// gameOver, the scheduled end-screen reveal and statsEnd all stayed set, so the acting player was
+// frozen on a game-over screen for a match that never ended. Called only from the rejected-write
+// path, and only while this client's own ending is still unconfirmed and the server's state is
+// non-terminal, so a match that genuinely ended can never be reopened. No statistics record can
+// exist for the rejected ending (one is only built after a game-ending write commits), and any
+// write queued behind the rejected one was already dropped, so this clears only local UI/state.
+function rollBackUncommittedEnding() {
+  clearTimeout(endScreenRevealTimer);
+  endScreenRevealTimer = null;
+  document.getElementById('end-screen').style.display = 'none';
+  document.getElementById('end-stats').style.display = 'none';
+  document.getElementById('stats-retry-btn').style.display = 'none';
+  setStatsStatus('');
+  gameOver = false;
+  localEndingUncommitted = false;
+  statsEnd = null;
+  if (!statsRecordSaved && !statsWriteInFlight) statsRecord = null;
+  updateLeaveButtons();
+}
+
+function checkWin({ remote = false } = {}) {
+  if (state.p1.hq <= 0) { showEndScreen('P2', { remote }); return true; }
+  if (state.p2.hq <= 0) { showEndScreen('P1', { remote }); return true; }
   return false;
 }
 
@@ -1856,6 +2077,7 @@ function applyHeroPower(s, role, col, hero, targetKey) {
 
     case 'H17': // HQ Assault Commander — deal 2 damage to enemy HQ (2026-09 balance pass: was 1)
       s = { ...s, [opp]: { ...s[opp], hq: s[opp].hq - 2 } };
+      s = recordHqDamage(s, opp, 2, 'hero');
       log.push(`${hero.name}: 2 damage to ${opp.toUpperCase()}'s HQ`);
       break;
 
@@ -1951,6 +2173,8 @@ function applyHeroPower(s, role, col, hero, targetKey) {
       const { newUnit, hqDamage } = applyHit(before);
       const finalUnit = newUnit.state === 'destroyed' ? null : newUnit;
       s = { ...s, board: { ...s.board, [targetKey]: finalUnit }, [opp]: { ...s[opp], hq: s[opp].hq - hqDamage } };
+      s = recordHqDamage(s, opp, hqDamage, 'hero');
+      s = recordUnitHits(s, role, 'hero', { [targetKey]: before }, [{ key: targetKey, newUnit: finalUnit }]);
       log.push(`${hero.name}: Hit ${beforeName} — ${finalUnit === null ? 'Destroyed' : newUnit.state}`);
       const triggered = applyGameEvents(s, [unitSuppressedEvent(targetKey, before, finalUnit)]);
       s = triggered.state;
@@ -2063,7 +2287,7 @@ function tryActivateHero(role, col) {
       // heroActivationKey here, at the pay/lock commit, same reasoning as H25 below — this is
       // already the moment heroesActivatedThisTurn records the activation, and the later pick
       // commit only moves the chosen card into hand, so the glow fires exactly once.
-      commitState(paid, costModLog, undefined, undefined, `${role}-${col}`);
+      commitState(recordHeroActivation(paid, role, hero.id, cost), costModLog, undefined, undefined, `${role}-${col}`);
       showQuartermasterModal(role, candidates);
       return true;
     }
@@ -2083,12 +2307,12 @@ function tryActivateHero(role, col) {
       // commit only adds the crafted card to hand, so tying the glow to this commit instead
       // plays it exactly once (Found 2026-09-XX, GPT review: this commit previously omitted it
       // entirely, so Craft activation never glowed on either client).
-      commitState(paid, costModLog, undefined, undefined, `${role}-${col}`);
+      commitState(recordHeroActivation(paid, role, hero.id, cost), costModLog, undefined, undefined, `${role}-${col}`);
       showCraftPickerModal(role);
       return true;
     }
     const paid = { ...state, [role]: { ...spendCostMods(ps), fuel: ps.fuel - cost } };
-    const { state: next, log } = applyHeroPower(paid, role, col, hero, null);
+    const { state: next, log } = applyHeroPower(recordHeroActivation(paid, role, hero.id, cost), role, col, hero, null);
     commitState(next, [...costModLog, ...log], undefined, undefined, `${role}-${col}`);
     checkWin();
     return true;
@@ -2103,7 +2327,7 @@ function tryActivateHero(role, col) {
   // it (and the discount/tax, since they were consumed from this same pre-cancel state) —
   // the same contract commands use (see startCommandTargeting).
   preCommandState = state;
-  state = { ...state, [role]: { ...spendCostMods(ps), fuel: ps.fuel - cost } };
+  state = recordHeroActivation({ ...state, [role]: { ...spendCostMods(ps), fuel: ps.fuel - cost } }, role, hero.id, cost);
   pendingHeroId = hero.id;
   pendingHeroColumn = col;
   pendingHeroTargets = new Set(targets);
@@ -2554,6 +2778,7 @@ document.getElementById('board').addEventListener('click', e => {
         card, c, discount,
       ),
     };
+    newState = recordCardPlayed(newState, active, selectedHandCardId, effectiveCost);
 
     // Inspire/Muster (combat.js's own doc comment): "Callers must call recalculateDynamicStats
     // after every placement, movement, or destruction — the 3 events that can change
@@ -2719,6 +2944,12 @@ document.getElementById('board').addEventListener('click', e => {
       p1: { ...rallyState.p1, hq: rallyState.p1.hq - dmgP1 },
       p2: { ...rallyState.p2, hq: rallyState.p2.hq - dmgP2 },
     };
+    // Base destruction damage is combat; anything Overrun added on top is the Command's.
+    newState = recordHqDamage(newState, 'p1', result.hqDamageToP1, 'combat');
+    newState = recordHqDamage(newState, 'p2', result.hqDamageToP2, 'combat');
+    newState = recordHqDamage(newState, 'p1', dmgP1 - result.hqDamageToP1, 'command');
+    newState = recordHqDamage(newState, 'p2', dmgP2 - result.hqDamageToP2, 'command');
+    newState = recordUnitHits(newState, attacker, CARD_BY_ID[rallyState.board[pendingAttackerKey]?.cardId]?.cls ?? 'Unknown', rallyState.board, result.boardMutations);
 
     const attackerKey = pendingAttackerKey;
     const attackerUnit = rallyState.board[attackerKey];
@@ -3021,6 +3252,12 @@ function applyObjectiveEffects(s, player, resumeAfterKey = null) {
 
     const backbone = lv >= 3 ? 2 : 1;
     s = { ...s, [opp]: { ...s[opp], hq: s[opp].hq - backbone } };
+    s = recordHqDamage(s, opp, backbone, 'objectiveBackbone');
+    s = recordObjectiveActivation(s, key, player, lv, backbone);
+    // Secondary-effect yields are measured as a before/after diff around the switch below, so no
+    // individual Objective case needs its own recorder call.
+    const fuelBeforeEffect = s[player].fuel;
+    const deckBeforeEffect = s[player].deck.length;
     log.push(`${nm} L${lv}: ${backbone} HQ damage to ${opp.toUpperCase()}`);
 
     // Doc 04 §5/§19 (locked): "lethal backbone stops later secondary/Objective resolution"
@@ -3171,6 +3408,8 @@ function applyObjectiveEffects(s, player, resumeAfterKey = null) {
       }
       default: log.push(`${nm} L${lv}: effect triggered (not automated)`);
     }
+    s = recordObjectiveYield(s, key, player, 'fuel', s[player].fuel - fuelBeforeEffect);
+    s = recordObjectiveYield(s, key, player, 'draws', deckBeforeEffect - s[player].deck.length);
   }
   return { state: recalculateDynamicStats(s), log, pendingArtyHits: artyHits, pendingPick: null };
 }
@@ -3271,7 +3510,7 @@ function applyRuthlessStrategistIfPresent(s, active) {
   if (!(s[active].heroZones ?? []).includes('H20')) return { state: s, log: [] };
   const afterDraw = drawCards(s[active], 1);
   const afterDamage = { ...afterDraw, hq: afterDraw.hq - 1 };
-  return { state: { ...s, [active]: afterDamage }, log: [`${CARD_BY_ID['H20'].name}: draw 1 card, 1 damage to own HQ`] };
+  return { state: recordHqDamage({ ...s, [active]: afterDamage }, active, 1, 'selfInflicted'), log: [`${CARD_BY_ID['H20'].name}: draw 1 card, 1 damage to own HQ`] };
 }
 
 // ── Instant commands ──────────────────────────────────────────────────────────
@@ -3300,6 +3539,7 @@ function playInstantCommand(cardId) {
       card, null, discount,
     ),
   };
+  s = recordCardPlayed(s, active, cardId, effectiveCost);
   const log = [];
 
   switch (cardId) {
@@ -3378,6 +3618,7 @@ function playInstantCommand(cardId) {
       // unused portion of THIS grant expires at cleanup rather than persisting — doc 01 §3.
       const grantedFuel = gainFuel(s[active], 3, false);
       s = { ...s, [active]: { ...grantedFuel, hq: grantedFuel.hq - 2, tempFuelGrant: (grantedFuel.tempFuelGrant ?? 0) + 3 } };
+      s = recordHqDamage(s, active, 2, 'selfInflicted');
       log.push(`${card.name}: +3 Fuel this turn, 2 damage to own HQ`);
       break;
     }
@@ -3599,6 +3840,7 @@ function startCoordinatedStrike(cardId) {
   // doc 02 Q027: goes to Discard Pile — safe even mid-targeting since Cancel fully restores
   // preCommandState, wiping this along with the hand-removal/Fuel-spend if the player bails.
   state = { ...state, [active]: consumeDiscounts({ ...state[active], fuel: state[active].fuel - effectiveCost, hand: handAfter, discardPile: [...(state[active].discardPile ?? []), cardId] }, card, null, discount) };
+  state = recordCardPlayed(state, active, cardId, effectiveCost);
   pendingCommandId = cardId;
   pendingCoordStrikeFirst = null;
   uiState = 'command-coordstrike-first';
@@ -3653,6 +3895,7 @@ function startCommandManeuver(cardId) {
     // doc 02 Q027 (Discard Pile) — safe pre-completion, see the note on startCoordinatedStrike.
     [active]: consumeDiscounts({ ...state[active], fuel: state[active].fuel - effectiveCost, hand: handAfter, discardPile: [...(state[active].discardPile ?? []), cardId] }, card, null, discount),
   };
+  state = recordCardPlayed(state, active, cardId, effectiveCost);
   pendingCommandId = cardId;
   pendingCommandManeuverSource = { key: null, commandId: cardId };
   // C27 Blitzkrieg Order: Escalate widens "1 Tank" to "up to 2 Tanks" — mark Escalate used on
@@ -3746,6 +3989,7 @@ function startCommandTargeting(cardId) {
       card, null, discount,
     ),
   };
+  state = recordCardPlayed(state, active, cardId, effectiveCost);
   pendingCommandId = cardId;
   pendingRallyCryCount = (cardId === 'C03' || cardId === 'C10') ? 2 : 0;
   uiState = 'command-targeting';
@@ -3778,6 +4022,7 @@ function startEnemyHeroTargeting(cardId) {
       card, null, discount,
     ),
   };
+  state = recordCardPlayed(state, active, cardId, effectiveCost);
   pendingCommandId = cardId;
   uiState = 'command-hero-targeting';
   appendLog([`${card.name}: choose an enemy Hero`]);
@@ -3903,6 +4148,9 @@ function applyCommandEffect(commandId, targetKey) {
       // so that Guard check isn't hand-rolled a second time and risk diverging from combat's.
       const dc = resolveDestructionChain(s, { unitKey: targetKey, sourceUnitKey: null, cause: 'command' });
       s = { ...dc.state, p1: { ...dc.state.p1, hq: dc.state.p1.hq - dc.hqDamageToP1 }, p2: { ...dc.state.p2, hq: dc.state.p2.hq - dc.hqDamageToP2 } };
+      s = recordHqDamage(s, 'p1', dc.hqDamageToP1, 'selfInflicted');
+      s = recordHqDamage(s, 'p2', dc.hqDamageToP2, 'selfInflicted');
+      s = recordUnitHits(s, active, 'self', { [targetKey]: unit }, [{ key: targetKey, newUnit: null }]);
       s = { ...s, [active]: drawCards(s[active], 2) };
       log.push(`${card.name}: draw 2 cards`);
       log.push(...dc.log);
@@ -3912,6 +4160,9 @@ function applyCommandEffect(commandId, targetKey) {
       // the normal friendly-destruction result — applies even if the Unit has Guard.
       const dc = resolveDestructionChain(s, { unitKey: targetKey, sourceUnitKey: null, cause: 'command', hqResultReplacement: { targetHq: opp, amount: 2 } });
       s = { ...dc.state, p1: { ...dc.state.p1, hq: dc.state.p1.hq - dc.hqDamageToP1 }, p2: { ...dc.state.p2, hq: dc.state.p2.hq - dc.hqDamageToP2 } };
+      s = recordHqDamage(s, 'p1', dc.hqDamageToP1, 'command');
+      s = recordHqDamage(s, 'p2', dc.hqDamageToP2, 'command');
+      s = recordUnitHits(s, active, 'self', { [targetKey]: unit }, [{ key: targetKey, newUnit: null }]);
       log.push(`${card.name}:`);
       log.push(...dc.log);
       break;
@@ -4034,6 +4285,16 @@ document.getElementById('btn-end-turn').addEventListener('click', () => {
     p2: { ...directHQ.state.p2, hq: directHQ.state.p2.hq - directHQ.hqDamageToP2 },
   };
   const directHQLog = directHQ.log;
+  s = recordHqDamage(s, 'p1', directHQ.hqDamageToP1, 'directHq');
+  s = recordHqDamage(s, 'p2', directHQ.hqDamageToP2, 'directHq');
+  s = recordDirectHq(s, currentPlayer, directHQ.sources.length);
+  s = recordTurnEnd(s, {
+    role: currentPlayer,
+    ms: turnStartedAtMs == null ? undefined : Date.now() - turnStartedAtMs,
+    fuelUnspent: s[currentPlayer].fuel,
+  });
+  // Local/vs AI: this client measures the next turn too. Online: the other client measures it.
+  turnStartedAtMs = isOnline ? null : Date.now();
 
   // Lethal Direct HQ ends the match right here (doc 01 §19 step 7: check victory after each
   // damage instance). Found in the 2026-09-16 stats plan review: this used to carry on into
@@ -4062,10 +4323,15 @@ document.getElementById('btn-end-turn').addEventListener('click', () => {
                                                           // bonus draw, so their first turn (turn 2) must draw here.
     newState = { ...newState, [newActive]: drawCards(newState[newActive], 1) };
   }
+  const fuelBeforeRefresh = newState[newActive].fuel;
+  const pendingFuelBeforeRefresh = newState[newActive].pendingFuelGain ?? 0;
   newState = startOfTurn(newState);                      // gain fuel for new active player
+  // startOfTurn adds 3 capped plus pendingFuelGain uncapped; whatever of the 3 didn't land hit the cap.
+  newState = recordFuelLostToCap(newState, newActive, 3 + pendingFuelBeforeRefresh - (newState[newActive].fuel - fuelBeforeRefresh));
   const objectivesBeforeThisTurn = newState.objectives;
   newState = updateObjectiveLevels(newState);            // escalate objective levels
   newState = checkObjectiveControl(newState);            // check majority-adjacent control
+  newState = recordObjectiveControl(newState);
 
   // Capture/level-up feedback — previously silent (both recalculate here every turn with no
   // transition of any kind). Diffed against the snapshot just above rather than threaded
@@ -4181,13 +4447,31 @@ document.getElementById('btn-cancel').addEventListener('click', () => {
 // ── Exit ──────────────────────────────────────────────────────────────────────
 
 document.getElementById('btn-exit').addEventListener('click', async () => {
+  if (endingSavePending()) { updateLeaveButtons(); return; } // see endingSavePending
   if (!confirm('Exit to main menu? Current game will be lost.')) return;
   if (isOnline && gameId && myRole) await setPlayerLeft(gameId, myRole);
   window.location.href = 'index.html';
 });
 
+// A snapshot in which the opponent left counts as a disconnect only while the match is still live.
+// If the same snapshot already holds a finished match (an HQ at 0), the leave came after the ending
+// (the winner used Exit), and a listener can receive both in one delivery. The ending takes
+// precedence: the snapshot is processed normally, so the survivor shows the real result and, as a
+// receiver, writes nothing. Checking _playerLeft first used to turn it into a disconnect whose
+// record overwrote the correct HQ record at the same path. Found 2026-09-17 in review.
+function opponentLeftLiveMatch(snapshot) {
+  return !!snapshot?._playerLeft && snapshot._playerLeft !== myRole && !isTerminalState(snapshot);
+}
+
 function showDisconnectScreen(who) {
+  // If the match had already ended normally, its record is already handled: don't replace it
+  // with a "disconnect" one just because the other player left the end screen. A match that never
+  // started (online mulligan, readyForPlay still false) gets no record at all, even though its
+  // state already carries stats.
+  if (!gameOver && state?.readyForPlay === true) endMatchStats({ winner: null, endReason: 'disconnect' });
   gameOver = true;
+  showStatsControls();
+  updateLeaveButtons();
   document.getElementById('end-winner').textContent = `${who.toUpperCase()} LEFT THE GAME`;
   document.getElementById('end-subtitle').textContent = 'OPPONENT DISCONNECTED';
   document.getElementById('end-screen').style.display = 'flex';
@@ -4563,7 +4847,7 @@ document.addEventListener('keydown', e => {
 if (isOnline && myRole === 'p2') {
   document.getElementById('picker-label').textContent = 'YOUR DECK — CHOOSE A DECK';
   subscribeState(gameId, data => {
-    if (data._playerLeft && data._playerLeft !== myRole && state) {
+    if (opponentLeftLiveMatch(data) && state) {
       showDisconnectScreen(data._playerLeft);
       return;
     }
@@ -4780,10 +5064,12 @@ document.getElementById('field-reserves-skip').addEventListener('click', () => c
 // committed by tryActivateHero before this modal opens (see the H25 special case there) — this
 // only resolves which candidate joins the hand and advances the escalating next-Craft cost.
 let craftPickerRole = null;
+let craftOfferedCards = []; // the 3 candidates currently shown, for recordCraftPick
 
 function showCraftPickerModal(role) {
   craftPickerRole = role;
   const candidates = generateCraftCandidates().map(c => craftCandidateToCard(c, role));
+  craftOfferedCards = candidates;
   const container = document.getElementById('craft-picker-cards');
   container.innerHTML = '';
   candidates.forEach(card => {
@@ -4816,11 +5102,11 @@ function confirmCraftPick(chosenId) {
   // (generatedCards) — CARD_BY_ID is per-client, in-memory only, so without this the OTHER
   // client's CARD_BY_ID[chosenId] lookup comes back undefined the moment this card is
   // visible to them (e.g. placed on the board), crashing that client's render.
-  const s = {
+  const s = recordCraftPick({
     ...state,
     [role]: addCardToHand(advanceCraftCost(ps), chosenId),
     generatedCards: { ...(state.generatedCards ?? {}), [chosenId]: chosen },
-  };
+  }, role, chosen, craftOfferedCards);
   const log = [`Chief Aircraft Engineer: Crafted ${chosen.name} (${chosen.n}/${chosen.e}/${chosen.s}/${chosen.w}, ${chosen.keyword}) — next activation costs ${nextCraftCost(s[role])}`];
   // Same fix as confirmFO/confirmFieldReserves: keep the modal open and craftPickerRole set
   // until the write actually lands, so a sync pause doesn't silently lose the crafted card.
@@ -5258,4 +5544,5 @@ window.__SIGNAL_TEST_HOOKS__ = {
   receiveRemoteState,
   getState: () => state,
   getConsumedEventIds: () => [...consumedEventIds],
+  isGameOver: () => gameOver,
 };

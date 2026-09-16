@@ -10,6 +10,7 @@ const runtimeFiles = [
   'game.html',
   'deckbuilder.html',
   'showroom.html',
+  'stats.html',
   ...readdirSync(`${ROOT}/js`).filter(name => name.endsWith('.js')).map(name => `js/${name}`),
 ];
 

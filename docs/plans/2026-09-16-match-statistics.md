@@ -38,6 +38,19 @@ The review also confirmed every find-and-replace anchor at `d2d02fe` and found t
 
 **Self-play harness (Task 10 Step 4):** it crashed or stalled on every run as of `5ef92d5`; fixed the same day (see `CHANGELOG.md`, "Self-play harness repaired"). Before relying on it, confirm a short run finishes games: `node selfplay_test.mjs 3`. If `selfplay_test.mjs` changes before Part A is built, re-check Task 10 Step 1's four anchors, since the harness edits touched nearby code (the `BASE_URL`, `playOneGame` and `gameOver` anchors are unchanged by that fix; the `import { chromium }` anchor too).
 
+## Review round 2 (2026-09-17)
+
+A code review of the implementation (`050dfd9`, followed by fixes in `b54c9c4`) raised three production issues and a test-fidelity gap. All were reproduced with a failing browser test before fixing, and all are fixed on `feature/match-statistics`:
+
+| Issue | Fix |
+|---|---|
+| **Blocker:** an ending and the winner's `_playerLeft` arriving in one snapshot were treated as a disconnect, and the survivor's disconnect record overwrote the correct HQ record at the same path | All three online listeners go through `opponentLeftLiveMatch`: a leave counts as a disconnect only when the snapshot is non-terminal. A terminal snapshot is processed normally, so the survivor shows the real result and writes nothing (receivers never write). |
+| A disconnect during the online mulligan wrote a record for a match that never started | `showDisconnectScreen` only creates a disconnect record when `state.readyForPlay === true`; stats controls are hidden before that too. |
+| Main Menu could leave the page before the ending was durable, losing the record | Main Menu (now `#end-menu-btn`, no inline handler) and Exit are disabled while this client's online game-ending write is unconfirmed or its built record is unsaved (`endingSavePending`). After a failed save they stay blocked and Retry is the way forward. |
+| The Firebase stand-in accepted values real RTDB rejects and always delivered every intermediate update | It now also rejects invalid keys/paths and NaN/Infinity (keeping `{'.sv':'timestamp'}` legal), and `holdDeliveries`/`releaseDeliveries` deliver only the newest value to a held client. |
+
+New browser regressions: coalesced ending + leave (both directions), mulligan disconnect (no record), post-start disconnect (one record), Main Menu blocked during the game-ending transaction and during the record write and enabled after save, Main Menu blocked after a failed write until Retry succeeds, fake-Firebase key/number validation and held delivery.
+
 ## Hard rules for the implementer
 
 1. **Stats must never break a match.** Every recorder is a no-op if `state.stats` is missing, never mutates its input (Cancel restores `preCommandState` snapshots, so an in-place mutation would leak past a cancel), and swallows its own errors. Do not "simplify" this away.
@@ -3169,7 +3182,8 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ## Known limits (accepted, documented in STATUS.md)
 
 - Abandoned matches (tab closed, Exit mid-game) produce no record. The game doesn't detect a closed tab, so the other player isn't shown a disconnect either.
-- An online match whose game-ending state write is rejected (another update landed first) produces no record. The local end screen still shows; that's existing game behavior, not something stats changes.
+- An online match whose game-ending state write is rejected (another update landed first) produces no record, and the acting client rolls back its local end of match and continues from the server's live state (added 2026-09-17 after review; see `CHANGELOG.md`). A non-conflict write failure still pauses sync with "Connection interrupted", as before, and leaves Main Menu blocked (the ending never confirmed); closing the tab is the way out.
+- Main Menu and Exit stay blocked while an ending is being saved and after a failed record save until Retry succeeds; closing the tab abandons an unsaved record.
 - `startedAt` / `endedAt` are wall-clock times for display and sorting. `durationMs` is measured on the writing client's own clock from when the match became playable there (mulligan time excluded), and is omitted if unknown.
 - Turn duration is measured on the acting client's clock and includes Hero deploy modal time. A turn this client didn't see start has no `ms`. The final, cut-short turn is recorded with `terminal: true` and excluded from turn-length and unspent-Fuel averages.
 - Win rates only count decided matches (HQ destroyed); disconnects are excluded from win %.
