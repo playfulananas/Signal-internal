@@ -6,7 +6,7 @@
 import { chromium } from "playwright";
 import { CARD_BY_ID } from "./js/cards.js";
 import { bestPlacement, bestExistingAttack, findLethal, findCombinedLethal, bestAttackForUnit, scoreCommand, scoreHeroPower, bestHeroPowerTarget, bestHeroDeployment, maxAttacksFor } from "./js/bot_ai.js";
-import { discountFor } from "./js/state.js";
+import { discountFor, objectiveLevel } from "./js/state.js";
 
 const NUM_GAMES = Number(process.argv[2] || 3);
 const MAX_HALF_TURNS = 60; // safety valve — 30 rounds each (real games finish in ~7-11)
@@ -25,18 +25,33 @@ async function readDebug(page) {
   return page.evaluate(() => window.__SIGNAL_DEBUG__ ?? null);
 }
 
+// Every in-game click gets a short timeout (2026-09-16). With Playwright's default 30s, any click
+// that landed while a choice modal covered the board (a Hero Deploy modal opening on its 1800ms
+// timer, Field Coordinator's rotate modal, Quartermaster) hung for 30s, and the End Turn click,
+// which had no .catch(), crashed the whole game. A blocked click now fails fast and the loop
+// resolves the modal on its next pass (see resolveOpenModals).
+const CLICK_TIMEOUT_MS = 3000;
+
 async function clickTile(page, key) {
-  await page.locator(`.tile[data-key="${key}"]`).first().click().catch(() => {});
+  await page.locator(`.tile[data-key="${key}"]`).first().click({ timeout: CLICK_TIMEOUT_MS }).catch(() => {});
 }
 
 async function clickHandCard(page, cardId) {
-  await page.locator(`#p1-hand .hand-card[data-card-id="${cardId}"]`).first().click().catch(() => {});
+  await page.locator(`#p1-hand .hand-card[data-card-id="${cardId}"]`).first().click({ timeout: CLICK_TIMEOUT_MS }).catch(() => {});
 }
 
 // Plain click (no shiftKey) activates a deployed Hero's Power — shift+click is a reposition,
 // which this harness never does. See game.js's handleHeroZoneClick.
 async function clickHeroZone(page, active, col) {
-  await page.locator(`#hero-zone-${active} .hero-zone-slot[data-hero-zone="${active}-${col}"]`).first().click().catch(() => {});
+  await page.locator(`#hero-zone-${active} .hero-zone-slot[data-hero-zone="${active}-${col}"]`).first().click({ timeout: CLICK_TIMEOUT_MS }).catch(() => {});
+}
+
+// Mirrors game.js's BLOCKING_MODAL_IDS (field-reserves-modal has no live trigger since its card
+// was archived, but stays listed so a revived card can't silently stall the harness).
+const BLOCKING_MODAL_IDS = ["fo-modal", "field-reserves-modal", "rotate-direction-modal", "craft-picker-modal", "quartermaster-modal", "hero-deploy-modal"];
+
+async function blockingModalOpen(page) {
+  return page.evaluate(ids => ids.some(id => document.getElementById(id)?.style.display === "flex"), BLOCKING_MODAL_IDS).catch(() => false);
 }
 
 async function handleForwardObserver(page) {
@@ -46,10 +61,10 @@ async function handleForwardObserver(page) {
   const n = await slots.count();
   const positions = ["keep", "top", "bottom"];
   for (let i = 0; i < n; i++) {
-    await page.locator(`#fo-btn-${i}-${positions[i] ?? "top"}`).click();
+    await page.locator(`#fo-btn-${i}-${positions[i] ?? "top"}`).click({ timeout: CLICK_TIMEOUT_MS }).catch(() => {});
     await page.waitForTimeout(20);
   }
-  await page.locator("#fo-confirm").click();
+  await page.locator("#fo-confirm").click({ timeout: CLICK_TIMEOUT_MS }).catch(() => {});
   await page.waitForTimeout(30);
 }
 
@@ -58,7 +73,7 @@ async function handleForwardObserver(page) {
 async function handleRotateDirection(page) {
   const modal = page.locator("#rotate-direction-modal");
   if (!(await modal.isVisible().catch(() => false))) return;
-  await page.locator("#rotate-cw-btn").click().catch(() => {});
+  await page.locator("#rotate-cw-btn").click({ timeout: CLICK_TIMEOUT_MS }).catch(() => {});
   await page.waitForTimeout(30);
 }
 
@@ -68,7 +83,17 @@ async function handleRotateDirection(page) {
 async function handleCraftPicker(page) {
   const modal = page.locator("#craft-picker-modal");
   if (!(await modal.isVisible().catch(() => false))) return;
-  await page.locator("#craft-picker-cards .fo-pos-btn").first().click().catch(() => {});
+  await page.locator("#craft-picker-cards .fo-pos-btn").first().click({ timeout: CLICK_TIMEOUT_MS }).catch(() => {});
+  await page.waitForTimeout(30);
+}
+
+// Quartermaster General (H01, 2026-09 balance pass: look at 3 random deck cards, take 1). Was
+// never handled: the modal stayed open, End Turn stayed disabled, and the run stalled. Always
+// takes the first card, same simplification as handleCraftPicker. Mirrors bot_player.js.
+async function handleQuartermaster(page) {
+  const modal = page.locator("#quartermaster-modal");
+  if (!(await modal.isVisible().catch(() => false))) return;
+  await page.locator("#quartermaster-cards .fo-pos-btn").first().click({ timeout: CLICK_TIMEOUT_MS }).catch(() => {});
   await page.waitForTimeout(30);
 }
 
@@ -97,21 +122,64 @@ async function handleHeroDeploy(page) {
 
   const debug = await readDebug(page);
   const state = debug?.state;
-  const active = state?.initiative;
-  const roster = state?.[active]?.heroRoster ?? [];
-  const heroZones = state?.[active]?.heroZones ?? [null, null, null, null];
-  const choice = state && roster.length ? bestHeroDeployment(state, active, roster, heroZones) : null;
+  // The modal belongs to whoever its title names ("P2 — FIRST HERO"), not necessarily the active
+  // player: runHeroPhase opens it on an 1800ms timer, and this harness often ends a turn faster
+  // than that, so one player's deploy modal routinely opens during the other player's turn.
+  // Scoring for the active player then picked a Hero that isn't among the shown cards, the click
+  // could never land, and no Hero was ever deployed (found 2026-09-16). Score for the modal's
+  // owner, from the cards actually shown.
+  const title = (await page.locator("#hero-deploy-title").innerText().catch(() => "")).trim();
+  const owner = /^P1\b/.test(title) ? "p1" : /^P2\b/.test(title) ? "p2" : state?.initiative;
+  const roster = await page.locator("#hero-deploy-cards .hero-card").evaluateAll(els => els.map(el => el.dataset.heroId)).catch(() => []);
+  const heroZones = state?.[owner]?.heroZones ?? [null, null, null, null];
+  const choice = state && roster.length ? bestHeroDeployment(state, owner, roster, heroZones) : null;
 
+  let resolved = false;
   if (choice) {
-    if (!(await clickOnce(page.locator(`#hero-deploy-cards .hero-card[data-hero-id="${choice.heroId}"]`).first()))) return;
-    await page.waitForTimeout(20);
-    await clickOnce(page.locator(".hero-zone-pick").nth(choice.col));
-  } else {
-    if (!(await clickOnce(page.locator("#hero-deploy-cards .hero-card").first()))) return;
-    await page.waitForTimeout(20);
-    await clickOnce(page.locator("#hero-deploy-zones .hero-zone-pick:not([disabled])").first());
+    resolved = (await clickOnce(page.locator(`#hero-deploy-cards .hero-card[data-hero-id="${choice.heroId}"]`).first()))
+      && (await page.waitForTimeout(20), await clickOnce(page.locator(".hero-zone-pick").nth(choice.col)));
+  }
+  if (!resolved && (await modal.isVisible().catch(() => false))) {
+    // Scored pick couldn't land (or nothing was scored): fall back to first Hero, first open column.
+    resolved = (await clickOnce(page.locator("#hero-deploy-cards .hero-card").first()))
+      && (await page.waitForTimeout(20), await clickOnce(page.locator("#hero-deploy-zones .hero-zone-pick:not([disabled])").first()));
+  }
+  // Never fail silently again: an unresolved deploy modal is what made every run stall or crash
+  // before 2026-09-16, with nothing in the output pointing at it.
+  if (!resolved && (await modal.isVisible().catch(() => false))) {
+    console.log(`  [hero deploy] could not resolve "${title}" (choice ${JSON.stringify(choice)}, shown ${JSON.stringify(roster)})`);
   }
   await page.waitForTimeout(30);
+}
+
+// runHeroPhase opens the active player's deploy modal 1800ms after their turn starts. If End Turn
+// is clicked before it appears, the next player's deploy timer can fire while this one is still
+// pending; both reuse the same modal, so this player's prompt is replaced before anyone picks.
+// Decks that end turns quickly (command-engine) finished whole games with 0 Heroes that way. Same
+// "is a deploy due" test as runHeroPhase: level rose, roster left, a free zone.
+async function waitForDueHeroDeploy(page) {
+  const s = (await readDebug(page))?.state;
+  const ps = s?.[s?.initiative];
+  if (!ps) return;
+  const due = objectiveLevel(s.turn) > (ps.lastObjLevel ?? 0)
+    && (ps.heroRoster ?? []).length > 0
+    && (ps.heroZones ?? []).some(z => z == null);
+  if (!due) return;
+  await page.locator("#hero-deploy-modal").waitFor({ state: "visible", timeout: 3000 }).catch(() => {});
+  await resolveOpenModals(page);
+}
+
+// Resolves every choice modal the harness knows, repeatedly, until none is open (one resolution
+// can open the next, e.g. a Hero Deploy timer firing right after a rotate pick). Called before
+// End Turn and whenever a click sequence notices a modal appeared.
+async function resolveOpenModals(page) {
+  for (let i = 0; i < 4 && (await blockingModalOpen(page)); i++) {
+    await handleHeroDeploy(page);
+    await handleForwardObserver(page);
+    await handleRotateDirection(page);
+    await handleCraftPicker(page);
+    await handleQuartermaster(page);
+  }
 }
 
 async function handleArtyTargeting(page) {
@@ -152,6 +220,10 @@ async function handleObjectivePicking(page) {
 // score the DOM-offered candidate tiles, click the best one. Loops for Double Attack.
 async function resolveTargetingSmart(page, { attackerKey = null, heroPower = null } = {}, maxSteps = 3) {
   for (let i = 0; i < maxSteps; i++) {
+    // A target click can open a modal (H11's rotate direction) without redrawing the board first,
+    // so stale .cmd-target highlights stay in the DOM under it. Stop here and let the caller's
+    // modal handling take over instead of clicking a covered tile.
+    if (await blockingModalOpen(page)) return;
     const targetTiles = page.locator(".tile.targetable, .tile.cmd-target");
     const count = await targetTiles.count();
     if (count === 0) return;
@@ -202,7 +274,7 @@ async function flushPendingUiState(page, debug) {
     await page.waitForTimeout(30);
     return readDebug(page);
   }
-  await page.locator("#btn-cancel").click().catch(() => {});
+  await page.locator("#btn-cancel").click({ timeout: CLICK_TIMEOUT_MS }).catch(() => {});
   await page.waitForTimeout(30);
   return readDebug(page);
 }
@@ -220,6 +292,7 @@ async function playTurnSmart(page) {
     await handleForwardObserver(page);
     await handleRotateDirection(page);
     await handleCraftPicker(page);
+    await handleQuartermaster(page);
     // Must run before flushPendingUiState below — there's no Cancel button for
     // 'objective-picking'. Also re-check Hero deploy here (not just at the top of the outer
     // per-turn loop): resolving the last pending Objective pick can trigger a deferred Hero
@@ -339,6 +412,7 @@ async function playTurnSmart(page) {
       await resolveTargetingSmart(page, { heroPower: { heroId: choice.heroId, col: choice.col } });
       await handleRotateDirection(page); // Field Coordinator's Hero Power (H11)
       await handleCraftPicker(page); // Chief Aircraft Engineer's Hero Power (H25)
+      await handleQuartermaster(page); // Quartermaster General's Hero Power (H01)
       const afterDebug = await readDebug(page);
       const nowActivated = afterDebug?.state?.[active]?.heroesActivatedThisTurn ?? [];
       if (!nowActivated.includes(choice.heroId)) deadThisTurn.add(`hero:${choice.heroId}`); // no-op: no legal target
@@ -385,14 +459,13 @@ async function playOneGame(page) {
     await handleForwardObserver(page);
     await handleArtyTargeting(page);
     await playTurnSmart(page);
-    await handleForwardObserver(page);
-    await handleRotateDirection(page);
-    await handleCraftPicker(page);
+    await resolveOpenModals(page);
+    await waitForDueHeroDeploy(page);
 
     if (await page.locator("#end-screen").isVisible().catch(() => false)) break;
     const endTurnBtn = page.locator("#btn-end-turn");
     if (await endTurnBtn.isEnabled().catch(() => false)) {
-      await endTurnBtn.click();
+      await endTurnBtn.click({ timeout: CLICK_TIMEOUT_MS }).catch(() => {});
       await page.waitForTimeout(40);
     }
     halfTurns++;
@@ -401,6 +474,13 @@ async function playOneGame(page) {
     // consecutive half-turns, something is stuck (regardless of cause) — bail early with
     // diagnostics instead of grinding to MAX_HALF_TURNS.
     const debug = await readDebug(page);
+    if (debug?.state && (debug.state.p1.hq <= 0 || debug.state.p2.hq <= 0)) {
+      // game.js reveals the end screen 1800ms after the lethal hit, and once the match is over
+      // every click no-ops, so the stall watchdog below could count 8 "no progress" half-turns
+      // inside that delay and report a finished game as STALLED. Wait for the reveal instead.
+      await page.locator("#end-screen").waitFor({ state: "visible", timeout: 5000 }).catch(() => {});
+      break;
+    }
     if (debug?.state) {
       const occupied = Object.values(debug.state.board).filter(Boolean).length;
       const signature = `${debug.state.p1.hq},${debug.state.p2.hq},${occupied}`;

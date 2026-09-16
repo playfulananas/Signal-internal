@@ -22,7 +22,7 @@ function isGameOver() {
 }
 
 function hasOpenBotChoiceModal() {
-  return ["fo-modal", "rotate-direction-modal", "craft-picker-modal"]
+  return ["fo-modal", "rotate-direction-modal", "craft-picker-modal", "quartermaster-modal"]
     .some(id => document.getElementById(id)?.style.display === "flex");
 }
 
@@ -105,6 +105,17 @@ async function handleCraftPicker() {
   await sleep(CLICK_DELAY_MS);
 }
 
+// Quartermaster General (H01, 2026-09 balance pass: look at 3 random deck cards, take 1). Was never
+// handled here: the bot paid for the Power, the modal stayed open, End Turn stayed disabled, and
+// P2's turn froze until the human picked a card and ended it for the bot. Always takes the first
+// card, same simplification as handleCraftPicker. Mirrored in selfplay_test.mjs.
+async function handleQuartermaster() {
+  const modal = document.getElementById("quartermaster-modal");
+  if (!modal || modal.style.display === "none") return;
+  document.querySelector("#quartermaster-cards .fo-pos-btn")?.click();
+  await sleep(CLICK_DELAY_MS);
+}
+
 // If we reach the top of the decision loop with uiState != 'idle', it's leftover from
 // something that didn't fully resolve (see selfplay_test.mjs for the original diagnosis:
 // a stale targeting/command prompt silently swallows the next click instead of registering).
@@ -148,6 +159,7 @@ async function playBotTurnSteps() {
     await handleForwardObserver();
     await handleRotateDirection();
     await handleCraftPicker();
+    await handleQuartermaster();
     // Must run before flushPendingUiState below: there's no Cancel button for
     // 'objective-picking' (it isn't a voluntary action to back out of), so if this uiState were
     // ever left for flushPendingUiState's generic "click Cancel on anything stale" fallback to
@@ -265,6 +277,7 @@ async function playBotTurnSteps() {
       await resolveTargetingSmart({ heroPower: { heroId: choice.heroId, col: choice.col } });
       await handleRotateDirection(); // Field Engineer (91) — direction modal, see game.js
       await handleCraftPicker(); // Chief Aircraft Engineer (H25) — 3-candidate modal, see game.js
+      await handleQuartermaster(); // Quartermaster General (H01) — 3-card pick modal, see game.js
       const afterDebug = readDebug();
       const nowActivated = afterDebug?.state?.[active]?.heroesActivatedThisTurn ?? [];
       if (!nowActivated.includes(choice.heroId)) deadThisTurn.add(`hero:${choice.heroId}`); // no-op: no legal target
@@ -288,6 +301,7 @@ export async function runBotTurn() {
     await handleForwardObserver();
     await handleRotateDirection();
     await handleCraftPicker();
+    await handleQuartermaster();
     await handleObjectivePicking();
     await handleUnitManeuver();
     await handleArtyTargeting();

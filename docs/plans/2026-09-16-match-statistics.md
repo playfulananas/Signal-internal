@@ -36,7 +36,7 @@ The review also confirmed every find-and-replace anchor at `d2d02fe` and found t
 
 **Dry run of this plan (2026-09-16):** every code block in Tasks 2-13 was applied mechanically to a copy of the repo with the Direct HQ / H16 fixes in place. All 133 blocks applied with every anchor found the expected number of times (CRLF files: `js/game.js`, `game.html`, `css/game.css`, `index.html`, `selfplay_test.mjs`; match their line endings when editing), every changed JS file passes `node --check`, and `npm test` passed 290/290 (256 existing + 34 new). Not covered by the dry run: browser behavior (Tasks 9, 10, 13 manual checks) and a self-play run, because of the harness problem below.
 
-**Known blocker for Task 10 Step 4:** `selfplay_test.mjs` crashes or stalls at the Hero deploy modal on the current code, including `5ef92d5` before any of this work (1 crash, 1 stall with 0 Heroes deployed after 5 rounds). Fix the harness first (separate task), or Task 10 Step 4 can't produce records to check.
+**Self-play harness (Task 10 Step 4):** it crashed or stalled on every run as of `5ef92d5`; fixed the same day (see `CHANGELOG.md`, "Self-play harness repaired"). Before relying on it, confirm a short run finishes games: `node selfplay_test.mjs 3`. If `selfplay_test.mjs` changes before Part A is built, re-check Task 10 Step 1's four anchors, since the harness edits touched nearby code (the `BASE_URL`, `playOneGame` and `gameOver` anchors are unchanged by that fix; the `import { chromium }` anchor too).
 
 ## Hard rules for the implementer
 

@@ -9,6 +9,42 @@ Newest first.
 
 ---
 
+## 2026-09-16 — Self-play harness repaired; three game bugs it was hiding
+
+`selfplay_test.mjs` crashed or stalled on every run (reproduced on `5ef92d5`). Debugged with
+instrumented runs; the causes were a mix of harness gaps and real game bugs. After the fixes:
+8/8 games finished, 0 stalls, 0 crashes, 0 page errors, avg 3.0 of 4 Heroes deployed per side
+(was 0-2). `regression_directhq_lethal_h16_cancel.mjs` extended to 15 checks, all confirmed
+failing on the old code for the new scenarios and passing now. `npm test` 256/256.
+
+**Game bugs (`js/game.js`, `js/bot_player.js`):**
+- **Rotate direction modal left End Turn stuck on "Finish Choice".** `confirmRotateDirection`
+  redrew while the modal was still open and never redrew after closing it (every other picker
+  modal already did). Humans recovered on their next click; the vs AI bot, which only ends its
+  turn when the button is enabled, froze after Change Formation (C16) or Field Coordinator (H11).
+- **vs AI bot froze after using Quartermaster General (H01).** `bot_player.js` never handled the
+  Quartermaster modal added in the 2026-09 balance pass, so P2's turn stopped with the modal open
+  until the human picked a card and ended the turn for the bot. Now handled like Craft (first card).
+- **Hero deploy timers could replace each other or open an empty, uncloseable modal.**
+  `runHeroPhase` opens the modal 1800ms after a turn starts. When turns end faster than that,
+  a second timer replaced the other player's open deploy modal (that player's prompt vanished
+  unpicked), and a stale timer could open a modal with no Hero cards, which has no way to close.
+  The timer now re-checks that the deploy is still due and waits for any open deploy modal.
+
+**Harness (`selfplay_test.mjs`):**
+- Every in-game click has a 3s timeout (was Playwright's 30s default; the End Turn click also had
+  no `.catch`, so a modal covering it crashed the game).
+- Handles the Quartermaster modal; `resolveOpenModals` clears all known modals before End Turn;
+  `resolveTargetingSmart` stops when a modal opens instead of clicking covered tiles.
+- The Hero deploy handler scores for the player named in the modal title, from the cards shown.
+  It used to assume the active player, so a deploy modal opening during the other player's turn
+  (common with fast bot turns) could never be resolved: the main reason no Heroes got deployed.
+- Waits for a due Hero deploy before ending a turn; waits for the delayed end screen instead of
+  reporting a won game as STALLED; logs any deploy modal it can't resolve instead of failing
+  silently.
+
+---
+
 ## 2026-09-16 — Lethal Direct HQ ends the match immediately, H16 Cancel refunds Fuel
 
 Two game bugs surfaced by the ChatGPT review of the match-statistics plan, both confirmed live

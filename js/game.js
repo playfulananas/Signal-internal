@@ -669,14 +669,32 @@ function runHeroPhase(role) {
   // than using the values snapshotted above, in case anything legitimately changes in that
   // window (nothing normally can, since the board isn't meaningfully interactive between End
   // Turn and this modal, but re-deriving costs nothing and avoids relying on that assumption).
-  setTimeout(() => {
+  //
+  // Found 2026-09-16 (self-play harness): when turns end faster than this delay, deploy timers pile
+  // up. A timer could open a modal with NO Hero cards (this level was already deployed by an
+  // earlier timer, or the roster ran out), which has no way to close and locks the game; and a
+  // timer firing while the other player's deploy modal was still open replaced its contents, so
+  // that player's prompt vanished unpicked. So at fire time: skip if the deploy is no longer due,
+  // and wait for any open deploy modal to be resolved instead of replacing it.
+  const openDeployModal = () => {
+    if (!state || gameOver) return;
     const freshPs = state[role];
-    showHeroDeploy(`${role.toUpperCase()} — ${isFirstHero ? 'FIRST HERO' : 'REINFORCEMENT'}`,
-      isFirstHero
+    const stillDue = (freshPs.lastObjLevel ?? 0) < level
+      && (freshPs.heroRoster ?? []).length > 0
+      && (freshPs.heroZones ?? []).some(z => z == null);
+    if (!stillDue) return;
+    if (document.getElementById('hero-deploy-modal').style.display === 'flex' || peekedModalId === 'hero-deploy-modal') {
+      setTimeout(openDeployModal, 300);
+      return;
+    }
+    const firstHero = (freshPs.heroZones ?? []).every(z => z == null);
+    showHeroDeploy(`${role.toUpperCase()} — ${firstHero ? 'FIRST HERO' : 'REINFORCEMENT'}`,
+      firstHero
         ? 'Round 2 — deploy your first Hero.'
         : 'Objective level rose — deploy another Hero.',
       freshPs.heroRoster ?? [], freshPs.heroZones, finish);
-  }, 1800);
+  };
+  setTimeout(openDeployModal, 1800);
 }
 
 // ── Start game ────────────────────────────────────────────────────────────────
@@ -4945,6 +4963,12 @@ function confirmRotateDirection(direction) { // direction: 1 = clockwise, -1 = c
   document.getElementById('rotate-direction-modal').style.display = 'none';
   updatePeekButtonVisibility();
   pendingRotation = null;
+  // Same fix as confirmFO/confirmCraftPick/confirmQuartermasterPick: redraw again now the modal is
+  // actually closed. commitState's redraw() ran while it was still open, so End Turn stayed
+  // disabled ("Finish Choice") until some unrelated action redrew, and the vs AI bot, which only
+  // ends its turn when that button is enabled, froze after Change Formation (C16) or Field
+  // Coordinator (H11). Found 2026-09-16 while fixing the self-play harness.
+  redraw();
   checkWin();
 }
 
