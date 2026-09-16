@@ -1550,7 +1550,13 @@ function pushStateIfOnline(s) {
   onlineWriteQueue = onlineWriteQueue
     .then(() => {
       if (generation !== onlineSyncGeneration) return null;
-      return pushVersionedState(gameId, prepared.state, prepared.expectedRevision);
+      return pushVersionedState(gameId, prepared.state, prepared.expectedRevision).then(result => {
+        // Match statistics: an online match this client ended is recorded from the game-ending
+        // state only once Firebase has accepted it. A rejected write lands in the .catch below
+        // instead, and nothing is recorded for it.
+        if (statsEnd && (prepared.state.p1?.hq <= 0 || prepared.state.p2?.hq <= 0)) finalizeMatchStats(prepared.state);
+        return result;
+      });
     })
     .catch(error => {
       if (generation !== onlineSyncGeneration) return;
@@ -1778,7 +1784,7 @@ function receiveRemoteState(remoteState, { force = false, preserveSyncStatus = f
       triggerEventEffects(ev, 0);
     }, (i + 1) * 600);
   });
-  checkWin();
+  checkWin({ remote: true });
   // The opponent's End Turn handler can't prompt us, so an inbound state that hands us the
   // turn is where this client runs its own Hero Phase. runHeroPhase re-checks lastObjLevel,
   // so arriving at the same state twice can't double-deploy. Gated on the initiative actually
@@ -1801,7 +1807,99 @@ function receiveRemoteState(remoteState, { force = false, preserveSyncStatus = f
   }
 }
 
-function showEndScreen(winner) {
+// ── Match statistics (docs/plans/2026-09-16-match-statistics.md) ────────────────
+// Exactly one client writes the record: the one that ended the match (checkWin from its own
+// action), or the one left behind on a disconnect. A client that only RECEIVED the final state
+// never writes, so online matches are never counted twice. Online, an HQ ending is written only
+// once this client's game-ending state write is confirmed by Firebase (see pushStateIfOnline):
+// if that write is rejected, nothing is recorded for a state that never became real. Not host-only
+// on purpose: the game doesn't detect a closed tab, so a host-only writer would silently lose every
+// match the host's tab dropped out of. The host (online p1, or the only client in Local/vs AI)
+// gets the include toggle and note, saved under stats/meta.
+let statsEnd = null;            // { winner, endReason } once this client ended the match itself
+let statsRecord = null;         // built once, kept until a write succeeds
+let statsRecordSaved = false;
+let statsWriteInFlight = false;
+
+function setStatsStatus(text) {
+  const el = document.getElementById('stats-status');
+  if (el) el.textContent = text;
+}
+
+function saveStatsRecord() {
+  if (!statsRecord || statsRecord.source === 'selfplay' || statsRecordSaved || statsWriteInFlight) return;
+  statsWriteInFlight = true;
+  const retryBtn = document.getElementById('stats-retry-btn');
+  retryBtn.style.display = 'none';
+  writeMatchRecord(statsRecord.matchId, statsRecord) // same path + same record: a retry can't duplicate
+    .then(() => {
+      statsRecordSaved = true;
+      setStatsStatus('Match saved to the statistics log.');
+    })
+    .catch(err => {
+      console.error('[stats] match record write failed', err);
+      setStatsStatus(`Statistics: match not saved (${err.message}).`);
+      retryBtn.style.display = '';
+    })
+    .finally(() => { statsWriteInFlight = false; });
+}
+
+// `finalState` must be a state this client knows is real: the local state for Local/vs AI and
+// disconnects, or the confirmed pushed state for an online HQ ending.
+function finalizeMatchStats(finalState) {
+  if (statsRecord || !statsEnd || !finalState?.stats) return;
+  try {
+    const withFinalTurn = recordTerminalTurn(finalState, { ms: turnStartedAtMs == null ? undefined : Date.now() - turnStartedAtMs });
+    statsRecord = buildMatchRecord(withFinalTurn, {
+      winner: statsEnd.winner,
+      endReason: statsEnd.endReason,
+      endedAt: Date.now(),
+      durationMs: matchStartedAtMs == null ? undefined : Date.now() - matchStartedAtMs,
+      site: `${location.origin}${location.pathname}`,
+    });
+  } catch (err) {
+    console.error('[stats] could not build the match record', err);
+    setStatsStatus('Statistics: could not build the match record (see console).');
+    return;
+  }
+  window.__SIGNAL_STATS__ = { lastRecord: statsRecord };
+  saveStatsRecord(); // no-op for self-play: selfplay_test.mjs saves those to a local file instead
+}
+
+function endMatchStats({ winner, endReason, remote = false }) {
+  if (remote || statsEnd || !state?.stats) return;
+  statsEnd = { winner, endReason };
+  // Online HQ endings wait for pushStateIfOnline to confirm the game-ending write.
+  if (!isOnline || endReason === 'disconnect') finalizeMatchStats(state);
+}
+
+document.getElementById('stats-retry-btn').addEventListener('click', saveStatsRecord);
+
+function showStatsControls() {
+  if (!state?.stats?.matchId || state.stats.source === 'selfplay') return;
+  if (isOnline && myRole !== 'p1') return;
+  document.getElementById('end-stats').style.display = 'flex';
+}
+
+document.getElementById('stats-save-btn').addEventListener('click', () => {
+  const matchId = state?.stats?.matchId;
+  if (!matchId) return;
+  const btn = document.getElementById('stats-save-btn');
+  btn.disabled = true;
+  writeMatchMeta(matchId, {
+    included: document.getElementById('stats-include').checked,
+    note: document.getElementById('stats-note').value.trim(),
+    updatedAt: Date.now(),
+  })
+    .then(() => setStatsStatus('Statistics settings saved.'))
+    .catch(err => {
+      console.error('[stats] settings write failed', err);
+      setStatsStatus(`Statistics settings not saved (${err.message}).`);
+    })
+    .finally(() => { btn.disabled = false; });
+});
+
+function showEndScreen(winner, { remote = false } = {}) {
   // gameOver flips synchronously so every `!gameOver` guard elsewhere (Hero Phase, turn
   // toasts, etc.) reacts immediately — only the visual reveal is delayed, so the killing
   // blow's own flash/popup/connector-line sequence gets to finish before the full-screen
@@ -1809,15 +1907,17 @@ function showEndScreen(winner) {
   // longest piece of any single hit's sequence is the "DIRECT HIT" text popup's 1.6s fade,
   // starting 200ms after the hit lands.
   gameOver = true;
+  endMatchStats({ winner: winner === 'P1' ? 'p1' : 'p2', endReason: 'hq', remote });
+  showStatsControls();
   setTimeout(() => {
     document.getElementById('end-winner').textContent = `${winner} WINS`;
     document.getElementById('end-screen').style.display = 'flex';
   }, 1800);
 }
 
-function checkWin() {
-  if (state.p1.hq <= 0) { showEndScreen('P2'); return true; }
-  if (state.p2.hq <= 0) { showEndScreen('P1'); return true; }
+function checkWin({ remote = false } = {}) {
+  if (state.p1.hq <= 0) { showEndScreen('P2', { remote }); return true; }
+  if (state.p2.hq <= 0) { showEndScreen('P1', { remote }); return true; }
   return false;
 }
 
@@ -4274,7 +4374,11 @@ document.getElementById('btn-exit').addEventListener('click', async () => {
 });
 
 function showDisconnectScreen(who) {
+  // If the match had already ended normally, its record is already handled: don't replace it
+  // with a "disconnect" one just because the other player left the end screen.
+  if (!gameOver) endMatchStats({ winner: null, endReason: 'disconnect' });
   gameOver = true;
+  showStatsControls();
   document.getElementById('end-winner').textContent = `${who.toUpperCase()} LEFT THE GAME`;
   document.getElementById('end-subtitle').textContent = 'OPPONENT DISCONNECTED';
   document.getElementById('end-screen').style.display = 'flex';

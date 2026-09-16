@@ -1551,6 +1551,10 @@ body.viewer-p2 .stats-panel {
   font-family: 'Arial Narrow', Arial, sans-serif;
 }
 .end-log-actions { display: flex; gap: 10px; }
+.end-stats { flex-direction: column; align-items: center; gap: 8px; width: 100%; max-width: 360px; }
+.end-stats-include { display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 12px; letter-spacing: 1px; color: var(--end-sub); font-family: 'Arial Narrow', Arial, sans-serif; }
+.end-stats textarea { width: 100%; resize: vertical; background: var(--bg); color: inherit; border: 1px solid var(--end-sub); border-radius: 3px; padding: 6px 8px; font-family: inherit; font-size: 12px; }
+.end-stats-status { min-height: 14px; font-size: 11px; color: var(--end-sub); }
 
 /* ── Light mode explicit overrides (E theme from color_preview.html) ── */
 
