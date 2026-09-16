@@ -658,6 +658,7 @@ function runHeroPhase(role) {
     // Hero's Power is available the same turn it's deployed.
     const deployed = deployHero(s[role], heroId, col);
     s = { ...s, [role]: { ...deployed, heroRepositioned: true } };
+    s = recordHeroDeployed(s, role, heroId);
     const verb = isFirstHero ? 'deploys' : 'reinforces';
     commitState(s, [`${role.toUpperCase()} ${verb}: ${CARD_BY_ID[heroId]?.name} → column ${col + 1}`]);
   };
@@ -1897,6 +1898,7 @@ function applyHeroPower(s, role, col, hero, targetKey) {
 
     case 'H17': // HQ Assault Commander — deal 2 damage to enemy HQ (2026-09 balance pass: was 1)
       s = { ...s, [opp]: { ...s[opp], hq: s[opp].hq - 2 } };
+      s = recordHqDamage(s, opp, 2, 'hero');
       log.push(`${hero.name}: 2 damage to ${opp.toUpperCase()}'s HQ`);
       break;
 
@@ -1992,6 +1994,8 @@ function applyHeroPower(s, role, col, hero, targetKey) {
       const { newUnit, hqDamage } = applyHit(before);
       const finalUnit = newUnit.state === 'destroyed' ? null : newUnit;
       s = { ...s, board: { ...s.board, [targetKey]: finalUnit }, [opp]: { ...s[opp], hq: s[opp].hq - hqDamage } };
+      s = recordHqDamage(s, opp, hqDamage, 'hero');
+      s = recordUnitHits(s, role, 'hero', { [targetKey]: before }, [{ key: targetKey, newUnit: finalUnit }]);
       log.push(`${hero.name}: Hit ${beforeName} — ${finalUnit === null ? 'Destroyed' : newUnit.state}`);
       const triggered = applyGameEvents(s, [unitSuppressedEvent(targetKey, before, finalUnit)]);
       s = triggered.state;
@@ -2104,7 +2108,7 @@ function tryActivateHero(role, col) {
       // heroActivationKey here, at the pay/lock commit, same reasoning as H25 below — this is
       // already the moment heroesActivatedThisTurn records the activation, and the later pick
       // commit only moves the chosen card into hand, so the glow fires exactly once.
-      commitState(paid, costModLog, undefined, undefined, `${role}-${col}`);
+      commitState(recordHeroActivation(paid, role, hero.id, cost), costModLog, undefined, undefined, `${role}-${col}`);
       showQuartermasterModal(role, candidates);
       return true;
     }
@@ -2124,12 +2128,12 @@ function tryActivateHero(role, col) {
       // commit only adds the crafted card to hand, so tying the glow to this commit instead
       // plays it exactly once (Found 2026-09-XX, GPT review: this commit previously omitted it
       // entirely, so Craft activation never glowed on either client).
-      commitState(paid, costModLog, undefined, undefined, `${role}-${col}`);
+      commitState(recordHeroActivation(paid, role, hero.id, cost), costModLog, undefined, undefined, `${role}-${col}`);
       showCraftPickerModal(role);
       return true;
     }
     const paid = { ...state, [role]: { ...spendCostMods(ps), fuel: ps.fuel - cost } };
-    const { state: next, log } = applyHeroPower(paid, role, col, hero, null);
+    const { state: next, log } = applyHeroPower(recordHeroActivation(paid, role, hero.id, cost), role, col, hero, null);
     commitState(next, [...costModLog, ...log], undefined, undefined, `${role}-${col}`);
     checkWin();
     return true;
@@ -2144,7 +2148,7 @@ function tryActivateHero(role, col) {
   // it (and the discount/tax, since they were consumed from this same pre-cancel state) —
   // the same contract commands use (see startCommandTargeting).
   preCommandState = state;
-  state = { ...state, [role]: { ...spendCostMods(ps), fuel: ps.fuel - cost } };
+  state = recordHeroActivation({ ...state, [role]: { ...spendCostMods(ps), fuel: ps.fuel - cost } }, role, hero.id, cost);
   pendingHeroId = hero.id;
   pendingHeroColumn = col;
   pendingHeroTargets = new Set(targets);
@@ -2595,6 +2599,7 @@ document.getElementById('board').addEventListener('click', e => {
         card, c, discount,
       ),
     };
+    newState = recordCardPlayed(newState, active, selectedHandCardId, effectiveCost);
 
     // Inspire/Muster (combat.js's own doc comment): "Callers must call recalculateDynamicStats
     // after every placement, movement, or destruction — the 3 events that can change
@@ -2760,6 +2765,12 @@ document.getElementById('board').addEventListener('click', e => {
       p1: { ...rallyState.p1, hq: rallyState.p1.hq - dmgP1 },
       p2: { ...rallyState.p2, hq: rallyState.p2.hq - dmgP2 },
     };
+    // Base destruction damage is combat; anything Overrun added on top is the Command's.
+    newState = recordHqDamage(newState, 'p1', result.hqDamageToP1, 'combat');
+    newState = recordHqDamage(newState, 'p2', result.hqDamageToP2, 'combat');
+    newState = recordHqDamage(newState, 'p1', dmgP1 - result.hqDamageToP1, 'command');
+    newState = recordHqDamage(newState, 'p2', dmgP2 - result.hqDamageToP2, 'command');
+    newState = recordUnitHits(newState, attacker, CARD_BY_ID[rallyState.board[pendingAttackerKey]?.cardId]?.cls ?? 'Unknown', rallyState.board, result.boardMutations);
 
     const attackerKey = pendingAttackerKey;
     const attackerUnit = rallyState.board[attackerKey];
@@ -3320,7 +3331,7 @@ function applyRuthlessStrategistIfPresent(s, active) {
   if (!(s[active].heroZones ?? []).includes('H20')) return { state: s, log: [] };
   const afterDraw = drawCards(s[active], 1);
   const afterDamage = { ...afterDraw, hq: afterDraw.hq - 1 };
-  return { state: { ...s, [active]: afterDamage }, log: [`${CARD_BY_ID['H20'].name}: draw 1 card, 1 damage to own HQ`] };
+  return { state: recordHqDamage({ ...s, [active]: afterDamage }, active, 1, 'selfInflicted'), log: [`${CARD_BY_ID['H20'].name}: draw 1 card, 1 damage to own HQ`] };
 }
 
 // ── Instant commands ──────────────────────────────────────────────────────────
@@ -3349,6 +3360,7 @@ function playInstantCommand(cardId) {
       card, null, discount,
     ),
   };
+  s = recordCardPlayed(s, active, cardId, effectiveCost);
   const log = [];
 
   switch (cardId) {
@@ -3427,6 +3439,7 @@ function playInstantCommand(cardId) {
       // unused portion of THIS grant expires at cleanup rather than persisting — doc 01 §3.
       const grantedFuel = gainFuel(s[active], 3, false);
       s = { ...s, [active]: { ...grantedFuel, hq: grantedFuel.hq - 2, tempFuelGrant: (grantedFuel.tempFuelGrant ?? 0) + 3 } };
+      s = recordHqDamage(s, active, 2, 'selfInflicted');
       log.push(`${card.name}: +3 Fuel this turn, 2 damage to own HQ`);
       break;
     }
@@ -3648,6 +3661,7 @@ function startCoordinatedStrike(cardId) {
   // doc 02 Q027: goes to Discard Pile — safe even mid-targeting since Cancel fully restores
   // preCommandState, wiping this along with the hand-removal/Fuel-spend if the player bails.
   state = { ...state, [active]: consumeDiscounts({ ...state[active], fuel: state[active].fuel - effectiveCost, hand: handAfter, discardPile: [...(state[active].discardPile ?? []), cardId] }, card, null, discount) };
+  state = recordCardPlayed(state, active, cardId, effectiveCost);
   pendingCommandId = cardId;
   pendingCoordStrikeFirst = null;
   uiState = 'command-coordstrike-first';
@@ -3702,6 +3716,7 @@ function startCommandManeuver(cardId) {
     // doc 02 Q027 (Discard Pile) — safe pre-completion, see the note on startCoordinatedStrike.
     [active]: consumeDiscounts({ ...state[active], fuel: state[active].fuel - effectiveCost, hand: handAfter, discardPile: [...(state[active].discardPile ?? []), cardId] }, card, null, discount),
   };
+  state = recordCardPlayed(state, active, cardId, effectiveCost);
   pendingCommandId = cardId;
   pendingCommandManeuverSource = { key: null, commandId: cardId };
   // C27 Blitzkrieg Order: Escalate widens "1 Tank" to "up to 2 Tanks" — mark Escalate used on
@@ -3795,6 +3810,7 @@ function startCommandTargeting(cardId) {
       card, null, discount,
     ),
   };
+  state = recordCardPlayed(state, active, cardId, effectiveCost);
   pendingCommandId = cardId;
   pendingRallyCryCount = (cardId === 'C03' || cardId === 'C10') ? 2 : 0;
   uiState = 'command-targeting';
@@ -3827,6 +3843,7 @@ function startEnemyHeroTargeting(cardId) {
       card, null, discount,
     ),
   };
+  state = recordCardPlayed(state, active, cardId, effectiveCost);
   pendingCommandId = cardId;
   uiState = 'command-hero-targeting';
   appendLog([`${card.name}: choose an enemy Hero`]);
@@ -3952,6 +3969,9 @@ function applyCommandEffect(commandId, targetKey) {
       // so that Guard check isn't hand-rolled a second time and risk diverging from combat's.
       const dc = resolveDestructionChain(s, { unitKey: targetKey, sourceUnitKey: null, cause: 'command' });
       s = { ...dc.state, p1: { ...dc.state.p1, hq: dc.state.p1.hq - dc.hqDamageToP1 }, p2: { ...dc.state.p2, hq: dc.state.p2.hq - dc.hqDamageToP2 } };
+      s = recordHqDamage(s, 'p1', dc.hqDamageToP1, 'selfInflicted');
+      s = recordHqDamage(s, 'p2', dc.hqDamageToP2, 'selfInflicted');
+      s = recordUnitHits(s, active, 'self', { [targetKey]: unit }, [{ key: targetKey, newUnit: null }]);
       s = { ...s, [active]: drawCards(s[active], 2) };
       log.push(`${card.name}: draw 2 cards`);
       log.push(...dc.log);
@@ -3961,6 +3981,9 @@ function applyCommandEffect(commandId, targetKey) {
       // the normal friendly-destruction result — applies even if the Unit has Guard.
       const dc = resolveDestructionChain(s, { unitKey: targetKey, sourceUnitKey: null, cause: 'command', hqResultReplacement: { targetHq: opp, amount: 2 } });
       s = { ...dc.state, p1: { ...dc.state.p1, hq: dc.state.p1.hq - dc.hqDamageToP1 }, p2: { ...dc.state.p2, hq: dc.state.p2.hq - dc.hqDamageToP2 } };
+      s = recordHqDamage(s, 'p1', dc.hqDamageToP1, 'command');
+      s = recordHqDamage(s, 'p2', dc.hqDamageToP2, 'command');
+      s = recordUnitHits(s, active, 'self', { [targetKey]: unit }, [{ key: targetKey, newUnit: null }]);
       log.push(`${card.name}:`);
       log.push(...dc.log);
       break;
@@ -4844,10 +4867,12 @@ document.getElementById('field-reserves-skip').addEventListener('click', () => c
 // committed by tryActivateHero before this modal opens (see the H25 special case there) — this
 // only resolves which candidate joins the hand and advances the escalating next-Craft cost.
 let craftPickerRole = null;
+let craftOfferedCards = []; // the 3 candidates currently shown, for recordCraftPick
 
 function showCraftPickerModal(role) {
   craftPickerRole = role;
   const candidates = generateCraftCandidates().map(c => craftCandidateToCard(c, role));
+  craftOfferedCards = candidates;
   const container = document.getElementById('craft-picker-cards');
   container.innerHTML = '';
   candidates.forEach(card => {
@@ -4880,11 +4905,11 @@ function confirmCraftPick(chosenId) {
   // (generatedCards) — CARD_BY_ID is per-client, in-memory only, so without this the OTHER
   // client's CARD_BY_ID[chosenId] lookup comes back undefined the moment this card is
   // visible to them (e.g. placed on the board), crashing that client's render.
-  const s = {
+  const s = recordCraftPick({
     ...state,
     [role]: addCardToHand(advanceCraftCost(ps), chosenId),
     generatedCards: { ...(state.generatedCards ?? {}), [chosenId]: chosen },
-  };
+  }, role, chosen, craftOfferedCards);
   const log = [`Chief Aircraft Engineer: Crafted ${chosen.name} (${chosen.n}/${chosen.e}/${chosen.s}/${chosen.w}, ${chosen.keyword}) — next activation costs ${nextCraftCost(s[role])}`];
   // Same fix as confirmFO/confirmFieldReserves: keep the modal open and craftPickerRole set
   // until the write actually lands, so a sync pause doesn't silently lose the crafted card.
