@@ -117,3 +117,160 @@ export function computeRulesHash(cards = CARDS, maps = MAPS) {
   }
   return hash.toString(16).padStart(8, '0');
 }
+
+// ── Recorders ──────────────────────────────────────────────────────────────────
+// Clone-then-mutate keeps the input untouched; stats are a few KB, so the clone is cheap.
+function update(state, fn) {
+  if (!state?.stats) return state;
+  try {
+    const stats = normalizeStats(structuredClone(state.stats));
+    fn(stats);
+    return { ...state, stats };
+  } catch (err) {
+    console.error('[stats] recording failed; gameplay unaffected', err);
+    return state;
+  }
+}
+
+export function recordCardPlayed(state, role, cardId, fuelSpent = 0) {
+  return update(state, stats => {
+    const entry = child(stats.players[role].cards, statsCardKey(cardId));
+    inc(entry, 'played');
+    inc(entry, 'roundSum', roundOf(state.turn));
+    inc(entry, 'fuelSpent', Math.max(0, fuelSpent));
+  });
+}
+
+// `victim` is the player whose HQ lost `amount`; `source` is the cause (see the plan's list).
+export function recordHqDamage(state, victim, amount, source) {
+  if (!(amount > 0)) return state;
+  return update(state, stats => {
+    inc(stats.players[victim].hqDamageTaken, source, amount);
+  });
+}
+
+// `mutations` uses resolveSingleAttack's boardMutations shape: [{ key, newUnit }], newUnit null =
+// destroyed. `beforeBoard` must hold each unit as it was before the hit. Recorded under the player
+// who dealt the hits; `attackerKind` is a unit class, or 'hero' / 'self'.
+export function recordUnitHits(state, byPlayer, attackerKind, beforeBoard, mutations) {
+  return update(state, stats => {
+    for (const { key, newUnit } of mutations ?? []) {
+      const before = beforeBoard?.[key];
+      if (!before) continue;
+      let result = null;
+      if (newUnit === null) result = 'destroyed';
+      else if (newUnit?.state === 'suppressed' && before.state !== 'suppressed') result = 'suppressed';
+      else if ((newUnit?.armorHits ?? 0) > (before.armorHits ?? 0)) result = 'armorAbsorbed';
+      if (!result) continue;
+      const targetCls = CARD_BY_ID[before.cardId]?.cls ?? 'Unknown';
+      inc(child(child(stats.players[byPlayer].trades, attackerKind), targetCls), result);
+    }
+  });
+}
+
+export function recordTrigger(state, role, keyword, cardId) {
+  return update(state, stats => {
+    inc(child(stats.players[role].triggers, keyword), statsCardKey(cardId));
+  });
+}
+
+export function recordHeroDeployed(state, role, heroId) {
+  return update(state, stats => {
+    const entry = child(stats.players[role].heroes, heroId);
+    if (entry.deployedRound == null) entry.deployedRound = roundOf(state.turn);
+  });
+}
+
+export function recordHeroActivation(state, role, heroId, fuelSpent = 0) {
+  return update(state, stats => {
+    const entry = child(stats.players[role].heroes, heroId);
+    inc(entry, 'activations');
+    inc(entry, 'fuelSpent', Math.max(0, fuelSpent));
+  });
+}
+
+export function recordDirectHq(state, role, units) {
+  if (!(units > 0)) return state;
+  return update(state, stats => { inc(stats.players[role], 'directHqUnits', units); });
+}
+
+export function recordFuelLostToCap(state, role, amount) {
+  if (!(amount > 0)) return state;
+  return update(state, stats => { inc(stats.players[role], 'fuelLostToCap', amount); });
+}
+
+// Called on End Turn, before the turn counter advances. `ms` is measured on this client's own
+// clock; omitted when unknown (e.g. this client never saw the turn start).
+export function recordTurnEnd(state, { role, ms, fuelUnspent }) {
+  return update(state, stats => {
+    const unspent = Math.max(0, fuelUnspent ?? 0);
+    inc(stats.players[role], 'fuelUnspent', unspent);
+    const entry = { turn: state.turn, player: role, fuelUnspent: unspent, p1Hq: state.p1?.hq ?? 0, p2Hq: state.p2?.hq ?? 0 };
+    if (Number.isFinite(ms)) entry.ms = Math.max(0, Math.round(ms));
+    stats.turns.push(entry);
+  });
+}
+
+// The turn in progress when the match ends never reaches End Turn. Called once at finalize: adds
+// that turn flagged `terminal` (a partial turn, so aggregations leave it out of turn-length and
+// unspent-Fuel averages, and it adds nothing to fuelUnspent), unless End Turn already recorded it
+// (lethal Direct HQ ends the match inside the End Turn handler).
+export function recordTerminalTurn(state, { ms } = {}) {
+  const role = state?.initiative;
+  if (!state?.stats || !role) return state;
+  if (toArray(state.stats.turns).some(t => t.turn === state.turn && t.player === role)) return state;
+  return update(state, stats => {
+    const entry = { turn: state.turn, player: role, terminal: true, p1Hq: state.p1?.hq ?? 0, p2Hq: state.p2?.hq ?? 0 };
+    if (Number.isFinite(ms)) entry.ms = Math.max(0, Math.round(ms));
+    stats.turns.push(entry);
+  });
+}
+
+export function recordCraftPick(state, role, chosen, offered = []) {
+  return update(state, stats => {
+    const summary = c => `${c.n}/${c.e}/${c.s}/${c.w} ${c.keyword} ${c.craftDrawback}`;
+    stats.players[role].craftPicks.push({
+      round: roundOf(state.turn),
+      stats: `${chosen.n}/${chosen.e}/${chosen.s}/${chosen.w}`,
+      fixedLine: chosen.n === 6 && chosen.e === 6 && chosen.s === 6 && chosen.w === 6,
+      keyword: chosen.keyword,
+      drawback: chosen.craftDrawback,
+      offered: offered.map(summary).join(' | '),
+    });
+  });
+}
+
+export function markDebugUsed(state) {
+  if (!state?.stats || state.stats.debugUsed === true) return state;
+  return update(state, stats => { stats.debugUsed = true; });
+}
+
+function objectiveEntry(stats, slotKey) {
+  const entry = child(stats.objectives, slotKey);
+  for (const field of ['activations', 'maxLevel', 'backbone', 'fuel', 'draws', 'turnsHeld']) child(entry, field);
+  return entry;
+}
+
+export function recordObjectiveActivation(state, slotKey, role, level, backbone) {
+  return update(state, stats => {
+    const entry = objectiveEntry(stats, slotKey);
+    inc(entry.activations, role);
+    entry.maxLevel[role] = Math.max(entry.maxLevel[role] ?? 0, level);
+    inc(entry.backbone, role, backbone);
+  });
+}
+
+// kind: 'fuel' | 'draws'
+export function recordObjectiveYield(state, slotKey, role, kind, amount) {
+  if (!(amount > 0)) return state;
+  return update(state, stats => { inc(objectiveEntry(stats, slotKey)[kind], role, amount); });
+}
+
+// Called right after checkObjectiveControl on every End Turn: one count per half-turn per slot.
+export function recordObjectiveControl(state) {
+  return update(state, stats => {
+    for (const [slotKey, obj] of Object.entries(state.objectives ?? {})) {
+      inc(objectiveEntry(stats, slotKey).turnsHeld, obj.controller ?? 'none');
+    }
+  });
+}
