@@ -140,6 +140,41 @@ when applicable, and the number of usable attacks that would be forfeited. These
 the same target-legality, attack-allowance, and Direct HQ helpers used by resolution. They are
 hidden while another choice is pending, while waiting for an online opponent, and during AI turns.
 
+## Match statistics
+
+Built on branch `feature/match-statistics` (local, not yet pushed; pending independent review).
+Plan and record format: `docs/plans/2026-09-16-match-statistics.md`.
+
+- **Collection:** counters live in `state.stats` (created by the match's host in `startGame`,
+  synced with the game state). Pure recorders in `js/stats.js` are called where events happen:
+  card plays (incl. targeted Commands, reverted by Cancel), HQ damage by cause (combat, Direct
+  HQ, Objective backbone, Commands, Heroes, self-inflicted; fatigue and unattributed "other" are
+  derived at the end), unit hits by attacker kind vs target class, Hero deployments and
+  activations, Objective control/activations/yields per slot, Rally/Last Stand/Breakthrough
+  triggers, Craft picks, unspent Fuel and Fuel lost to the cap, per-turn duration and HQ. Every
+  recorder is a no-op without `state.stats`, never mutates its input, and swallows its own errors.
+- **Record:** `buildMatchRecord` writes one flat record to `stats/matches/{matchId}`. Exactly one
+  client writes it: the client that ended the match (online, only after its game-ending state
+  write is confirmed by the revision-checked transaction; a rejected write records nothing), or
+  the surviving client on a disconnect. A failed write keeps the record and shows a Retry button.
+- **Host controls:** online P1, or the only client in Local/vs AI, gets "Include in statistics"
+  (unticked by default) and a note on the end screen, saved separately under `stats/meta/{matchId}`.
+- **Tags:** mode (online/vsAi/hotseat), source (human/selfplay), `STATS_BUILD_LABEL` (bump by
+  hand on balance/rules changes), automatic `rulesHash` of card+map data, `debugUsed`.
+- **Self-play:** `selfplay_test.mjs` tags its games as selfplay (kept out of Firebase) and appends
+  records to `selfplay_stats.jsonl`; `node scripts/check_selfplay_stats.mjs` flags unattributed HQ
+  damage, duplicate/phantom turns, negative durations and bogus GENERATED card rows.
+- **Statistics page:** main menu → Statistics (`stats.html`). Filters (included only, exclude
+  debug, source, mode, build), sortable tables (summary, HQ damage by source, cards, Heroes,
+  Objectives by map slot and by card, unit trades, keyword triggers, Craft picks, match list with
+  editable include/note), CSV export per table, and loading a self-play `.jsonl` file.
+- **Known limits:** abandoned matches (tab closed, Exit mid-game) are not recorded; durations use
+  each client's own clock (mulligan excluded; omitted when unknown); the final cut-short turn is
+  flagged `terminal` and left out of turn-length and unspent-Fuel averages; win % counts decided
+  matches only; the build label is manual; the page downloads every record.
+- **Needs before going live:** Firebase rules must allow signed-in reads/writes on `stats`
+  (plan Task 1, manual console check).
+
 ## Open items
 
 - **Online privacy/security:** gameplay state is revision-safe against accidental stale
@@ -167,6 +202,12 @@ hits across clients until the controlling player resolves them.
 selfplay_vs_ai_smoke.mjs` smoke-tests the in-page "vs AI" bot specifically. Pure move scoring in
 `bot_ai.js` is shared by the in-page bot and the test harness; `bot_player.js` drives the browser
 through the same controls a human uses.
+`node match_stats_browser_test.mjs` drives real local and two-client online games against an
+in-memory Firebase stand-in (`browser_test_fake_firebase.mjs`, no live Firebase) to check match
+statistics end to end: record writer, confirmed/held/rejected game-ending writes, Retry, terminal
+turn rows, Cancel reverting card plays and Hero activations, and the Statistics page.
+`node regression_directhq_lethal_h16_cancel.mjs` covers the 2026-09-16 game fixes (lethal Direct
+HQ, H16 Cancel, rotate-modal End Turn, vs AI Quartermaster, stacked Hero deploy timers).
 `node open_lobby_test.mjs` / `multiplayer_craft_test.mjs` / `multiplayer_dual_craft_test.mjs` /
 `multiplayer_disconnect_test.mjs` / `multiplayer_codeshare_order_test.mjs` /
 `multiplayer_mulligan_test.mjs` are two-real-client Playwright scripts against the live Firebase

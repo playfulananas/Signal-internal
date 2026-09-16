@@ -4,6 +4,7 @@
 // Requires game.js to expose window.__SIGNAL_DEBUG__ (added as a read-only debug hook).
 // Run with: node selfplay_test.mjs [games]
 import { chromium } from "playwright";
+import { appendFileSync } from "node:fs";
 import { CARD_BY_ID } from "./js/cards.js";
 import { bestPlacement, bestExistingAttack, findLethal, findCombinedLethal, bestAttackForUnit, scoreCommand, scoreHeroPower, bestHeroPowerTarget, bestHeroDeployment, maxAttacksFor } from "./js/bot_ai.js";
 import { discountFor, objectiveLevel } from "./js/state.js";
@@ -12,6 +13,7 @@ const NUM_GAMES = Number(process.argv[2] || 3);
 const MAX_HALF_TURNS = 60; // safety valve — 30 rounds each (real games finish in ~7-11)
 const STALL_STREAK_LIMIT = 8; // consecutive half-turns with zero HQ/board change = bail early (~4 rounds of true stagnation, not a normal quiet lull)
 const BASE_URL = "http://localhost:3000";
+const SELFPLAY_STATS_FILE = "selfplay_stats.jsonl"; // one match record per line, see scripts/check_selfplay_stats.mjs
 
 // Updated 2026-08-31 (Run 1) for the 8 SIGNAL Set 1 Recommended Decks (see decks.js
 // STARTER_DECKS) replacing the old 4 starter decks. Updated again same day (Run 2) for the
@@ -422,6 +424,8 @@ async function playTurnSmart(page) {
 }
 
 async function playOneGame(page) {
+  // Tags the match as bot self-play: game.js keeps it out of Firebase and exposes the record instead.
+  await page.addInitScript(() => localStorage.setItem("signal-stats-source", "selfplay"));
   await page.goto(`${BASE_URL}/index.html`, { waitUntil: "domcontentloaded" });
   await page.locator("#btn-local").click();
 
@@ -499,6 +503,8 @@ async function playOneGame(page) {
   }
 
   const gameOver = await page.locator("#end-screen").isVisible().catch(() => false);
+  const statsRecord = await page.evaluate(() => window.__SIGNAL_STATS__?.lastRecord ?? null).catch(() => null);
+  if (statsRecord) appendFileSync(SELFPLAY_STATS_FILE, JSON.stringify(statsRecord) + "\n");
   const winner = gameOver ? await page.locator("#end-winner").innerText().catch(() => "?")
     : stallInfo ? "STALLED (no progress)" : "TIMEOUT (no winner)";
   const p1hq = await page.locator("#p1-hq").innerText().catch(() => "?");
