@@ -9,6 +9,28 @@ Newest first.
 
 ---
 
+## 2026-09-16 — Lethal Direct HQ ends the match immediately, H16 Cancel refunds Fuel
+
+Two game bugs surfaced by the ChatGPT review of the match-statistics plan, both confirmed live
+before fixing (`regression_directhq_lethal_h16_cancel.mjs` fails 6/8 on the old code, passes 8/8
+now).
+
+- **Lethal Direct HQ kept the match going.** The End Turn handler applied Direct HQ, then still
+  ran `endTurn`, the defeated player's draw, `startOfTurn` and their Objective effects before
+  `checkWin`. Their Objective backbone could hit the winner, and if that also reached 0,
+  `checkWin` (which tests P1 first) named the wrong winner: reproduced as "P2 WINS" after P1's
+  Direct HQ killed P2. The handler now checks both HQs right after Direct HQ and, if either is at
+  0, commits that state and ends the match there (doc 01 §19 step 7).
+- **Cancelling H16 Maneuver Commander on its destination step kept the Fuel spent.** The step says
+  "Esc cancels the Hero Power", but `resolveHeroTargeting` cleared `preCommandState` before the
+  destination pick, so Cancel had nothing to restore (the Command Maneuver flows already kept it).
+  H16 now keeps the snapshot until `resolveHeroManeuverDestination` commits.
+- `npm test` 256/256. `selfplay_test.mjs` was not usable as a check: it crashes or stalls at the
+  Hero deploy modal on the pre-fix code too (reproduced on `5ef92d5`: 1 crash, 1 stall with 0
+  Heroes deployed after 5 rounds), so that harness problem predates these fixes and is still open.
+
+---
+
 ## 2026-09-16 — Playtest corrections from 15 September
 
 Three bugs Filip reported from the 15 September playtest.

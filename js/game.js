@@ -2107,7 +2107,11 @@ function resolveHeroTargeting(clickedKey) {
   pendingHeroId = null;
   pendingHeroColumn = null;
   pendingHeroTargets = null;
-  preCommandState = null;
+  // H16's destination step is still cancellable ("Esc cancels the Hero Power"), so it keeps the
+  // pre-activation snapshot until resolveHeroManeuverDestination commits; Cancel then refunds
+  // the Fuel like the Command Maneuver flows do. Found in the 2026-09-16 stats plan review:
+  // clearing it here made a step-2 Cancel keep the Fuel spent with no effect.
+  if (hero.id !== 'H16') preCommandState = null;
   if (hero.id === 'H11') { // Field Coordinator — rotate, direction chosen via modal
     uiState = 'idle';
     // col threaded through so confirmRotateDirection's final commit can pass heroActivationKey —
@@ -2138,6 +2142,7 @@ function resolveHeroManeuverDestination(destKey) {
   const legalTargets = getManeuverTargets(state, sourceKey);
   if (!legalTargets.includes(destKey)) return;
   pendingHeroManeuverSource = null;
+  preCommandState = null; // past the point where Cancel should refund (see resolveHeroTargeting)
   uiState = 'idle';
   const { state: afterManeuver, log } = resolveManeuver(state, sourceKey, destKey);
   const movedUnit = afterManeuver.board[destKey];
@@ -4011,6 +4016,23 @@ document.getElementById('btn-end-turn').addEventListener('click', () => {
     p2: { ...directHQ.state.p2, hq: directHQ.state.p2.hq - directHQ.hqDamageToP2 },
   };
   const directHQLog = directHQ.log;
+
+  // Lethal Direct HQ ends the match right here (doc 01 §19 step 7: check victory after each
+  // damage instance). Found in the 2026-09-16 stats plan review: this used to carry on into
+  // endTurn/draw/startOfTurn/Objective effects for the defeated player before checkWin ran, so
+  // their Objective backbone could still hit the winner, and if that also reached 0, checkWin
+  // (which tests P1 first) could name the wrong winner.
+  if (s.p1.hq <= 0 || s.p2.hq <= 0) {
+    const lethalFlags = new Map();
+    directHQ.sources.forEach(({ key }) => lethalFlags.set(key, 'direct-hq'));
+    lastDATargetKey = null;
+    uiState = 'idle';
+    selectedHandCardId = null;
+    pendingAttackerKey = null;
+    commitState(s, directHQLog, lethalFlags, undefined, null, { p1: directHQ.hqDamageToP1, p2: directHQ.hqDamageToP2 });
+    checkWin();
+    return;
+  }
 
   // Expire any unused Emergency Supply (C23) temporary Fuel grant — doc 01 §3, after Direct HQ.
   s = { ...s, [currentPlayer]: expireTempFuelGrant(s[currentPlayer]) };
