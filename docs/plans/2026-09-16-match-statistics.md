@@ -4,7 +4,7 @@
 
 **Goal:** Every finished match automatically produces one statistics record (balance data: seats, damage sources, cards, Heroes, objectives, unit trades, timing, Fuel), the host decides at the end screen whether it counts, and a Statistics page turns the records into tables with CSV export for Google Sheets.
 
-**Architecture:** A pure module `js/stats.js` holds counters in `state.stats`, which travels inside the shared game state (so online both clients see the same numbers). Gameplay code calls small recorder functions at the exact places events happen (card played, HQ damage, hits, Hero use, objective control, end of turn). At game end, `buildMatchRecord` turns the counters plus the final state into one flat JSON record, written to Firebase `stats/matches/{matchId}`; the host's include toggle and note go to `stats/meta/{matchId}`. `stats.html` reads both, aggregates with the pure `js/stats-aggregate.js`, and renders tables.
+**Architecture:** A pure module `js/stats.js` holds counters in `state.stats`, which travels inside the shared game state (so online both clients see the same numbers). Gameplay code calls small recorder functions at the exact places events happen (card played, HQ damage, hits, Hero use, objective control, end of turn). At game end, `buildMatchRecord` turns the counters plus the final state into one flat JSON record, written to Firebase `stats/matches/{matchId}` by exactly one client: the one that ended the match, and online only once its game-ending state write is confirmed; the host's include toggle and note go to `stats/meta/{matchId}`. `stats.html` reads both, aggregates with the pure `js/stats-aggregate.js`, and renders tables.
 
 **Tech Stack:** Vanilla JS ES modules, Firebase Realtime Database (JS SDK 10.12), `node --test` unit tests, Playwright self-play harness.
 
@@ -16,6 +16,27 @@
 - Every match is saved. The host (online P1, or the only client in Local/vs AI) gets an "Include in statistics" checkbox (default **unticked**) and an optional note on the end screen. Unticked records stay in Firebase and can be ticked later from the Statistics page.
 - Records are tagged with mode (online / vsAi / hotseat), source (human / selfplay), a build label, an automatic rules hash, and whether the debug panel was used.
 - Bot self-play records go to a local `selfplay_stats.jsonl` file, never Firebase.
+
+## Review round (2026-09-16)
+
+A ChatGPT code-level review (`docs/plans/2026-09-16-match-statistics-review-amendments.md`, commit `5ef92d5`, since folded in here and removed) raised 8 issues. All 8 were checked against the code and were real. Outcome:
+
+| # | Issue | Outcome |
+|---|---|---|
+| 1 | Lethal Direct HQ kept the End Turn pipeline running (could name the wrong winner) | **Game bug, fixed in code** (commit after `5ef92d5`, see `CHANGELOG.md`). Plan only needs to record before the new lethal early return (Task 7 Step 9). |
+| 2 | A record could be written for an online state Firebase then rejected | Accepted, **different writer**: the review proposed host-only writes. Rejected because the game doesn't detect a closed tab, so if the host's tab dies and P2 lands the lethal, nothing would be saved. The client that ended the match writes, online only after its terminal state write is confirmed (Task 9). |
+| 3 | Duration subtracted two machines' clocks | Accepted: each client times the match on its own clock (Tasks 4, 7, 9). |
+| 4 | The turn in progress at game end had no turn row | Accepted, **different handling**: that turn is partial, so counting its time and leftover Fuel would skew the averages. Added once at finalize, flagged `terminal`, excluded from turn-length and unspent-Fuel averages (Tasks 3, 9, 11). |
+| 5 | H16 Cancel on the destination step didn't refund Fuel | **Game bug, fixed in code**, same commit as #1. The plan's activation recording now reverts correctly on that Cancel with no extra work. |
+| 6 | H19 Training Officer buffed copies counted as a fake "GENERATED" card | Accepted, **corrected**: the review's lookup order would give each H19-buffed crafted Aircraft its own row (H19 buffs cost-1 crafted Aircraft too). Crafted check comes first, then the printed card id (Tasks 2, 5). |
+| 7 | A failed record write could never be retried | Accepted: record is kept until the write succeeds, with a Retry button. Note: Firebase already retries dropped connections while the page is open, so a failure is almost always rules/auth (Task 9). |
+| 8 | H21's capped +1 Fuel wasn't counted as lost to cap | Accepted (Task 5). |
+
+The review also confirmed every find-and-replace anchor at `d2d02fe` and found the Part B aggregation math sound. Its extra sanity checks and a two-browser online test are in Task 10.
+
+**Dry run of this plan (2026-09-16):** every code block in Tasks 2-13 was applied mechanically to a copy of the repo with the Direct HQ / H16 fixes in place. All 133 blocks applied with every anchor found the expected number of times (CRLF files: `js/game.js`, `game.html`, `css/game.css`, `index.html`, `selfplay_test.mjs`; match their line endings when editing), every changed JS file passes `node --check`, and `npm test` passed 290/290 (256 existing + 34 new). Not covered by the dry run: browser behavior (Tasks 9, 10, 13 manual checks) and a self-play run, because of the harness problem below.
+
+**Known blocker for Task 10 Step 4:** `selfplay_test.mjs` crashes or stalls at the Hero deploy modal on the current code, including `5ef92d5` before any of this work (1 crash, 1 stall with 0 Heroes deployed after 5 rounds). Fix the harness first (separate task), or Task 10 Step 4 can't produce records to check.
 
 ## Hard rules for the implementer
 
@@ -32,7 +53,7 @@
 | `js/stats.js` | Create | Stats schema, recorders, Firebase normalization, `buildMatchRecord`, rules hash. Pure, no DOM. |
 | `tests/stats.test.mjs` | Create | Unit tests for `js/stats.js`. |
 | `tests/stats_combat.test.mjs` | Create | Tests that combat.js hook points record correctly. |
-| `js/combat.js` | Modify | Record H21 / Craft drawback self-damage, self-suppression, Rally / Last Stand / Breakthrough triggers. |
+| `js/combat.js` | Modify | Record H21 / Craft drawback self-damage, H21 Fuel lost to cap, self-suppression, Rally / Last Stand / Breakthrough triggers; give H19 buffed copies their printed card identity. |
 | `js/firebase.js` | Modify | `ensureSignedIn`, `writeMatchRecord`, `writeMatchMeta`, `fetchStatsData`. |
 | `js/game.js` | Modify | Stats init, normalization, all game-flow hook points, end-screen finalize + host controls. |
 | `game.html` | Modify | End-screen include checkbox, note, save button, status line. |
@@ -58,7 +79,8 @@
   "mode": "online",            // online | vsAi | hotseat
   "source": "human",           // human | selfplay
   "debugUsed": false,
-  "startedAt": 1758000000000, "endedAt": 1758000600000, "durationMs": 600000,
+  "startedAt": 1758000000000, "endedAt": 1758000600000, // wall clocks, display/sorting only
+  "durationMs": 598000,        // elapsed on the writing client's own clock; omitted if unknown
   "mapId": "kursk", "firstPlayer": "p2", "winner": "p1", "winnerSeat": "second", // first | second | none
   "endReason": "hq",           // hq | disconnect
   "turnsPlayed": 15, "rounds": 8,
@@ -79,7 +101,10 @@
     "p2": { }
   },
   "objectives": { "1,0": { "cardId": "O1", "heldAtEnd": "p1", "turnsHeld": { "p1": 6, "p2": 2, "none": 4 }, "activations": { "p1": 3 }, "maxLevel": { "p1": 3 }, "backbone": { "p1": 4 }, "fuel": { "p1": 3 }, "draws": {} } },
-  "turns": [{ "turn": 1, "player": "p2", "ms": 41235, "fuelUnspent": 1, "p1Hq": 30, "p2Hq": 30 }]
+  "turns": [
+    { "turn": 1, "player": "p2", "ms": 41235, "fuelUnspent": 1, "p1Hq": 30, "p2Hq": 30 },
+    { "turn": 15, "player": "p1", "ms": 12004, "terminal": true, "p1Hq": 4, "p2Hq": 0 } // turn cut short by the win
+  ]
 }
 // stats/meta/{matchId}
 { "included": true, "note": "testing T33 change", "updatedAt": 1758000700000 }
@@ -124,7 +149,7 @@ import {
   createMatchStats, normalizeStats, statsCardKey, computeRulesHash,
 } from '../js/stats.js?v=2026090402';
 import { createInitialState } from '../js/state.js?v=2026090402';
-import { CARDS } from '../js/cards.js?v=2026090402';
+import { CARDS, CARD_BY_ID, registerGeneratedCard } from '../js/cards.js?v=2026090402';
 import { craftCandidateToCard } from '../js/combat.js?v=2026090402';
 
 export const DECK = Array.from({ length: 15 }, () => ['I1', 'T33']).flat();
@@ -165,11 +190,16 @@ test('normalizeStats restores what Firebase strips: empty objects, empty arrays,
   assert.equal(n.turns[0].player, 'p1');
 });
 
-test('statsCardKey groups generated cards into one key per kind', () => {
+test('statsCardKey: crafted cards group, H19 buffed copies keep their printed card id', () => {
   const crafted = craftCandidateToCard({ stats: { n: 6, e: 6, s: 6, w: 6 }, keyword: 'Armor', drawback: 'ownHqDamage' }, 'p1');
   assert.equal(statsCardKey(crafted.id), 'CRAFTED');
   assert.equal(statsCardKey('Craft-p2-999'), 'CRAFTED', 'unknown crafted id (other client) still groups');
   assert.equal(statsCardKey('I1'), 'I1');
+  // Shapes applyHandBuff produces for H19 (Task 5 adds statsBaseId there; tested end-to-end in stats_combat).
+  const buffedRifle = registerGeneratedCard({ ...CARD_BY_ID.I1, statsBaseId: 'I1', n: CARD_BY_ID.I1.n + 1 }, 'p1');
+  const buffedCrafted = registerGeneratedCard({ ...crafted, statsBaseId: crafted.id, n: crafted.n + 1 }, 'p1');
+  assert.equal(statsCardKey(buffedRifle.id), 'I1');
+  assert.equal(statsCardKey(buffedCrafted.id), 'CRAFTED', 'crafted check must come before statsBaseId');
 });
 
 test('computeRulesHash is stable and changes when card data changes', () => {
@@ -223,11 +253,16 @@ function countIds(ids) {
   return out;
 }
 
-// Generated cards get a unique id per copy (Craft-p1-3, ...), which would give every crafted
-// Aircraft its own row. Group them by kind instead.
+// Generated cards get a unique id per copy (Craft-p1-3, ...), which would give every copy its own
+// row. Order matters: H25 crafted Aircraft (including H19-buffed copies of them, which keep
+// craftDrawback) group as CRAFTED; H19 Training Officer buffed copies of printed cards count as
+// that printed card (statsBaseId, set in applyHandBuff); anything else generated groups as
+// GENERATED. Unknown Craft-* ids (a card this client hasn't received yet) are treated as crafted.
 export function statsCardKey(cardId) {
   const card = CARD_BY_ID[cardId];
-  if (card?.generated) return card.craftDrawback ? 'CRAFTED' : 'GENERATED';
+  if (card?.craftDrawback) return 'CRAFTED';
+  if (card?.statsBaseId) return card.statsBaseId;
+  if (card?.generated) return 'GENERATED';
   if (!card && String(cardId).startsWith('Craft-')) return 'CRAFTED';
   return cardId;
 }
@@ -337,8 +372,8 @@ Append to the import list in `tests/stats.test.mjs`:
 ```js
 import {
   recordCardPlayed, recordHqDamage, recordUnitHits, recordTrigger, recordHeroDeployed,
-  recordHeroActivation, recordDirectHq, recordFuelLostToCap, recordTurnEnd, recordCraftPick,
-  markDebugUsed, recordObjectiveActivation, recordObjectiveYield, recordObjectiveControl,
+  recordHeroActivation, recordDirectHq, recordFuelLostToCap, recordTurnEnd, recordTerminalTurn,
+  recordCraftPick, markDebugUsed, recordObjectiveActivation, recordObjectiveYield, recordObjectiveControl,
 } from '../js/stats.js?v=2026090402';
 ```
 
@@ -447,6 +482,23 @@ test('recordTurnEnd appends a turn row with duration, unspent Fuel and both HQs'
   ]);
   assert.equal(s.stats.players.p1.fuelUnspent, 2);
   assert.deepEqual(JSON.parse(JSON.stringify(s.stats.turns)), s.stats.turns, 'unknown duration is omitted, not undefined');
+});
+
+test('recordTerminalTurn adds the cut-short final turn once, flagged, without Fuel', () => {
+  let s = freshMatch({ turn: 9, initiative: 'p2' });
+  s = { ...s, p1: { ...s.p1, hq: 0 }, p2: { ...s.p2, hq: 7, fuel: 4 } };
+  s = recordTerminalTurn(s, { ms: 12004.4 });
+  s = recordTerminalTurn(s, { ms: 99999 }); // second call (e.g. a repeated end check) is a no-op
+  assert.deepEqual(s.stats.turns, [{ turn: 9, player: 'p2', terminal: true, p1Hq: 0, p2Hq: 7, ms: 12004 }]);
+  assert.equal(s.stats.players.p2.fuelUnspent, 0, 'a partial turn never adds to unspent Fuel');
+});
+
+test('recordTerminalTurn does nothing when End Turn already recorded that turn (lethal Direct HQ)', () => {
+  let s = freshMatch({ turn: 6, initiative: 'p1' });
+  s = recordTurnEnd(s, { role: 'p1', ms: 5000, fuelUnspent: 2 });
+  const after = recordTerminalTurn(s, { ms: 5100 });
+  assert.equal(after, s);
+  assert.equal(after.stats.turns.length, 1);
 });
 
 test('recordCraftPick stores the chosen line, keyword, drawback and what was offered', () => {
@@ -577,6 +629,21 @@ export function recordTurnEnd(state, { role, ms, fuelUnspent }) {
   });
 }
 
+// The turn in progress when the match ends never reaches End Turn. Called once at finalize: adds
+// that turn flagged `terminal` (a partial turn, so aggregations leave it out of turn-length and
+// unspent-Fuel averages, and it adds nothing to fuelUnspent), unless End Turn already recorded it
+// (lethal Direct HQ ends the match inside the End Turn handler).
+export function recordTerminalTurn(state, { ms } = {}) {
+  const role = state?.initiative;
+  if (!state?.stats || !role) return state;
+  if (toArray(state.stats.turns).some(t => t.turn === state.turn && t.player === role)) return state;
+  return update(state, stats => {
+    const entry = { turn: state.turn, player: role, terminal: true, p1Hq: state.p1?.hq ?? 0, p2Hq: state.p2?.hq ?? 0 };
+    if (Number.isFinite(ms)) entry.ms = Math.max(0, Math.round(ms));
+    stats.turns.push(entry);
+  });
+}
+
 export function recordCraftPick(state, role, chosen, offered = []) {
   return update(state, stats => {
     const summary = c => `${c.n}/${c.e}/${c.s}/${c.w} ${c.keyword} ${c.craftDrawback}`;
@@ -671,11 +738,13 @@ test('buildMatchRecord derives drawn/dead cards, fatigue, unattributed damage an
   s = recordHqDamage(s, 'p1', 10, 'objectiveBackbone');
   s = recordObjectiveActivation(s, '1,0', 'p1', 4, 2);
 
-  const record = buildMatchRecord(s, { winner: 'p1', endReason: 'hq', endedAt: 61000, site: 'test' });
+  // endedAt - startedAt would be 998000: durationMs must come from the explicit local-clock value.
+  const record = buildMatchRecord(s, { winner: 'p1', endReason: 'hq', endedAt: 999000, durationMs: 60000.4, site: 'test' });
   assert.equal(record.winnerSeat, 'first');
   assert.equal(record.rounds, 7);
   assert.equal(record.turnsPlayed, 13);
   assert.equal(record.durationMs, 60000);
+  assert.equal(record.endedAt, 999000);
   assert.equal(record.buildLabel, STATS_BUILD_LABEL);
   assert.match(record.rulesHash, /^[0-9a-f]{8}$/);
   assert.deepEqual(record.players.p1.cards.T33, { copies: 15, drawn: 6, played: 1, roundSum: 7, fuelSpent: 4, inHandAtEnd: 1 });
@@ -691,10 +760,11 @@ test('buildMatchRecord derives drawn/dead cards, fatigue, unattributed damage an
   assert.deepEqual(JSON.parse(JSON.stringify(record)), record, 'record must be Firebase-safe');
 });
 
-test('buildMatchRecord for a match with no winner (disconnect)', () => {
+test('buildMatchRecord for a match with no winner (disconnect) and no known duration', () => {
   const record = buildMatchRecord(freshMatch(), { winner: null, endReason: 'disconnect', endedAt: 5000, site: 'test' });
   assert.equal(record.winnerSeat, 'none');
   assert.equal(record.endReason, 'disconnect');
+  assert.equal('durationMs' in record, false, 'never derived from two different clocks');
   assert.deepEqual(JSON.parse(JSON.stringify(record)), record);
 });
 ```
@@ -712,7 +782,9 @@ Expected: FAIL, `buildMatchRecord` is not exported.
 // | null. Things that can be derived from the final state are derived here instead of tracked
 // live: cards drawn (starting deck minus what's left in the deck), dead cards (hand at the end),
 // fatigue damage (1 + 2 + ... + fatigueCount), and "other" (HQ lost that no recorder claimed).
-export function buildMatchRecord(state, { winner = null, endReason = 'hq', endedAt = Date.now(), site = '' } = {}) {
+// `durationMs` is passed in, measured on the writing client's own clock; it is never derived from
+// endedAt - startedAt, because startedAt comes from the host's clock and the writer may be P2.
+export function buildMatchRecord(state, { winner = null, endReason = 'hq', endedAt = Date.now(), durationMs, site = '' } = {}) {
   const stats = normalizeStats(state.stats);
   const players = {};
   for (const role of ROLES) {
@@ -778,7 +850,7 @@ export function buildMatchRecord(state, { winner = null, endReason = 'hq', ended
     debugUsed: stats.debugUsed,
     startedAt: stats.startedAt,
     endedAt,
-    durationMs: endedAt - stats.startedAt,
+    durationMs: Number.isFinite(durationMs) ? Math.max(0, Math.round(durationMs)) : undefined, // undefined is dropped by the JSON round trip
     mapId: stats.mapId,
     firstPlayer: stats.firstPlayer,
     winner,
@@ -823,7 +895,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createMatchStats } from '../js/stats.js?v=2026090402';
 import { createInitialState, createBoardUnit } from '../js/state.js?v=2026090402';
-import { checkHeroPassivesOnPlace, resolveCraftDrawback, resolveDestructionChain, checkRally } from '../js/combat.js?v=2026090402';
+import { checkHeroPassivesOnPlace, resolveCraftDrawback, resolveDestructionChain, checkRally, applyHandBuff, craftCandidateToCard } from '../js/combat.js?v=2026090402';
+import { recordCardPlayed, buildMatchRecord, statsCardKey } from '../js/stats.js?v=2026090402';
 import { CARD_BY_ID } from '../js/cards.js?v=2026090402';
 
 const DECK = Array.from({ length: 15 }, () => ['I1', 'T33']).flat();
@@ -845,6 +918,38 @@ test('H21 Emergency Logistics Officer self-damage is recorded as selfInflicted',
   const { state: after } = checkHeroPassivesOnPlace(s, 'p1', 0, '0,0', CARD_BY_ID.I1);
   assert.equal(after.p1.hq, 29);
   assert.equal(after.stats.players.p1.hqDamageTaken.selfInflicted, 1);
+});
+
+test('H21 counts its +1 Fuel as lost to cap only when the real threshold blocks it', () => {
+  const h21At = (fuel, zones) => {
+    let s = matchWithUnits([['0,0', 'I1', 'p1']]);
+    s = { ...s, p1: { ...s.p1, fuel, heroZones: zones } };
+    return checkHeroPassivesOnPlace(s, 'p1', 0, '0,0', CARD_BY_ID.I1).state;
+  };
+  const below = h21At(4, ['H21', null, null, null]);
+  assert.equal(below.p1.fuel, 5);
+  assert.equal(below.stats.players.p1.fuelLostToCap, 0);
+  const atCap = h21At(9, ['H21', null, null, null]);
+  assert.equal(atCap.p1.fuel, 9);
+  assert.equal(atCap.stats.players.p1.fuelLostToCap, 1);
+  const raisedCap = h21At(10, ['H21', 'H02', null, null]); // Logistics Chief: threshold 11
+  assert.equal(raisedCap.p1.fuel, 11);
+  assert.equal(raisedCap.stats.players.p1.fuelLostToCap, 0);
+});
+
+test('H19 Training Officer buffed copies keep their printed card identity in stats', () => {
+  let s = matchWithUnits([]);
+  const crafted = craftCandidateToCard({ stats: { n: 6, e: 6, s: 6, w: 6 }, keyword: 'Armor', drawback: 'ownHqDamage' }, 'p1');
+  const { playerState, generated } = applyHandBuff({ ...s.p1, hand: ['I1', 'I1', crafted.id] }, 1, c => c.cost === 1 || c.cost === 2, 'p1');
+  assert.equal(generated.length, 3);
+  assert.equal(statsCardKey(playerState.hand[0]), 'I1');
+  assert.equal(statsCardKey(playerState.hand[2]), 'CRAFTED', 'a buffed crafted Aircraft is still CRAFTED, not its own row');
+  s = { ...s, p1: playerState };
+  s = recordCardPlayed(s, 'p1', playerState.hand[0], 1);
+  const record = buildMatchRecord({ ...s, p1: { ...s.p1, hand: playerState.hand.slice(1) } }, { winner: null, endReason: 'disconnect', endedAt: 1 });
+  assert.equal(record.players.p1.cards.I1.played, 1);
+  assert.equal(record.players.p1.cards.I1.inHandAtEnd, 1);
+  assert.equal(record.players.p1.cards.GENERATED, undefined);
 });
 
 test('Craft drawbacks record own-HQ damage and self-suppression', () => {
@@ -872,21 +977,22 @@ test('Rally is counted when a Rally Unit declares an attack', () => {
 - [ ] **Step 2: Run to verify they fail**
 
 Run: `node --test tests/stats_combat.test.mjs`
-Expected: 4 failures (stats counters stay empty).
+Expected: 6 failures (stats counters stay empty; H19 copies map to GENERATED).
 
 - [ ] **Step 3: Add the import to `js/combat.js`**
 
 Directly below the existing `import` lines at the top of `js/combat.js`, add:
 
 ```js
-import { recordHqDamage, recordUnitHits, recordTrigger } from './stats.js?v=2026090402';
+import { recordHqDamage, recordUnitHits, recordTrigger, recordFuelLostToCap } from './stats.js?v=2026090402';
 ```
 
-- [ ] **Step 4: H21 self-damage** (`checkHeroPassivesOnPlace`)
+- [ ] **Step 4: H21 self-damage and Fuel lost to cap** (`checkHeroPassivesOnPlace`)
 
 Replace:
 
 ```js
+    const fueled = gainFuel(s[active], 1); // normal capped gain (respects Logistics Chief via fuelCapOf), not "this turn" temp Fuel
     s = {
       ...s,
       [active]: { ...fueled, hq: fueled.hq - 1, heroTriggeredThisTurn: { ...fueled.heroTriggeredThisTurn, H21: true } },
@@ -896,11 +1002,34 @@ Replace:
 with:
 
 ```js
+    const fuelBeforeH21 = s[active].fuel;
+    const fueled = gainFuel(s[active], 1); // normal capped gain (respects Logistics Chief via fuelCapOf), not "this turn" temp Fuel
     s = {
       ...s,
       [active]: { ...fueled, hq: fueled.hq - 1, heroTriggeredThisTurn: { ...fueled.heroTriggeredThisTurn, H21: true } },
     };
+    s = recordFuelLostToCap(s, active, 1 - (fueled.fuel - fuelBeforeH21));
     s = recordHqDamage(s, active, 1, 'selfInflicted');
+```
+
+- [ ] **Step 4b: H19 buffed copies keep their printed card identity** (`applyHandBuff`)
+
+Replace:
+
+```js
+    const buffed = registerGeneratedCard({
+      ...card, n: card.n + amount, e: card.e + amount, s: card.s + amount, w: card.w + amount,
+    }, role);
+```
+
+with:
+
+```js
+    // statsBaseId: match statistics count this copy as the printed card it came from (see
+    // statsCardKey in stats.js). Travels in generatedCards with the rest of the definition.
+    const buffed = registerGeneratedCard({
+      ...card, statsBaseId: card.statsBaseId ?? card.id, n: card.n + amount, e: card.e + amount, s: card.s + amount, w: card.w + amount,
+    }, role);
 ```
 
 - [ ] **Step 5: Rally** (`checkRally`)
@@ -985,14 +1114,14 @@ with:
 - [ ] **Step 8: Run tests**
 
 Run: `node --test tests/stats_combat.test.mjs`, then `npm test`
-Expected: the 4 new tests pass; full suite passes (existing fixtures have no `state.stats`, so recorders no-op).
+Expected: the 6 new tests pass; full suite passes (existing fixtures have no `state.stats`, so recorders no-op).
 
 - [ ] **Step 9: Commit**
 
 ```bash
 git status
 git add js/combat.js tests/stats_combat.test.mjs
-git commit -m "Record self-damage, self-suppression and keyword triggers in combat.js
+git commit -m "Record self-damage, Fuel lost to cap, self-suppression, keyword triggers and H19 card identity in combat.js
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
@@ -1055,7 +1184,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 **Files:**
 - Modify: `js/game.js`
 
-Each step is a find-and-replace on unique text. Anchors verified against `main` at `d2d02fe`; if one doesn't match, re-read the surrounding function rather than guessing.
+Each step is a find-and-replace on unique text. Anchors verified against `main` at `d2d02fe` and re-checked after the Direct HQ / H16 fixes that followed the review; if one doesn't match, re-read the surrounding function rather than guessing.
 
 - [ ] **Step 1: Imports**
 
@@ -1069,7 +1198,7 @@ with:
 
 ```js
 import { pushState, pushVersionedState, subscribeState, setPlayerLeft, updateLobby, subscribeLobby, updatePlayerState, writeMatchRecord, writeMatchMeta } from './firebase.js?v=2026090402';
-import { createMatchStats, normalizeStats, markDebugUsed, recordCardPlayed, recordHqDamage, recordUnitHits, recordHeroDeployed, recordHeroActivation, recordDirectHq, recordFuelLostToCap, recordTurnEnd, recordCraftPick, recordObjectiveActivation, recordObjectiveYield, recordObjectiveControl, buildMatchRecord } from './stats.js?v=2026090402';
+import { createMatchStats, normalizeStats, markDebugUsed, recordCardPlayed, recordHqDamage, recordUnitHits, recordHeroDeployed, recordHeroActivation, recordDirectHq, recordFuelLostToCap, recordTurnEnd, recordTerminalTurn, recordCraftPick, recordObjectiveActivation, recordObjectiveYield, recordObjectiveControl, buildMatchRecord } from './stats.js?v=2026090402';
 ```
 
 - [ ] **Step 2: Module state**
@@ -1084,9 +1213,11 @@ with:
 
 ```js
 let gameOver = false;
-// Match statistics: when this client saw the current turn start (its own clock), or null when
-// it's not this client's turn to measure. See recordTurnEnd in stats.js.
+// Match statistics, both on this client's own clock (never compared with the other client's):
+// when the current turn started here (null when it's not this client's turn to measure), and when
+// the match became playable here. See recordTurnEnd / buildMatchRecord in stats.js.
 let turnStartedAtMs = null;
+let matchStartedAtMs = null;
 ```
 
 - [ ] **Step 3: Create stats when the match is created** (`startGame`)
@@ -1156,6 +1287,7 @@ with:
 
 ```js
   state = { ...state, readyForPlay: true, log: [`Game started on ${mapName} — ${state.initiative.toUpperCase()} goes first.`] };
+  matchStartedAtMs = Date.now();
   turnStartedAtMs = !isOnline || state.initiative === myRole ? Date.now() : null;
 ```
 
@@ -1209,8 +1341,9 @@ with:
 ```js
     if (!normalized.pendingObjectivePick) runHeroPhase(myRole);
   }
-  // Start this client's turn clock the first time it sees its own turn (covers turn hand-offs and
-  // the very first turn on the non-host client).
+  // Start this client's clocks the first time it sees a playable match / its own turn (covers turn
+  // hand-offs and the non-host client, which never runs finishStartGame).
+  if (isOnline && normalized.readyForPlay && matchStartedAtMs == null) matchStartedAtMs = Date.now();
   if (isOnline && !gameOver && normalized.readyForPlay && normalized.initiative === myRole && turnStartedAtMs == null) {
     turnStartedAtMs = Date.now();
   }
@@ -1240,6 +1373,8 @@ Run: `grep -n "\[DEBUG\]" js/debug.js js/game.js`
 Expected: every debug action's log text starts with `[DEBUG]`. If a game.js debug handler builds its own log lines without the prefix, add it.
 
 - [ ] **Step 9: End Turn** (the `btn-end-turn` click handler)
+
+The handler now returns early right after Direct HQ when an HQ is at 0 (the lethal Direct HQ fix). The lines below go directly after `const directHQLog = directHQ.log;`, which is **before** that early return, so a lethal Direct HQ is still recorded (damage and the ending player's turn row). Keep them there.
 
 Replace:
 
@@ -1738,6 +1873,7 @@ with:
         <button class="btn btn-secondary" id="stats-save-btn">Save</button>
       </div>
       <div class="end-stats-status" id="stats-status"></div>
+      <button class="btn btn-secondary" id="stats-retry-btn" style="display:none;">Retry saving match</button>
 ```
 
 - [ ] **Step 2: Styles** (`css/game.css`)
@@ -1764,37 +1900,72 @@ Add this block directly above `function showEndScreen(winner) {`:
 
 ```js
 // ── Match statistics (docs/plans/2026-09-16-match-statistics.md) ────────────────
-// Exactly one client writes the record: the one that committed the game-ending state (checkWin
-// from a local action), or the one left behind on a disconnect. A client that only RECEIVED the
-// final state never writes, so online matches are never counted twice. The host (online p1, or
-// the only client in Local/vs AI) gets the include toggle and note, saved under stats/meta.
-let statsFinalized = false;
+// Exactly one client writes the record: the one that ended the match (checkWin from its own
+// action), or the one left behind on a disconnect. A client that only RECEIVED the final state
+// never writes, so online matches are never counted twice. Online, an HQ ending is written only
+// once this client's game-ending state write is confirmed by Firebase (see pushStateIfOnline):
+// if that write is rejected, nothing is recorded for a state that never became real. Not host-only
+// on purpose: the game doesn't detect a closed tab, so a host-only writer would silently lose every
+// match the host's tab dropped out of. The host (online p1, or the only client in Local/vs AI)
+// gets the include toggle and note, saved under stats/meta.
+let statsEnd = null;            // { winner, endReason } once this client ended the match itself
+let statsRecord = null;         // built once, kept until a write succeeds
+let statsRecordSaved = false;
+let statsWriteInFlight = false;
 
 function setStatsStatus(text) {
   const el = document.getElementById('stats-status');
   if (el) el.textContent = text;
 }
 
-function finalizeMatchStats({ winner, endReason }) {
-  if (statsFinalized || !state?.stats) return;
-  statsFinalized = true;
-  let record;
+function saveStatsRecord() {
+  if (!statsRecord || statsRecord.source === 'selfplay' || statsRecordSaved || statsWriteInFlight) return;
+  statsWriteInFlight = true;
+  const retryBtn = document.getElementById('stats-retry-btn');
+  retryBtn.style.display = 'none';
+  writeMatchRecord(statsRecord.matchId, statsRecord) // same path + same record: a retry can't duplicate
+    .then(() => {
+      statsRecordSaved = true;
+      setStatsStatus('Match saved to the statistics log.');
+    })
+    .catch(err => {
+      console.error('[stats] match record write failed', err);
+      setStatsStatus(`Statistics: match not saved (${err.message}).`);
+      retryBtn.style.display = '';
+    })
+    .finally(() => { statsWriteInFlight = false; });
+}
+
+// `finalState` must be a state this client knows is real: the local state for Local/vs AI and
+// disconnects, or the confirmed pushed state for an online HQ ending.
+function finalizeMatchStats(finalState) {
+  if (statsRecord || !statsEnd || !finalState?.stats) return;
   try {
-    record = buildMatchRecord(state, { winner, endReason, endedAt: Date.now(), site: `${location.origin}${location.pathname}` });
+    const withFinalTurn = recordTerminalTurn(finalState, { ms: turnStartedAtMs == null ? undefined : Date.now() - turnStartedAtMs });
+    statsRecord = buildMatchRecord(withFinalTurn, {
+      winner: statsEnd.winner,
+      endReason: statsEnd.endReason,
+      endedAt: Date.now(),
+      durationMs: matchStartedAtMs == null ? undefined : Date.now() - matchStartedAtMs,
+      site: `${location.origin}${location.pathname}`,
+    });
   } catch (err) {
     console.error('[stats] could not build the match record', err);
     setStatsStatus('Statistics: could not build the match record (see console).');
     return;
   }
-  window.__SIGNAL_STATS__ = { lastRecord: record };
-  if (record.source === 'selfplay') return; // selfplay_test.mjs saves these to a local file instead
-  writeMatchRecord(record.matchId, record)
-    .then(() => setStatsStatus('Match saved to the statistics log.'))
-    .catch(err => {
-      console.error('[stats] match record write failed', err);
-      setStatsStatus(`Statistics: match not saved (${err.message}).`);
-    });
+  window.__SIGNAL_STATS__ = { lastRecord: statsRecord };
+  saveStatsRecord(); // no-op for self-play: selfplay_test.mjs saves those to a local file instead
 }
+
+function endMatchStats({ winner, endReason, remote = false }) {
+  if (remote || statsEnd || !state?.stats) return;
+  statsEnd = { winner, endReason };
+  // Online HQ endings wait for pushStateIfOnline to confirm the game-ending write.
+  if (!isOnline || endReason === 'disconnect') finalizeMatchStats(state);
+}
+
+document.getElementById('stats-retry-btn').addEventListener('click', saveStatsRecord);
 
 function showStatsControls() {
   if (!state?.stats?.matchId || state.stats.source === 'selfplay') return;
@@ -1846,7 +2017,7 @@ with:
 
 ```js
   gameOver = true;
-  if (!remote) finalizeMatchStats({ winner: winner === 'P1' ? 'p1' : 'p2', endReason: 'hq' });
+  endMatchStats({ winner: winner === 'P1' ? 'p1' : 'p2', endReason: 'hq', remote });
   showStatsControls();
   setTimeout(() => {
 ```
@@ -1896,12 +2067,38 @@ with:
 
 ```js
 function showDisconnectScreen(who) {
-  // If the match had already ended normally, its record already exists: don't overwrite it
+  // If the match had already ended normally, its record is already handled: don't replace it
   // with a "disconnect" one just because the other player left the end screen.
-  if (!gameOver) finalizeMatchStats({ winner: null, endReason: 'disconnect' });
+  if (!gameOver) endMatchStats({ winner: null, endReason: 'disconnect' });
   gameOver = true;
   showStatsControls();
 ```
+
+In `pushStateIfOnline`, replace:
+
+```js
+    .then(() => {
+      if (generation !== onlineSyncGeneration) return null;
+      return pushVersionedState(gameId, prepared.state, prepared.expectedRevision);
+    })
+```
+
+with:
+
+```js
+    .then(() => {
+      if (generation !== onlineSyncGeneration) return null;
+      return pushVersionedState(gameId, prepared.state, prepared.expectedRevision).then(result => {
+        // Match statistics: an online match this client ended is recorded from the game-ending
+        // state only once Firebase has accepted it. A rejected write lands in the .catch below
+        // instead, and nothing is recorded for it.
+        if (statsEnd && (prepared.state.p1?.hq <= 0 || prepared.state.p2?.hq <= 0)) finalizeMatchStats(prepared.state);
+        return result;
+      });
+    })
+```
+
+Why this ordering is safe: every game-ending path calls `checkWin` synchronously in the same click handler that commits or pushes the state (some push before `checkWin`, e.g. `commitState`; the placement path pushes after). The Firebase transaction always resolves on a later tick, so `statsEnd` is set by the time this success callback runs, whichever order the handler used.
 
 - [ ] **Step 5: Run tests**
 
@@ -1993,7 +2190,8 @@ selfplay_stats.jsonl
 ```js
 // Sanity-checks match records written by selfplay_test.mjs. The key check: every point of HQ
 // damage should be attributed to a named source. A non-zero "other" in a match without debug use
-// means some HQ damage path isn't calling recordHqDamage (js/stats.js).
+// means some HQ damage path isn't calling recordHqDamage (js/stats.js). "!!" lines are problems
+// (non-zero exit code); "i" lines are informational.
 // Run: node scripts/check_selfplay_stats.mjs [file]
 import { readFileSync } from 'node:fs';
 
@@ -2002,25 +2200,32 @@ const records = readFileSync(file, 'utf8').split('\n').filter(Boolean).map(line 
 let problems = 0;
 
 for (const r of records) {
-  const lines = [`${r.matchId} ${r.mapId} winner=${r.winner ?? 'none'} (${r.winnerSeat}) rounds=${r.rounds} turns=${(r.turns ?? []).length}`];
+  const turns = r.turns ?? [];
+  const lines = [`${r.matchId} ${r.mapId} winner=${r.winner ?? 'none'} (${r.winnerSeat}) rounds=${r.rounds} turns=${turns.length} durationMs=${r.durationMs}`];
+  const problem = text => { problems++; lines.push(`!! ${text}`); };
+
   for (const role of ['p1', 'p2']) {
     const p = r.players?.[role] ?? {};
     const dmg = p.hqDamageTaken ?? {};
     const played = Object.values(p.cards ?? {}).reduce((a, c) => a + (c.played ?? 0), 0);
     lines.push(`${role}: finalHq=${p.finalHq} damage=${JSON.stringify(dmg)} played=${played} heroes=${Object.keys(p.heroes ?? {}).length}`);
-    if (!r.debugUsed && (dmg.other ?? 0) !== 0) {
-      problems++;
-      lines.push(`!! ${role} has ${dmg.other} unattributed HQ damage`);
-    }
-    if (played === 0) {
-      problems++;
-      lines.push(`!! ${role} played no cards`);
-    }
+    if (!r.debugUsed && (dmg.other ?? 0) !== 0) problem(`${role} has ${dmg.other} unattributed HQ damage`);
+    if (p.cards?.GENERATED) problem(`${role} has a GENERATED card row (an H19 copy lost its printed card identity?)`);
+    if (played === 0) lines.push(`i ${role} played no cards`);
   }
-  if ((r.turns ?? []).length === 0) {
-    problems++;
-    lines.push('!! no turns recorded');
+
+  if (turns.length === 0) problem('no turns recorded');
+  const seen = new Set();
+  for (const t of turns) {
+    const key = `${t.turn}|${t.player}`;
+    if (seen.has(key)) problem(`duplicate turn row for turn ${t.turn} ${t.player}`);
+    seen.add(key);
   }
+  if (turns.filter(t => t.terminal).length > 1) problem('more than one terminal turn row');
+  const maxTurn = Math.max(0, ...turns.map(t => t.turn));
+  if (r.turnsPlayed < maxTurn) problem(`turnsPlayed ${r.turnsPlayed} is below the highest recorded turn ${maxTurn}`);
+  if (r.endReason === 'hq' && turns.at(-1)?.turn !== r.turnsPlayed) problem(`last turn row (${turns.at(-1)?.turn}) is not the final turn (${r.turnsPlayed}): phantom turn after lethal?`);
+  if (Number(r.durationMs) < 0) problem(`negative durationMs ${r.durationMs}`);
   console.log(lines.join('\n  '));
 }
 
@@ -2032,7 +2237,7 @@ process.exitCode = problems ? 1 : 0;
 
 Run (terminal 1): `npm run dev`
 Run (terminal 2): `node selfplay_test.mjs 4` then `node scripts/check_selfplay_stats.mjs`
-Expected: one record per finished game, `0 problem(s)`. If a record shows unattributed HQ damage, find the missing hook: compare the game log (`#game-log`) HQ lines against the damage buckets for that match. Delete `selfplay_stats.jsonl` afterwards if the test data isn't wanted.
+Expected: one record per finished game, `0 problem(s)`. If a record shows unattributed HQ damage, find the missing hook: compare the game log (`#game-log`) HQ lines against the damage buckets for that match. Delete `selfplay_stats.jsonl` afterwards if the test data isn't wanted. Also run `node regression_directhq_lethal_h16_cancel.mjs` (expected 8/8) to confirm the stats wiring didn't disturb the two game fixes it builds on.
 
 - [ ] **Step 5: Live Firebase check (manual, dev server running)**
 
@@ -2042,11 +2247,22 @@ Expected: one record per finished game, `0 problem(s)`. If a record shows unattr
 4. Tick include, type a note, Save → "Statistics settings saved."
 5. Firebase console → Realtime Database → `stats/matches/local-...` exists with `debugUsed: true`, `players.p1.cards` filled; `stats/meta/local-...` has `included: true` and the note.
 
-If step 3 shows `PERMISSION_DENIED`, Task 1's rule is missing.
+If step 3 shows `PERMISSION_DENIED`, Task 1's rule is missing. To check the Retry path, don't use DevTools "Offline": Firebase just queues writes while offline and sends them on reconnect, so nothing fails. Instead set Task 1's `stats` rule to `".write": false` temporarily, finish a match, confirm the Retry button appears, restore the rule, press Retry, and confirm exactly one `stats/matches/{matchId}`.
+
+- [ ] **Step 5b: Live online check (manual, two browser windows)**
+
+Use a normal window and a private window, both on `http://localhost:3000/index.html`.
+
+1. Window A creates a game (P1 / host), window B joins (P2). Pick decks, mulligan, play until one side is low.
+2. Let **P2** deal the lethal action. Both windows show the end screen. Only P1 (window A) shows the include checkbox and note.
+3. Firebase console: exactly one `stats/matches/{gameId}-...` record, `winner: "p2"`, turns include one `terminal: true` row as the last row.
+4. In window A, tick include, add a note, Save. `stats/meta/{matchId}` appears; the record under `stats/matches` is unchanged.
+5. Repeat with **P1** dealing the lethal action: still exactly one record, and it appears only after the game-ending move has synced (window B shows the end screen first or at the same time, never after the record exists).
+6. Repeat once ending with a lethal **Direct HQ** (End Turn): the record's last turn row is the ending player's normal row (no terminal row, no phantom turn), and the winner is the player who ended the turn.
 
 - [ ] **Step 6: Docs**
 
-`STATUS.md`: add a "Match statistics" section: what's tracked (link to this plan's record format), who writes (committing client only), host include toggle + note under `stats/meta`, self-play records in `selfplay_stats.jsonl`, known gaps: abandoned matches (tab closed / Exit mid-game) are not recorded; turn durations use each client's own clock; `turnsPlayed` counts the turn in progress when the game ends.
+`STATUS.md`: add a "Match statistics" section: what's tracked (link to this plan's record format); who writes (the client that ended the match, online only after its game-ending state write is confirmed; the surviving client on a disconnect); Retry button when a write fails; host include toggle + note under `stats/meta`; self-play records in `selfplay_stats.jsonl`; known gaps from the "Known limits" section at the end of this plan.
 
 `DEVNOTES.md` "Safe change checklist": add
 
@@ -2113,7 +2329,11 @@ function record(overrides = {}) {
       },
     },
     objectives: { '1,0': { cardId: 'O1', heldAtEnd: 'p1', turnsHeld: { p1: 6, none: 2 }, activations: { p1: 3 }, backbone: { p1: 4 }, fuel: { p1: 3 }, draws: {} } },
-    turns: [{ turn: 1, player: 'p1', ms: 30000, fuelUnspent: 1 }, { turn: 2, player: 'p2', ms: 90000, fuelUnspent: 3 }],
+    turns: [
+      { turn: 1, player: 'p1', ms: 30000, fuelUnspent: 1 },
+      { turn: 2, player: 'p2', ms: 90000, fuelUnspent: 3 },
+      { turn: 3, player: 'p1', ms: 999000, terminal: true }, // partial final turn: must not move the averages
+    ],
     ...overrides,
   };
 }
@@ -2141,7 +2361,7 @@ test('filterRecords applies included, debug, source, mode and build filters', ()
   assert.equal(filterRecords(rs, { buildLabel: 'other' }).length, 0);
 });
 
-test('summarize reports seat win rates, averages and Fuel', () => {
+test('summarize reports seat win rates, averages and Fuel (terminal partial turns excluded)', () => {
   const byMetric = Object.fromEntries(summarize([record(), lost()]).map(r => [r.metric, r.value]));
   assert.equal(byMetric['Matches'], 2);
   assert.equal(byMetric['First player win %'], 50);
@@ -2260,7 +2480,8 @@ export function summarize(records) {
   const n = records.length;
   const decided = records.filter(isDecided);
   const firstWins = decided.filter(r => r.winnerSeat === 'first').length;
-  const turns = records.flatMap(r => toArray(r.turns));
+  // A terminal turn was cut short by the win: its time and leftover Fuel would skew both averages.
+  const turns = records.flatMap(r => toArray(r.turns)).filter(t => !t.terminal);
   const turnMs = turns.map(t => t.ms).filter(Number.isFinite);
   const durations = records.map(r => r.durationMs).filter(Number.isFinite);
   const perPlayer = field => round2(avg(sum(records.flatMap(r => ROLES.map(role => r.players?.[role]?.[field]))), n * 2));
@@ -2947,9 +3168,10 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 ## Known limits (accepted, documented in STATUS.md)
 
-- Abandoned matches (tab closed, Exit mid-game) produce no record.
-- Turn duration is measured on the acting client's clock and includes Hero deploy modal time. A turn this client didn't see start has no `ms`.
-- `turnsPlayed` is the turn counter when the game ended; after a lethal Direct HQ it already counts the next turn.
+- Abandoned matches (tab closed, Exit mid-game) produce no record. The game doesn't detect a closed tab, so the other player isn't shown a disconnect either.
+- An online match whose game-ending state write is rejected (another update landed first) produces no record. The local end screen still shows; that's existing game behavior, not something stats changes.
+- `startedAt` / `endedAt` are wall-clock times for display and sorting. `durationMs` is measured on the writing client's own clock from when the match became playable there (mulligan time excluded), and is omitted if unknown.
+- Turn duration is measured on the acting client's clock and includes Hero deploy modal time. A turn this client didn't see start has no `ms`. The final, cut-short turn is recorded with `terminal: true` and excluded from turn-length and unspent-Fuel averages.
 - Win rates only count decided matches (HQ destroyed); disconnects are excluded from win %.
 - Build label is manual (`STATS_BUILD_LABEL`); the rules hash only catches card/map data changes.
 - Firebase reads download every record; fine to a few thousand matches, revisit if the page gets slow.
