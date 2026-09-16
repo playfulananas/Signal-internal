@@ -6,8 +6,9 @@
 // real clients would.
 //
 // Scope: exactly what js/firebase.js uses (ref, set, get, update, onValue, runTransaction,
-// serverTimestamp, anonymous auth). Values are handled RTDB-style: JSON round-tripped, null and
-// empty objects/arrays dropped, {'.sv':'timestamp'} replaced with Date.now().
+// serverTimestamp, anonymous auth). Values are handled RTDB-style: an explicit undefined anywhere
+// in a written value is rejected (set, update and transaction results), null and empty
+// objects/arrays are dropped, {'.sv':'timestamp'} is replaced with Date.now().
 
 const APP_JS = `export function initializeApp(config) { return { config }; }`;
 
@@ -26,11 +27,19 @@ const listeners = new Map();
 let nextId = 1;
 window.__fakeDbDeliver = (id, value) => { const cb = listeners.get(id); if (cb) cb(snap(value)); };
 const call = (...args) => window.__fakeDb(...args);
+// Real RTDB rejects any explicit undefined in a written value. Checked here, in the page, because
+// clone() (and the binding's serialization) would otherwise silently drop it before the store sees it.
+function assertNoUndefined(value, op, path = '') {
+  if (value === undefined) throw new Error(op + " failed: value argument contains undefined in property '" + (path || '(root)') + "'");
+  if (value !== null && typeof value === 'object') {
+    for (const [k, v] of Object.entries(value)) assertNoUndefined(v, op, path ? path + '.' + k : k);
+  }
+}
 export function getDatabase() { return {}; }
 export function ref(_db, path) { return { path: String(path).split('/').filter(Boolean).join('/') }; }
 export function serverTimestamp() { return { '.sv': 'timestamp' }; }
-export async function set(r, value) { await call('set', r.path, clone(value)); }
-export async function update(r, value) { await call('update', r.path, clone(value)); }
+export async function set(r, value) { assertNoUndefined(value, 'set'); await call('set', r.path, clone(value)); }
+export async function update(r, value) { assertNoUndefined(value, 'update'); await call('update', r.path, clone(value)); }
 export async function get(r) { const { value } = await call('get', r.path); return snap(value); }
 export function onValue(r, cb) {
   const id = 'l' + nextId++;
@@ -43,6 +52,7 @@ export async function runTransaction(r, updater) {
     const { value, version } = await call('get', r.path);
     const next = updater(clone(value));
     if (next === undefined) return { committed: false, snapshot: snap(value) };
+    assertNoUndefined(next, 'transaction');
     const res = await call('cas', r.path, clone(next), version);
     if (res.ok) return { committed: true, snapshot: snap(res.value) };
   }

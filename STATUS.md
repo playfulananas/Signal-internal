@@ -155,7 +155,8 @@ Plan and record format: `docs/plans/2026-09-16-match-statistics.md`.
   recorder is a no-op without `state.stats`, never mutates its input, and swallows its own errors.
 - **Record:** `buildMatchRecord` writes one flat record to `stats/matches/{matchId}`. Exactly one
   client writes it: the client that ended the match (online, only after its game-ending state
-  write is confirmed by the revision-checked transaction; a rejected write records nothing), or
+  write is confirmed by the revision-checked transaction; a rejected write records nothing and
+  the acting client rolls back its local end of match to the server's live state), or
   the surviving client on a disconnect. A failed write keeps the record and shows a Retry button.
 - **Host controls:** online P1, or the only client in Local/vs AI, gets "Include in statistics"
   (unticked by default) and a note on the end screen, saved separately under `stats/meta/{matchId}`.

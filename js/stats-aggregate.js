@@ -280,7 +280,7 @@ export function matchRows(records, mapName = id => id) {
 export function toCsv(columns, rows) {
   const cell = v => {
     const s = v == null ? '' : String(v);
-    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   return [
     columns.map(([, label]) => cell(label)).join(','),

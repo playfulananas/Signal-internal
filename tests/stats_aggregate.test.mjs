@@ -125,3 +125,9 @@ test('matchRows and toCsv escaping', () => {
   const csv = toCsv([['matchId', 'Match'], ['note', 'Note']], [row]);
   assert.equal(csv, 'Match,Note\nm1,"said ""hi"", then left"');
 });
+
+test('toCsv quotes a cell containing a bare carriage return', () => {
+  // `plain` has nothing but the \r to trigger quoting; `quoted` checks quotes are still doubled.
+  const csv = toCsv([['plain', 'Plain'], ['quoted', 'Quoted']], [{ plain: 'line one\rline two', quoted: 'say "hi"\rbye' }]);
+  assert.equal(csv, 'Plain,Quoted\n"line one\rline two","say ""hi""\rbye"');
+});

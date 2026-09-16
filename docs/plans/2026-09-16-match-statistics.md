@@ -3169,7 +3169,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ## Known limits (accepted, documented in STATUS.md)
 
 - Abandoned matches (tab closed, Exit mid-game) produce no record. The game doesn't detect a closed tab, so the other player isn't shown a disconnect either.
-- An online match whose game-ending state write is rejected (another update landed first) produces no record. The local end screen still shows; that's existing game behavior, not something stats changes.
+- An online match whose game-ending state write is rejected (another update landed first) produces no record, and the acting client rolls back its local end of match and continues from the server's live state (added 2026-09-17 after review; see `CHANGELOG.md`). A non-conflict write failure still pauses sync with "Connection interrupted", as before.
 - `startedAt` / `endedAt` are wall-clock times for display and sorting. `durationMs` is measured on the writing client's own clock from when the match became playable there (mulligan time excluded), and is omitted if unknown.
 - Turn duration is measured on the acting client's clock and includes Hero deploy modal time. A turn this client didn't see start has no `ms`. The final, cut-short turn is recorded with `terminal: true` and excluded from turn-length and unspent-Fuel averages.
 - Win rates only count decided matches (HQ destroyed); disconnects are excluded from win %.

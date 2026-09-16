@@ -357,14 +357,19 @@ async function onlineRejectedTerminalWrite(browser) {
   const code = "STATRJ";
   const game = await startOnlineGame(browser, ff, code);
   let rejected = false;
+  const host = game.host;
+  // Read defensively: the isGameOver hook doesn't exist before the rollback fix, and the stuck
+  // client must fail the check below rather than crash the scenario.
+  const hostGameOver = () => host.evaluate(() => window.__SIGNAL_TEST_HOOKS__.isGameOver?.() ?? "no-hook");
   try {
     await injectOnline(ff, code, {
       turn: 7, initiative: "p1", nextUnitInstance: 100,
       board: board({ "0,0": unit("t-1", "I1", "p1") }),
-      p1: { ...NO_HEROES }, p2: { ...NO_HEROES, hq: 1 },
+      p1: { ...NO_HEROES, hand: ["I1"], fuel: 3 }, p2: { ...NO_HEROES, hq: 1 },
     });
-    await waitFor(async () => (await readState(game.host)).initiative === "p1" && (await readState(game.host)).p2.hq === 1);
-    // Another update lands on the server first: the game-ending write loses the race.
+    await waitFor(async () => (await readState(host)).initiative === "p1" && (await readState(host)).p2.hq === 1);
+    // Another update lands on the server first: the game-ending write loses the race. Only the
+    // first game-ending write is rejected; a later one commits normally.
     ff.hooks.beforeCas = async ({ path, value }) => {
       if (rejected || path !== `games/${code}` || !isTerminal(value)) return undefined;
       rejected = true;
@@ -372,14 +377,62 @@ async function onlineRejectedTerminalWrite(browser) {
       await ff.serverSet(path, { ...current, _revision: (current._revision ?? 0) + 1, _pushId: "other-client" });
       return "conflict";
     };
-    await game.host.locator("#btn-end-turn").click();
+    await host.locator("#btn-end-turn").click();
     await waitFor(async () => rejected);
-    await new Promise(r => setTimeout(r, 3000));
+    await new Promise(r => setTimeout(r, 3000)); // past the 1800ms end-screen reveal
     check("Online rejected game-ending write: no match record at all", rejected && matchWrites(ff, code).length === 0, `rejected=${rejected} writes=${matchWrites(ff, code).length}`);
     check("Online rejected game-ending write: the server kept the non-terminal state", !isTerminal(ff.getAt(`games/${code}`)), JSON.stringify({ p1: ff.getAt(`games/${code}`)?.p1?.hq, p2: ff.getAt(`games/${code}`)?.p2?.hq }));
+
+    // The acting client must be back in the live match, not frozen on its rejected ending.
+    check("Online rejected game-ending write: the acting client's end screen is not left visible", !(await host.locator("#end-screen").isVisible()), "end screen visible");
+    check("Online rejected game-ending write: the acting client is no longer game-over", (await hostGameOver()) === false, `gameOver=${await hostGameOver()}`);
+    const afterRejection = await readState(host);
+    check("Online rejected game-ending write: the server's non-terminal state is active locally", afterRejection.p2.hq === 1 && afterRejection.turn === 7 && afterRejection.initiative === "p1" && afterRejection._revision === ff.getAt(`games/${code}`)._revision, JSON.stringify({ p2hq: afterRejection.p2.hq, turn: afterRejection.turn, initiative: afterRejection.initiative, rev: afterRejection._revision, serverRev: ff.getAt(`games/${code}`)._revision }));
+
+    await host.locator('#p1-hand .hand-card[data-card-id="I1"]').click({ timeout: 3000 }).catch(() => {});
+    await host.locator('.tile[data-key="3,3"]').click({ timeout: 3000 }).catch(() => {});
+    const placed = await waitFor(async () => ff.getAt(`games/${code}`)?.board?.["3,3"]?.cardId === "I1");
+    check("Online rejected game-ending write: the player can keep playing (a new Unit placement syncs)", placed, `server 3,3=${JSON.stringify(ff.getAt(`games/${code}`)?.board?.["3,3"] ?? null)}`);
+
+    await host.locator("#btn-end-turn").click({ timeout: 3000 }).catch(() => {});
+    await waitFor(async () => matchWrites(ff, code).length > 0, 8000);
+    await new Promise(r => setTimeout(r, 1500));
+    const writes = matchWrites(ff, code);
+    const rec = writes[0]?.value ?? {};
+    check("Online rejected game-ending write: a later committed lethal creates exactly one record", writes.length === 1 && writes[0].label === "p1" && isTerminal(ff.getAt(`games/${code}`)), `writes=${writes.length} labels=${JSON.stringify(writes.map(w => w.label))}`);
+    check("Online rejected game-ending write: the record is the successful ending (includes the play made after the rejection)", rec.winner === "p1" && rec.players?.p1?.cards?.I1?.played === 1 && (rec.turns ?? []).filter(t => t.turn === 7 && t.player === "p1").length === 1, JSON.stringify({ winner: rec.winner, i1: rec.players?.p1?.cards?.I1, turns: rec.turns }));
   } finally {
     ff.hooks.beforeCas = null;
     await game.close();
+  }
+}
+
+// Real Firebase rejects writes containing `undefined`; the stand-in must too, or it would hide a
+// violation of the "never write undefined" rule. Nulls are still allowed (they delete).
+async function fakeFirebaseRejectsUndefined(browser) {
+  const ff = createFakeFirebase();
+  const context = await browser.newContext();
+  await ff.attach(context, "fake-undefined");
+  const page = await context.newPage();
+  try {
+    await page.goto(`${BASE_URL}/index.html`, { waitUntil: "domcontentloaded" });
+    const outcome = await page.evaluate(async () => {
+      const db = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js");
+      const attempt = async (fn) => { try { await fn(); return "accepted"; } catch (err) { return `rejected: ${err.message}`; } };
+      const r = db.ref(db.getDatabase(), "probe");
+      return {
+        setObject: await attempt(() => db.set(r, { valid: 1, invalid: undefined })),
+        setNestedArray: await attempt(() => db.set(r, { list: [1, undefined, 3] })),
+        update: await attempt(() => db.update(r, { valid: 1, nested: { invalid: undefined } })),
+        nullAllowed: await attempt(() => db.set(r, { valid: 1, removed: null })),
+      };
+    });
+    check("Fake Firebase: set() with an undefined property is rejected", outcome.setObject.startsWith("rejected"), outcome.setObject);
+    check("Fake Firebase: set() with undefined inside an array is rejected", outcome.setNestedArray.startsWith("rejected"), outcome.setNestedArray);
+    check("Fake Firebase: update() with a nested undefined is rejected", outcome.update.startsWith("rejected"), outcome.update);
+    check("Fake Firebase: null values are still accepted (and dropped)", outcome.nullAllowed === "accepted" && JSON.stringify(ff.getAt("probe")) === JSON.stringify({ valid: 1 }), `${outcome.nullAllowed} stored=${JSON.stringify(ff.getAt("probe"))}`);
+  } finally {
+    await context.close();
   }
 }
 
@@ -450,7 +503,7 @@ async function statsPage(browser) {
       localDirectHqRecordAndMeta, localTerminalAttackRow, localRetryAfterFailedWrite,
       localMultiPickCommandCancel, localH16CancelStats,
       onlineP2Lethal, onlineP1LethalWaitsForCommit, onlineRejectedTerminalWrite,
-      statsPage,
+      fakeFirebaseRejectsUndefined, statsPage,
     ].filter(s => !only || s.name.toLowerCase().includes(only.toLowerCase()))) {
       try {
         await scenario(browser);

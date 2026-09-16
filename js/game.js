@@ -1554,7 +1554,10 @@ function pushStateIfOnline(s) {
         // Match statistics: an online match this client ended is recorded from the game-ending
         // state only once Firebase has accepted it. A rejected write lands in the .catch below
         // instead, and nothing is recorded for it.
-        if (statsEnd && (prepared.state.p1?.hq <= 0 || prepared.state.p2?.hq <= 0)) finalizeMatchStats(prepared.state);
+        if (isTerminalState(prepared.state)) {
+          localEndingUncommitted = false;
+          if (statsEnd) finalizeMatchStats(prepared.state);
+        }
         return result;
       });
     })
@@ -1566,6 +1569,10 @@ function pushStateIfOnline(s) {
       myLastPushId = null;
 
       if (error?.code === 'state-conflict' && error.latestState) {
+        // The rejected write may be the game-ending one, or an earlier write whose rejection just
+        // dropped the queued game-ending one (the generation bump above): either way this client's
+        // ending never reached the server. Undo it before adopting the server's live state.
+        if (localEndingUncommitted && !isTerminalState(error.latestState)) rollBackUncommittedEnding();
         receiveRemoteState(error.latestState, { force: true, preserveSyncStatus: true });
         onlineSyncPaused = false;
         setOnlineSyncStatus('Another update arrived first. The shared game was refreshed; please retry your action.');
@@ -1899,6 +1906,14 @@ document.getElementById('stats-save-btn').addEventListener('click', () => {
     .finally(() => { btn.disabled = false; });
 });
 
+// Online only: true from the moment this client ends the match with its own action until that
+// game-ending state is confirmed on the server (see pushStateIfOnline). If the write is rejected
+// instead, rollBackUncommittedEnding undoes the local end of match.
+let localEndingUncommitted = false;
+let endScreenRevealTimer = null;
+
+const isTerminalState = s => (s?.p1?.hq ?? 1) <= 0 || (s?.p2?.hq ?? 1) <= 0;
+
 function showEndScreen(winner, { remote = false } = {}) {
   // gameOver flips synchronously so every `!gameOver` guard elsewhere (Hero Phase, turn
   // toasts, etc.) reacts immediately — only the visual reveal is delayed, so the killing
@@ -1906,13 +1921,37 @@ function showEndScreen(winner, { remote = false } = {}) {
   // overlay covers the board. 1800ms matches the Hero modal's delay (see runHeroPhase): the
   // longest piece of any single hit's sequence is the "DIRECT HIT" text popup's 1.6s fade,
   // starting 200ms after the hit lands.
+  if (isOnline && !remote && !gameOver) localEndingUncommitted = true;
   gameOver = true;
   endMatchStats({ winner: winner === 'P1' ? 'p1' : 'p2', endReason: 'hq', remote });
   showStatsControls();
-  setTimeout(() => {
+  clearTimeout(endScreenRevealTimer);
+  endScreenRevealTimer = setTimeout(() => {
+    endScreenRevealTimer = null;
     document.getElementById('end-winner').textContent = `${winner} WINS`;
     document.getElementById('end-screen').style.display = 'flex';
   }, 1800);
+}
+
+// Found 2026-09-17 (ChatGPT review of the stats branch): when this client's game-ending write is
+// rejected (another revision reached the server first), the server's match is still live, but
+// gameOver, the scheduled end-screen reveal and statsEnd all stayed set, so the acting player was
+// frozen on a game-over screen for a match that never ended. Called only from the rejected-write
+// path, and only while this client's own ending is still unconfirmed and the server's state is
+// non-terminal, so a match that genuinely ended can never be reopened. No statistics record can
+// exist for the rejected ending (one is only built after a game-ending write commits), and any
+// write queued behind the rejected one was already dropped, so this clears only local UI/state.
+function rollBackUncommittedEnding() {
+  clearTimeout(endScreenRevealTimer);
+  endScreenRevealTimer = null;
+  document.getElementById('end-screen').style.display = 'none';
+  document.getElementById('end-stats').style.display = 'none';
+  document.getElementById('stats-retry-btn').style.display = 'none';
+  setStatsStatus('');
+  gameOver = false;
+  localEndingUncommitted = false;
+  statsEnd = null;
+  if (!statsRecordSaved && !statsWriteInFlight) statsRecord = null;
 }
 
 function checkWin({ remote = false } = {}) {
@@ -5451,4 +5490,5 @@ window.__SIGNAL_TEST_HOOKS__ = {
   receiveRemoteState,
   getState: () => state,
   getConsumedEventIds: () => [...consumedEventIds],
+  isGameOver: () => gameOver,
 };

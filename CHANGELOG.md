@@ -9,6 +9,33 @@ Newest first.
 
 ---
 
+## 2026-09-17 — Match statistics review fixes (branch `feature/match-statistics`)
+
+Fixes from ChatGPT's review of `050dfd9`. Every new check was run against `050dfd9` first and
+failed there.
+
+- **Blocker: a rejected game-ending write froze the acting client on game over.** When the
+  revision-checked write of a locally lethal state lost to another revision, the server's match
+  was still live and the client adopted that state, but `gameOver`, the scheduled end-screen
+  reveal and `statsEnd` stayed set, so the player could no longer act. `showEndScreen` now tracks
+  an unconfirmed local ending (`localEndingUncommitted`, cleared when a game-ending write commits)
+  and the reveal timer; on a `state-conflict` whose server state is non-terminal,
+  `rollBackUncommittedEnding` cancels the reveal, hides the end screen and stats controls, and
+  clears `gameOver`, `statsEnd` and any unsaved built record before the server state is adopted.
+  It runs whether the rejected write was the game-ending one or an earlier write whose rejection
+  dropped it from the queue. A match whose ending committed is never touched (server terminal),
+  and a rejected ending still produces zero records. Test hook `isGameOver` added.
+- **Fake Firebase now rejects explicit `undefined`** in `set`, `update` and transaction values, like
+  real RTDB, instead of silently dropping it. The full browser suite passes under the stricter
+  check, so no production write carries `undefined`.
+- **CSV:** `toCsv` also quotes cells containing a bare carriage return.
+- **Tests:** `onlineRejectedTerminalWrite` now also checks the end screen is gone, `gameOver` is
+  false, the server state is active, a Unit placement syncs, and a later committed lethal writes
+  exactly one record that includes that placement. New `fakeFirebaseRejectsUndefined` scenario and
+  a carriage-return CSV unit test.
+
+---
+
 ## 2026-09-16 — Match statistics (branch `feature/match-statistics`, not pushed)
 
 Implements `docs/plans/2026-09-16-match-statistics.md` (the plan with the ChatGPT review folded
