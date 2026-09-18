@@ -16,30 +16,32 @@ export const DECK_RULES = {
 // correction during Run 1 planning, starter decks must come from this source, not invented
 // same-role substitutions. Every id/copy count/Hero roster below is transcribed directly from
 // that spreadsheet's 8 deck tabs, cross-referenced against the new cards.js id scheme.
+// 2026-09-18: decks 01, 02, 03, 04 and 07 replaced with Denis's optimized v1 playtest lists
+// (SIGNAL_*_Handoff.docx, 17 Sep 2026). Keys unchanged; 05, 06 and 08 still match the sheet.
 export const STARTER_DECKS = [
   {
-    key: 'infantry-formation', name: '01 Infantry Formation',
-    flavor: 'Cheap bodies -> adjacency -> wide scaling -> permanent growth. Inspire / Rally / Muster density, formation protection, and permanent scaling.',
-    ids: ['I1','I1', 'I6','I6', 'I9','I9', 'I12','I12', 'I13','I13', 'I15','I15', 'I17', 'I18','I18', 'I20','I20', 'I21', 'I22','I22', 'C24','C24', 'C25','C25', 'C26', 'C03', 'C06', 'C21', 'C22', 'C12'],
-    heroIds: ['H08', 'H19', 'H23', 'H11'], // Infantry Commander, Training Officer, Army Group Commander, Field Coordinator
+    key: 'infantry-formation', name: '01 Infantry Aggro',
+    flavor: 'Cheap Infantry -> card flow -> Fuel acceleration -> wide buffs -> repeated pressure.',
+    ids: ['I1','I1', 'I6','I6', 'I7','I7', 'I9','I9', 'I12','I12', 'I15', 'I18','I18', 'I13','I13', 'I20','I20', 'I21', 'C24','C24', 'C03','C03', 'C04','C04', 'C25','C25', 'C23','C23', 'C26','C26'],
+    heroIds: ['H08', 'H11', 'H21', 'H15'], // Infantry Commander, Field Coordinator, Emergency Logistics Officer, Strike Commander
   },
   {
     key: 'tank-blitz', name: '02 Tank Blitz',
-    flavor: 'Fuel investment -> Armor durability -> Breakthrough kill -> momentum.',
-    ids: ['T23','T23', 'T25','T25', 'T28','T28', 'T29','T29', 'T30','T30', 'T32','T32', 'T33','T33', 'T34','T34', 'T36','T36', 'T38', 'T39', 'C27','C27', 'C28','C28', 'C29','C29', 'C13', 'C23', 'C10', 'C21'],
-    heroIds: ['H07', 'H02', 'H21', 'H05'], // Armored Commander, Logistics Chief, Emergency Logistics Officer, Recovery Officer
+    flavor: 'Cheap Guard -> Tank acceleration -> Armor durability -> Breakthrough pressure -> sustained control.',
+    ids: ['I6','I6', 'I7', 'T28','T28', 'T32','T32', 'T25','T25', 'T29','T29', 'T33','T33', 'T36','T36', 'T30','T30', 'T34','T34', 'T38', 'C28','C28', 'C29','C29', 'C13', 'C10','C10', 'C23', 'C21','C21'],
+    heroIds: ['H07', 'H05', 'H21', 'H15'], // Armored Commander, Recovery Officer, Emergency Logistics Officer, Strike Commander
   },
   {
     key: 'artillery-fire-control', name: '03 Artillery Fire Control',
-    flavor: 'Directional setup -> range / AoE -> formation punishment. Bombard, Blast, forward-ray Barrage, facing, Precision.',
-    ids: ['AR40','AR40', 'AR43','AR43', 'AR44','AR44', 'AR45','AR45', 'AR46','AR46', 'AR47','AR47', 'AR48','AR48', 'AR49', 'AR50','AR50', 'AR51','AR51', 'AR53', 'C30','C30', 'C31','C31', 'C32','C32', 'C16','C16', 'C21', 'C12'],
-    heroIds: ['H18', 'H11', 'H16', 'H05'], // Artillery Commander, Field Coordinator, Maneuver Commander, Recovery Officer
+    flavor: 'Cheap protection -> rotate / maneuver -> remove Suppression -> Precision / Barrage / Blast -> reliable firing lines.',
+    ids: ['I6','I6', 'AR43','AR43', 'AR46','AR46', 'AR50','AR50', 'AR48','AR48', 'AR51','AR51', 'AR44','AR44', 'AR47','AR47', 'AR45','AR45', 'C01','C01', 'C16','C16', 'C31','C31', 'C08','C08', 'C21','C21', 'C30','C30'],
+    heroIds: ['H18', 'H11', 'H16', 'H13'], // Artillery Commander, Field Coordinator, Maneuver Commander, Supreme Commander
   },
   {
-    key: 'air-superiority', name: '04 Air Superiority',
-    flavor: 'Expensive flexibility -> unrestricted terrain access -> Precision -> explosive attack turns -> Craft.',
-    ids: ['A54','A54', 'A55','A55', 'A56','A56', 'A57', 'A58','A58', 'A59','A59', 'A60','A60', 'A61', 'A62','A62', 'A63','A63', 'A64', 'A65', 'C33','C33', 'C34','C34', 'C35','C35', 'C23', 'C05', 'C06', 'C14'],
-    heroIds: ['H25', 'H02', 'H21', 'H16'], // Chief Aircraft Engineer, Logistics Chief, Emergency Logistics Officer, Maneuver Commander
+    key: 'air-superiority', name: '04 Aircraft Craft Aggro',
+    flavor: 'Fuel setup -> turn-2 Chief Aircraft Engineer -> repeated Craft -> 1-Fuel Aircraft swarm -> explosive multi-attack finish.',
+    ids: ['I6','I6', 'A55','A55', 'A60','A60', 'A56','A56', 'A58','A58', 'A62','A62', 'A64', 'A57', 'A59','A59', 'A63','A63', 'A65', 'C13','C13', 'C04','C04', 'C14','C14', 'C23','C23', 'C34', 'C33','C33'],
+    heroIds: ['H25', 'H21', 'H09', 'H16'], // Chief Aircraft Engineer, Emergency Logistics Officer, Command Specialist, Maneuver Commander
   },
   {
     key: 'last-stand-sacrifice', name: '05 Last Stand Sacrifice',
@@ -54,10 +56,10 @@ export const STARTER_DECKS = [
     heroIds: ['H09', 'H20', 'H21', 'H01'], // Command Specialist, Ruthless Strategist, Emergency Logistics Officer, Quartermaster General
   },
   {
-    key: 'combined-arms', name: '07 Combined Arms',
-    flavor: 'Mixed classes -> flexible answers -> Objective positioning -> universal support. All five Objectives, all four Maps.',
-    ids: ['I1','I1', 'I9','I9', 'I22','I22', 'T23','T23', 'T29','T29', 'T33','T33', 'AR43','AR43', 'AR50','AR50', 'A55','A55', 'A60','A60', 'C22','C22', 'C07', 'C03', 'C10', 'C16', 'C21', 'C05', 'C12', 'C14'],
-    heroIds: ['H04', 'H03', 'H10', 'H12'], // Objective Marshal, Tactical Commander, Conventional Warfare Commander, Fire Support Officer
+    key: 'combined-arms', name: '07 Combined Arms Tempo',
+    flavor: 'Cheap mixed-class board control -> Guard -> draw/cycle -> Maneuver -> Objective scaling -> sustained tempo.',
+    ids: ['I6','I6', 'I7','I7', 'I9','I9', 'I12','I12', 'I18','I18', 'AR43','AR43', 'AR50','AR50', 'T28','T28', 'T32','T32', 'A55','A55', 'C03','C03', 'C05','C05', 'C21','C21', 'C22','C22', 'C10', 'C07'],
+    heroIds: ['H04', 'H03', 'H12', 'H01'], // Objective Marshal, Tactical Commander, Fire Support Officer, Quartermaster General
   },
   {
     key: 'objective-tempo', name: '08 Objective Tempo',

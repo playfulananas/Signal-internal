@@ -14,9 +14,12 @@ Active pool: exactly 65 Units + 25 Heroes + 35 Commands + 5 Objectives = 130 rec
 collectible) in `js/cards.js`, matching doc 03 (SIGNAL Card Truth & Migration). Card ids are
 strings: `I1`-`A65` (Units), `H01`-`H25` (Heroes), `C01`-`C35` (Commands), `O1`-`O5`
 (Objectives). Every retired card is preserved, not deleted, in `js/archive/legacy_cards.js` with
-a manifest. All 8 starter decks in `js/decks.js` are the exact SIGNAL Set 1 Recommended Decks
-(Infantry Formation, Tank Blitz, Artillery Fire Control, Air Superiority, Last Stand Sacrifice,
-Command Engine, Combined Arms, Objective Tempo).
+a manifest. `js/decks.js` has 8 starter decks. Five are Denis's optimized v1 playtest lists
+(17 Sep 2026 handoff docs): 01 Infantry Aggro, 02 Tank Blitz, 03 Artillery Fire Control,
+04 Aircraft Craft Aggro, 07 Combined Arms Tempo. The other three (05 Last Stand Sacrifice,
+06 Command Engine, 08 Objective Tempo) are still the exact SIGNAL Set 1 Recommended Decks. Deck
+keys are unchanged from the Recommended Decks versions (`infantry-formation`, `air-superiority`
+etc.), only the display names moved.
 
 ## Rules engine
 

@@ -9,6 +9,36 @@ Newest first.
 
 ---
 
+## 2026-09-18 — Five starter decks replaced with Denis's optimized v1 playtest lists
+
+Source: five handoff docs dated 17 Sep 2026 (`SIGNAL_Infantry_Aggro_v1_Handoff`,
+`SIGNAL_Tank_Blitz_Optimized_v1_Handoff`, `SIGNAL_Artillery_Fire_Control_Optimized_v1_Handoff`,
+`SIGNAL_Aircraft_Craft_Aggro_Optimized_v1_Handoff`, `SIGNAL_Combined_Arms_Tempo_Optimized_v1_Handoff`).
+Deck composition only: `js/decks.js` changed, `js/cards.js` untouched. Each entry's ids, Hero
+roster, name and flavor are transcribed from the doc's code block; keys are unchanged so every
+`data-deck=` browser test still targets the same slot.
+
+- **01 Infantry Formation → 01 Infantry Aggro.** Out: I17, I22 ×2, C06, C21, C22, C12, one I15.
+  In: I7 ×2, C04 ×2, C23 ×2, second C26, second C03. Heroes: H19/H23 → H21/H15.
+- **02 Tank Blitz.** Out: T23 ×2, T39, C27 ×2. In: I6 ×2, I7 (off-class Guards), second C10,
+  second C21. Heroes: H02 → H15.
+- **03 Artillery Fire Control.** Out: AR40 ×2, AR49, AR53, C12, C32 ×2. In: I6 ×2, C01 ×2,
+  C08 ×2, second C21. Heroes: H05 → H13.
+- **04 Air Superiority → 04 Aircraft Craft Aggro.** Out: A54 ×2, A61, C35 ×2, C05, C06, one C34.
+  In: I6 ×2, C13 ×2, C04 ×2, second C14, second C23. Heroes: H02 → H09.
+- **07 Combined Arms → 07 Combined Arms Tempo.** Out: I1 ×2, I22 ×2, T23 ×2, T29 ×2, T33 ×2,
+  A60 ×2, C16, C12, C14. In: I6 ×2, I7 ×2, I12 ×2, I18 ×2, T28 ×2, T32 ×2, second C03, C05, C21.
+  Heroes: H10 → H01. No 4+ Fuel cards left.
+
+Verified: all 5 decks match their doc code blocks exactly and validate (30 cards, copy limits,
+4 distinct implemented Heroes); every unit/command row in the docs (81 rows) matches `cards.js`
+name, Fuel and N/E/S/W. `npm test` 294/294. 10 bot-vs-bot self-play games across the 5 decks:
+10/10 finished, 0 stalls, 0 page errors, 0 "not automated" hits. Bot note: H25 activated only
+once across 6 Aircraft Craft Aggro sides, so self-play doesn't exercise that deck's intended
+turn-2 Craft plan; judge it from human playtests.
+
+---
+
 ## 2026-09-17 — Match statistics review round 2: ending/leave race, pre-play disconnect, Main Menu
 
 Fixes from a second review of the branch (at `b54c9c4`). Each was reproduced first by a browser
